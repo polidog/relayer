@@ -8,15 +8,26 @@ use Polidog\UsePhp\Runtime\Element;
 
 final class FormActionTransformer
 {
-    public static function apply(Element|string $node, string $defaultActionUrl): Element|string
+    public static function apply(Element|string|null $node, string $defaultActionUrl): Element|string|null
     {
-        if (\is_string($node)) {
+        if (null === $node || \is_string($node)) {
             return $node;
         }
 
         $newChildren = [];
         foreach ($node->children as $child) {
-            $newChildren[] = self::apply($child, $defaultActionUrl);
+            // PSX conditional children (`{$cond ? <el> : null}`) can put nulls
+            // in the tree even though Element's phpdoc declares
+            // `array<Element|string>`. Skip them so downstream renderers see
+            // a clean array.
+            // @phpstan-ignore identical.alwaysFalse
+            if (null === $child) {
+                continue;
+            }
+            $transformed = self::apply($child, $defaultActionUrl);
+            if (null !== $transformed) {
+                $newChildren[] = $transformed;
+            }
         }
 
         if ('form' === $node->type) {

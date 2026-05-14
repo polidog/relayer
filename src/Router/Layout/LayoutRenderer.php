@@ -27,6 +27,7 @@ final class LayoutRenderer
     {
         if ($layouts->isEmpty()) {
             $pageContent = FormActionTransformer::apply($pageContent, $this->formActionUrl);
+            \assert($pageContent instanceof Element);
 
             return $this->renderer->renderElement($pageContent);
         }
@@ -41,6 +42,7 @@ final class LayoutRenderer
         }
 
         $currentContent = FormActionTransformer::apply($currentContent, $this->formActionUrl);
+        \assert($currentContent instanceof Element);
 
         return $this->renderer->renderElement($currentContent);
     }

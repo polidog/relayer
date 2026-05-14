@@ -49,7 +49,7 @@ return function (PageContext $ctx): Closure {
                 closure builds the response, so errors flow into the same
                 request without a redirect.</p>
 
-            {null !== $formError ? <p style="color:#b00">{$formError}</p> : ''}
+            {null !== $formError ? <p style="color:#b00">{$formError}</p> : null}
 
             <form method="post" action="/signup">
                 <input type="hidden" name="_csrf" value={$token} />
@@ -59,7 +59,7 @@ return function (PageContext $ctx): Closure {
                         Name<br />
                         <input name="name" value={$values['name'] ?? ''} />
                     </label>
-                    {null !== $nameError ? <span style="color:#b00; margin-left:0.5rem">{$nameError}</span> : ''}
+                    {null !== $nameError ? <span style="color:#b00; margin-left:0.5rem">{$nameError}</span> : null}
                 </p>
 
                 <p>
@@ -67,7 +67,7 @@ return function (PageContext $ctx): Closure {
                         Email<br />
                         <input type="email" name="email" value={$values['email'] ?? ''} />
                     </label>
-                    {null !== $emailError ? <span style="color:#b00; margin-left:0.5rem">{$emailError}</span> : ''}
+                    {null !== $emailError ? <span style="color:#b00; margin-left:0.5rem">{$emailError}</span> : null}
                 </p>
 
                 <button type="submit">Sign up</button>
