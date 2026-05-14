@@ -15,6 +15,9 @@ final class HtmlDocument implements DocumentInterface
     private bool $includeDefaultStyles = true;
 
     /** @var array<int, string> */
+    private array $extraScripts = [];
+
+    /** @var array<int, string> */
     private array $headHtml = [];
 
     /** @var array<string, string> */
@@ -70,6 +73,27 @@ final class HtmlDocument implements DocumentInterface
         return $this;
     }
 
+    /**
+     * Append an additional `<script src="…"></script>` to the end of
+     * `<body>`, after the primary `jsPath` script. Used by AppRouter to
+     * ship `relayer-personalize.js` alongside the upstream `usephp.js`
+     * without modifying the vendor file.
+     */
+    public function addScript(string $path): self
+    {
+        $this->extraScripts[] = $path;
+
+        return $this;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function getExtraScripts(): array
+    {
+        return $this->extraScripts;
+    }
+
     public function disableDefaultStyles(): self
     {
         $this->includeDefaultStyles = false;
@@ -87,6 +111,7 @@ final class HtmlDocument implements DocumentInterface
         $escapedLang = \htmlspecialchars($this->lang, \ENT_QUOTES, 'UTF-8');
         $escapedJsPath = \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8');
         $metaTags = $this->getMetaTags();
+        $extraScripts = $this->getExtraScriptTags();
 
         return <<<HTML
 <!DOCTYPE html>
@@ -103,6 +128,7 @@ final class HtmlDocument implements DocumentInterface
 <body>
     {$content}
     <script src="{$escapedJsPath}"></script>
+    {$extraScripts}
 </body>
 </html>
 HTML;
@@ -154,6 +180,22 @@ HTML;
         }
 
         return \implode("\n    ", $links);
+    }
+
+    private function getExtraScriptTags(): string
+    {
+        if ([] === $this->extraScripts) {
+            return '';
+        }
+
+        $tags = [];
+
+        foreach ($this->extraScripts as $path) {
+            $escapedPath = \htmlspecialchars($path, \ENT_QUOTES, 'UTF-8');
+            $tags[] = \sprintf('<script src="%s"></script>', $escapedPath);
+        }
+
+        return \implode("\n    ", $tags);
     }
 
     private function getHeadHtml(): string

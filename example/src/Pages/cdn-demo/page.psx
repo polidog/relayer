@@ -1,0 +1,43 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Cache;
+use Polidog\Relayer\Personalization\Fragment;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx): Closure {
+    $ctx->metadata(['title' => 'CDN demo']);
+    $ctx->cache(new Cache(public: true, sMaxAge: 300));
+
+    return function (): Element {
+        $fallback = <a href="/login" className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700">Sign in</a>;
+        $userHeader = Fragment::placeholder('user-header', $fallback);
+
+        return (
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">CDN demo</h1>
+                    <p className="text-slate-600">
+                        This page response carries{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-800">Cache-Control: public, s-maxage=300</code>{' '}
+                        and contains no user-specific data. The header below is a personalize fragment.
+                        The SSR HTML ships a generic Sign in link, then the client hydrator fetches
+                        the user-specific HTML.
+                    </p>
+                </header>
+                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <p className="text-sm uppercase tracking-wide text-slate-500">User header (fragment)</p>
+                    <div className="mt-3">{$userHeader}</div>
+                </div>
+                <p className="text-xs text-slate-500">
+                    Note: the global site layout still personalizes its top nav, so a real
+                    CDN-cacheable site would also refactor the layouts header to use the
+                    same fragment primitive.
+                </p>
+            </section>
+        );
+    };
+};

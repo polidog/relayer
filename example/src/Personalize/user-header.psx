@@ -1,0 +1,29 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\Personalization\PersonalizeContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PersonalizeContext $ctx, ?Identity $user): Closure {
+    return function () use ($user): Element {
+        if (null === $user) {
+            return (
+                <a
+                    href="/login"
+                    className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+                >
+                    Sign in
+                </a>
+            );
+        }
+
+        return (
+            <span className="text-sm text-slate-500">
+                Hi, <span className="font-medium text-slate-900">{$user->displayName}</span>
+            </span>
+        );
+    };
+};

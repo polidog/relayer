@@ -15,6 +15,9 @@ use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\InjectorContainer;
+use Polidog\Relayer\Personalization\Fragment;
+use Polidog\Relayer\Personalization\PersonalizationCachePolicy;
+use Polidog\Relayer\Personalization\PersonalizeContext;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
@@ -34,6 +37,7 @@ use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\Renderer;
 use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
@@ -48,6 +52,8 @@ class AppRouter
     private bool $autoCompilePsx;
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
+    private bool $personalizationEnabled = true;
+    private string $personalizeJsPath = '/relayer-personalize.js';
 
     public function __construct(
         string $appDirectory,
@@ -112,8 +118,34 @@ class AppRouter
         return $this;
     }
 
+    /**
+     * Override the path served as the personalization hydrator. Defaults to
+     * `/relayer-personalize.js`. Must be called before `run()` so the script
+     * tag emitted into the HTML document picks up the new path.
+     */
+    public function setPersonalizeJsPath(string $path): self
+    {
+        $this->personalizeJsPath = $path;
+
+        return $this;
+    }
+
+    /**
+     * Disable the personalization primitive entirely: no hydrator script is
+     * shipped, and any `/_relayer/personalize/*` request 404s before
+     * touching the filesystem.
+     */
+    public function disablePersonalization(): self
+    {
+        $this->personalizationEnabled = false;
+
+        return $this;
+    }
+
     public function run(): void
     {
+        $this->registerPersonalizeScript();
+
         // Build a snapshot of the request once per dispatch and stash it so
         // page factories / page constructors can be injected with it by type
         // — pages should never read $_GET / $_POST / $_SERVER directly.
@@ -124,6 +156,16 @@ class AppRouter
 
         try {
             $path = $this->getRequestPath();
+
+            // Early branch: personalization fragment endpoints bypass the
+            // page router so they never run layouts or wrap the response in
+            // an HTML document — the client hydrator wants a bare HTML
+            // fragment to drop into the page.
+            if (\str_starts_with($path, Fragment::PATH_PREFIX)) {
+                $this->handlePersonalizeRequest($path);
+
+                return;
+            }
 
             $match = $this->router->match($path);
 
@@ -144,6 +186,30 @@ class AppRouter
             }
             $this->currentRequest = null;
         }
+    }
+
+    /**
+     * Append `relayer-personalize.js` to the document's extra scripts the
+     * first time `run()` is invoked. Idempotent so multi-dispatch test
+     * harnesses don't accumulate duplicate `<script>` tags.
+     */
+    private function registerPersonalizeScript(): void
+    {
+        if (!$this->personalizationEnabled) {
+            return;
+        }
+
+        if (!$this->document instanceof HtmlDocument) {
+            return;
+        }
+
+        foreach ($this->document->getExtraScripts() as $existing) {
+            if ($existing === $this->personalizeJsPath) {
+                return;
+            }
+        }
+
+        $this->document->addScript($this->personalizeJsPath);
     }
 
     protected function handleMatch(RouteMatch $match): void
@@ -259,6 +325,131 @@ class AppRouter
         }
 
         echo $this->document->renderError(404, 'Page not found');
+    }
+
+    /**
+     * Handle a `/_relayer/personalize/{id}` request: resolve the id to a
+     * handler file under `src/Personalize/`, invoke the factory + render
+     * closure, emit a fragment of HTML with a `private` cache policy
+     * enforced by the framework so the response never lands in a shared
+     * CDN cache.
+     */
+    protected function handlePersonalizeRequest(string $path): void
+    {
+        if (!$this->personalizationEnabled) {
+            $this->sendPersonalizeNotFound();
+
+            return;
+        }
+
+        $id = \substr($path, \strlen(Fragment::PATH_PREFIX));
+
+        if ('' === $id || !Fragment::isValidId($id)) {
+            $this->sendPersonalizeNotFound();
+
+            return;
+        }
+
+        $handlerPath = $this->resolvePersonalizeHandlerPath($id);
+        if (null === $handlerPath) {
+            $this->sendPersonalizeNotFound();
+
+            return;
+        }
+
+        try {
+            $this->renderPersonalizeFragment($id, $handlerPath);
+        } catch (AuthorizationException $exception) {
+            // For fragments we never redirect — the SSR fallback already
+            // covers the unauthenticated UI. Just signal "no body for
+            // you" and let the client hydrator keep the fallback.
+            if (!\headers_sent()) {
+                \http_response_code(401);
+            }
+        }
+    }
+
+    /**
+     * Resolve a personalize id to a handler file. Tries `.psx`, then
+     * `.psx.php`, then `.php` so the directory follows the same source
+     * conventions as `src/Pages/`. Lives next to `src/Pages/` (one
+     * directory up from `$this->appDirectory`, which is `src/Pages` per
+     * `Relayer::boot()`).
+     */
+    protected function resolvePersonalizeHandlerPath(string $id): ?string
+    {
+        $base = \dirname($this->appDirectory) . '/Personalize/' . $id;
+
+        foreach (['.psx', '.psx.php', '.php'] as $extension) {
+            $candidate = $base . $extension;
+            if (\file_exists($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function renderPersonalizeFragment(string $id, string $handlerPath): void
+    {
+        $sourcePath = $handlerPath;
+        $loadPath = $handlerPath;
+
+        if (\str_ends_with($handlerPath, '.psx')) {
+            $loadPath = $this->resolveCompiledPsxPath($handlerPath);
+        }
+
+        $factory = require $loadPath;
+
+        if (!$factory instanceof Closure) {
+            throw new RuntimeException(
+                "Personalize handler must return a Closure: {$sourcePath}",
+            );
+        }
+
+        $ctx = new PersonalizeContext(params: [], id: $id);
+        $ctx->setAuthenticator($this->resolveAuthenticator());
+
+        $args = $this->autowireClosure(
+            $factory,
+            [PersonalizeContext::class => $ctx],
+            $sourcePath,
+        );
+
+        $result = $factory(...$args);
+
+        if ($result instanceof Closure) {
+            $element = $result();
+        } elseif ($result instanceof Element) {
+            $element = $result;
+        } else {
+            throw new RuntimeException(
+                "Personalize handler factory must return a Closure or Element: {$sourcePath}",
+            );
+        }
+
+        if (!$element instanceof Element && !\is_string($element)) {
+            throw new RuntimeException(
+                "Personalize render closure must return an Element or string: {$sourcePath}",
+            );
+        }
+
+        $html = (new Renderer('personalize:' . $id))->renderElement($element);
+
+        PersonalizationCachePolicy::apply($ctx->getCache());
+
+        if (!\headers_sent()) {
+            \header('Content-Type: text/html; charset=utf-8');
+        }
+
+        echo $html;
+    }
+
+    private function sendPersonalizeNotFound(): void
+    {
+        if (!\headers_sent()) {
+            \http_response_code(404);
+        }
     }
 
     /**
@@ -587,6 +778,26 @@ class AppRouter
      */
     private function resolveFactoryArguments(Closure $factory, Component\PageContext $context, string $pagePath): array
     {
+        return $this->autowireClosure(
+            $factory,
+            [Component\PageContext::class => $context],
+            $pagePath,
+        );
+    }
+
+    /**
+     * Generic factory-closure autowiring used by both function-style pages
+     * (with `PageContext`) and personalization handlers (with
+     * `PersonalizeContext`). `$explicit` lets the caller pin specific
+     * class-strings to per-request objects that the container does not own.
+     * Everything else (Request, Identity, plain DI services) is resolved
+     * uniformly so behavior stays consistent across both surfaces.
+     *
+     * @param array<class-string, object> $explicit
+     * @return array<int, mixed>
+     */
+    private function autowireClosure(Closure $factory, array $explicit, string $sourcePath): array
+    {
         $reflection = new ReflectionFunction($factory);
         $args = [];
 
@@ -596,10 +807,9 @@ class AppRouter
             if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
                 $typeName = $type->getName();
 
-                if (Component\PageContext::class === $typeName
-                    || \is_subclass_of($typeName, Component\PageContext::class)
-                ) {
-                    $args[] = $context;
+                $explicitMatch = $this->findExplicit($explicit, $typeName);
+                if (null !== $explicitMatch) {
+                    $args[] = $explicitMatch;
 
                     continue;
                 }
@@ -648,13 +858,36 @@ class AppRouter
             }
 
             throw new RuntimeException(\sprintf(
-                'Cannot autowire parameter $%s of function-style page %s: no type, default, or container binding.',
+                'Cannot autowire parameter $%s of factory closure %s: no type, default, or container binding.',
                 $parameter->getName(),
-                $pagePath,
+                $sourcePath,
             ));
         }
 
         return $args;
+    }
+
+    /**
+     * Match a parameter's declared type-name against the explicit map,
+     * accepting both exact class hits and subclass declarations
+     * (`PersonalizeContext` declared as a subclass would still resolve to
+     * the supplied instance, mirroring the previous PageContext behavior).
+     *
+     * @param array<class-string, object> $explicit
+     */
+    private function findExplicit(array $explicit, string $typeName): ?object
+    {
+        if (isset($explicit[$typeName])) {
+            return $explicit[$typeName];
+        }
+
+        foreach ($explicit as $class => $instance) {
+            if (\is_subclass_of($typeName, $class)) {
+                return $instance;
+            }
+        }
+
+        return null;
     }
 
     private function computePageId(string $pagePath): string
