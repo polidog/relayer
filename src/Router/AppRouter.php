@@ -146,7 +146,7 @@ class AppRouter
         }
     }
 
-    private function handleMatch(RouteMatch $match): void
+    protected function handleMatch(RouteMatch $match): void
     {
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());
 
@@ -170,7 +170,7 @@ class AppRouter
         $this->renderPage($pageComponent, $layoutStack, $match->getParams());
     }
 
-    private function applyFunctionPageCache(FunctionPage $page): void
+    protected function applyFunctionPageCache(FunctionPage $page): void
     {
         $cache = $page->getCache();
         if (null === $cache) {
@@ -185,7 +185,7 @@ class AppRouter
         }
     }
 
-    private function resolveEtagStore(): ?EtagStore
+    protected function resolveEtagStore(): ?EtagStore
     {
         if (null === $this->container || !$this->container->has(EtagStore::class)) {
             return null;
@@ -219,7 +219,7 @@ class AppRouter
      * an anonymous request) into the same 302 / 401 / 403 response the
      * class-style `#[Auth]` attribute produces.
      */
-    private function handleAuthorizationFailure(AuthorizationException $exception): void
+    protected function handleAuthorizationFailure(AuthorizationException $exception): void
     {
         if (\headers_sent()) {
             return;
@@ -249,7 +249,7 @@ class AppRouter
         }
     }
 
-    private function handleNotFound(): void
+    protected function handleNotFound(): void
     {
         \http_response_code(404);
 
@@ -282,7 +282,7 @@ class AppRouter
      * @param array<string>         $layoutPaths
      * @param array<string, string> $params
      */
-    private function loadLayouts(array $layoutPaths, array $params): LayoutStack
+    protected function loadLayouts(array $layoutPaths, array $params): LayoutStack
     {
         $stack = new LayoutStack();
 
@@ -338,7 +338,7 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
+    protected function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
         if (!\file_exists($pagePath)) {
             return null;
@@ -649,7 +649,7 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
@@ -705,7 +705,7 @@ class AppRouter
     /**
      * Handle useState setState actions from POST (onClick, onChange, etc.).
      */
-    private function dispatchStateAction(string $componentId, ComponentState $state): void
+    protected function dispatchStateAction(string $componentId, ComponentState $state): void
     {
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
             return;

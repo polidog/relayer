@@ -12,7 +12,13 @@ use Polidog\Relayer\Auth\SessionStorage;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
+use Polidog\Relayer\Profiler\FileProfilerStorage;
+use Polidog\Relayer\Profiler\NullProfiler;
+use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\Profiler\ProfilerStorage;
+use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Router\TraceableAppRouter;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
@@ -53,10 +59,12 @@ final class Relayer
         $appDir = $projectRoot . '/src/Pages';
         $isDev = self::isDev();
 
-        $router = AppRouter::create(
-            $appDir,
-            autoCompilePsx: $isDev,
-        );
+        // Dev: swap in TraceableAppRouter so dispatch lifecycle events
+        // land in the container-bound Profiler. Prod stays on the plain
+        // AppRouter and the Traceable* class is never autoloaded.
+        $router = $isDev
+            ? new TraceableAppRouter($appDir, autoCompilePsx: true)
+            : AppRouter::create($appDir);
         $router->setContainer($psr);
 
         return $router;
@@ -137,6 +145,34 @@ final class Relayer
         // deferred step in buildContainer() only when UserProvider has
         // been bound by the user's AppConfigurator. Apps without auth
         // pay nothing.
+
+        // Profiler. Prod resolves to NullProfiler so user code can take a
+        // `Profiler` dependency without any cost; dev swaps the alias to
+        // RecordingProfiler so events land on disk via FileProfilerStorage.
+        $container->register(NullProfiler::class)
+            ->setPublic(true)
+        ;
+        $container->setAlias(Profiler::class, NullProfiler::class)
+            ->setPublic(true)
+        ;
+
+        if (self::isDev()) {
+            $container->register(FileProfilerStorage::class)
+                ->setArguments([$projectRoot . '/var/cache/profiler'])
+                ->setPublic(true)
+            ;
+            $container->setAlias(ProfilerStorage::class, FileProfilerStorage::class)
+                ->setPublic(true)
+            ;
+
+            $container->register(RecordingProfiler::class)
+                ->setAutowired(true)
+                ->setPublic(true)
+            ;
+            $container->setAlias(Profiler::class, RecordingProfiler::class)
+                ->setPublic(true)
+            ;
+        }
     }
 
     /**
