@@ -7,7 +7,6 @@ use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
 return fn(PageContext $ctx): Closure => fn(): Element => <section>
-    <h1>About</h1>
-    <p>Minimal function-style page — no services, no state, just a render
-        closure produced by a factory.</p>
+    <h1>Thanks!</h1>
+    <p>Your signup was accepted. <a href="/">Back home</a></p>
 </section>;

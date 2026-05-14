@@ -22,5 +22,13 @@
         }
     ],
     "minimum-stability": "dev",
-    "prefer-stable": true
+    "prefer-stable": true,
+    "scripts": {
+        "post-install-cmd": [
+            "Polidog\\UsePhp\\Installer\\AssetInstaller::publish"
+        ],
+        "post-update-cmd": [
+            "Polidog\\UsePhp\\Installer\\AssetInstaller::publish"
+        ]
+    }
 }

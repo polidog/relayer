@@ -17,6 +17,7 @@ final class RootLayout extends LayoutComponent
                 <a href="/">Home</a>
                 <a href="/about" style="margin-left:1rem">About</a>
                 <a href="/users" style="margin-left:1rem">Users</a>
+                <a href="/signup" style="margin-left:1rem">Signup</a>
             </nav>
             <hr />
             <main>{$this->getChildren()}</main>

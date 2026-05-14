@@ -6,6 +6,8 @@ A tiny app that exercises the main Relayer features:
 - Minimal function-style page (no DI) — `src/app/about/page.psx`
 - Class-style page with `#[Cache]` — `src/app/users/page.psx`
 - Dynamic route segment with constructor injection — `src/app/users/[id]/page.psx`
+- Function-style page with server-side form validation + CSRF —
+  `src/app/signup/page.psx`
 - Root layout — `src/app/layout.psx`
 - 404 error page — `src/app/error.psx`
 

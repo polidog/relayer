@@ -1,0 +1,77 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\Relayer\Router\Form\CsrfToken;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx): Closure {
+    $ctx->metadata(['title' => 'Signup']);
+
+    $values = [];
+    $errors = [];
+
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+        $csrf = $_POST['_csrf'] ?? '';
+        if (!\is_string($csrf) || !CsrfToken::validate($csrf)) {
+            \http_response_code(403);
+            $errors['_form'] = 'Invalid CSRF token.';
+        } else {
+            $values = [
+                'email' => \is_string($_POST['email'] ?? null) ? \trim($_POST['email']) : '',
+                'name'  => \is_string($_POST['name']  ?? null) ? \trim($_POST['name'])  : '',
+            ];
+            if (!\filter_var($values['email'], \FILTER_VALIDATE_EMAIL)) {
+                $errors['email'] = 'Please enter a valid email address.';
+            }
+            if ('' === $values['name']) {
+                $errors['name'] = 'Name is required.';
+            }
+            if ([] === $errors) {
+                \header('Location: /signup/thanks', true, 303);
+                exit;
+            }
+        }
+    }
+
+    return function () use ($values, $errors): Element {
+        $token = CsrfToken::getToken();
+        $emailError = $errors['email'] ?? null;
+        $nameError  = $errors['name']  ?? null;
+        $formError  = $errors['_form'] ?? null;
+
+        return <section>
+            <h1>Signup</h1>
+            <p>Function-style page handling its own <code>POST</code>.
+                Validation runs in the factory closure before the render
+                closure builds the response, so errors flow into the same
+                request without a redirect.</p>
+
+            {null !== $formError ? <p style="color:#b00">{$formError}</p> : ''}
+
+            <form method="post" action="/signup">
+                <input type="hidden" name="_csrf" value={$token} />
+
+                <p>
+                    <label>
+                        Name<br />
+                        <input name="name" value={$values['name'] ?? ''} />
+                    </label>
+                    {null !== $nameError ? <span style="color:#b00; margin-left:0.5rem">{$nameError}</span> : ''}
+                </p>
+
+                <p>
+                    <label>
+                        Email<br />
+                        <input type="email" name="email" value={$values['email'] ?? ''} />
+                    </label>
+                    {null !== $emailError ? <span style="color:#b00; margin-left:0.5rem">{$emailError}</span> : ''}
+                </p>
+
+                <button type="submit">Sign up</button>
+            </form>
+        </section>;
+    };
+};
