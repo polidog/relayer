@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Tests\Fixtures\PlainService;
 use Polidog\Relayer\Tests\Fixtures\ServiceWithDependency;
@@ -13,6 +15,7 @@ use Polidog\UsePhp\Psx\Compiler;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use RuntimeException;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 final class PsxIntegrationTest extends TestCase
 {
@@ -277,6 +280,65 @@ final class PsxIntegrationTest extends TestCase
 
         self::assertStringContainsString(PlainService::class, $output);
         self::assertStringContainsString(ServiceWithDependency::class, $output);
+    }
+
+    public function testFunctionStylePageReceivesInjectedRequest(): void
+    {
+        // Request is built by AppRouter::run() from the real superglobals
+        // and injected into the factory by type — page code should never
+        // need to read $_POST / $_GET / $_SERVER itself.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            <<<'PSX'
+                <?php
+                use Polidog\Relayer\Http\Request;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+
+                return function (Request $req): Closure {
+                    $email = $req->post('email') ?? 'none';
+                    $method = $req->method;
+                    return function () use ($email, $method): Element {
+                        return <p>method={$method} email={$email}</p>;
+                    };
+                };
+                PSX,
+        );
+
+        $app = AppRouter::create($this->workDir, autoCompilePsx: true);
+
+        $_SERVER['REQUEST_URI'] = '/';
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST = ['email' => 'a@b.co'];
+
+        \ob_start();
+
+        try {
+            $app->run();
+        } finally {
+            $output = (string) \ob_get_clean();
+        }
+
+        self::assertStringContainsString('method=POST', $output);
+        self::assertStringContainsString('email=a@b.co', $output);
+    }
+
+    public function testInjectorContainerExposesCurrentRequest(): void
+    {
+        // Class-style pages get Request via constructor injection through
+        // InjectorContainer. Verify the container surfaces it once the
+        // router has set it for the dispatch.
+        $injector = new InjectorContainer(new ContainerBuilder());
+        self::assertFalse($injector->has(Request::class));
+
+        $req = new Request(method: 'POST', path: '/x', post: ['email' => 'a@b.co']);
+        $injector->setCurrentRequest($req);
+
+        self::assertTrue($injector->has(Request::class));
+        self::assertSame($req, $injector->get(Request::class));
+
+        $injector->setCurrentRequest(null);
+        self::assertFalse($injector->has(Request::class));
     }
 
     public function testFunctionStylePageAcceptsSingleClosureShorthand(): void

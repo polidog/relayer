@@ -8,6 +8,8 @@ use Closure;
 use JsonException;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
@@ -40,6 +42,7 @@ class AppRouter
     private DocumentInterface $document;
     private bool $autoCompilePsx;
     private string $psxCacheDir;
+    private ?Request $currentRequest = null;
 
     public function __construct(
         string $appDirectory,
@@ -106,17 +109,32 @@ class AppRouter
 
     public function run(): void
     {
-        $path = $this->getRequestPath();
-
-        $match = $this->router->match($path);
-
-        if (null === $match) {
-            $this->handleNotFound();
-
-            return;
+        // Build a snapshot of the request once per dispatch and stash it so
+        // page factories / page constructors can be injected with it by type
+        // — pages should never read $_GET / $_POST / $_SERVER directly.
+        $this->currentRequest = Request::fromGlobals();
+        if ($this->container instanceof InjectorContainer) {
+            $this->container->setCurrentRequest($this->currentRequest);
         }
 
-        $this->handleMatch($match);
+        try {
+            $path = $this->getRequestPath();
+
+            $match = $this->router->match($path);
+
+            if (null === $match) {
+                $this->handleNotFound();
+
+                return;
+            }
+
+            $this->handleMatch($match);
+        } finally {
+            if ($this->container instanceof InjectorContainer) {
+                $this->container->setCurrentRequest(null);
+            }
+            $this->currentRequest = null;
+        }
     }
 
     private function handleMatch(RouteMatch $match): void
@@ -345,6 +363,12 @@ class AppRouter
                     || \is_subclass_of($typeName, Component\PageContext::class)
                 ) {
                     $args[] = $context;
+
+                    continue;
+                }
+
+                if (Request::class === $typeName && null !== $this->currentRequest) {
+                    $args[] = $this->currentRequest;
 
                     continue;
                 }

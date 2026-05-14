@@ -342,6 +342,60 @@ final class UsersPage extends PageComponent
 サービスタグやデコレータ、ファクトリ経由の生成など、独自の挙動が必要な
 場合のみ `AppConfigurator` で登録してください。
 
+## HTTP リクエストへのアクセス
+
+`Polidog\Relayer\Http\Request` をページ (関数型ファクトリでもクラス
+コンストラクタでも) の引数に宣言すると、現在のリクエストの imutable な
+スナップショットが注入されます。`$_GET` / `$_POST` / `$_SERVER` を
+ページから直接触る必要はありません。
+
+```php
+<?php
+// src/app/signup/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Request $req): Closure {
+    $errors = [];
+
+    if ($req->isPost()) {
+        $email = $req->post('email') ?? '';
+        if (!\filter_var($email, \FILTER_VALIDATE_EMAIL)) {
+            $errors['email'] = 'メールアドレスの形式が正しくありません';
+        }
+        if ([] === $errors) {
+            \header('Location: /thanks', true, 303);
+            exit;
+        }
+    }
+
+    return function () use ($errors, $req): Element {
+        // ... フォームを描画、$req->post('email') を <input> に流し込み
+    };
+};
+```
+
+`Request` API (すべて immutable):
+
+| メソッド                     | 戻り値                                            |
+| ---------------------------- | ------------------------------------------------- |
+| `$req->method`               | 大文字化済み HTTP メソッド                        |
+| `$req->path`                 | クエリ文字列を除いたパス                          |
+| `$req->isGet()` / `isPost()` | `bool`                                            |
+| `$req->isMethod('PUT')`      | `bool`                                            |
+| `$req->post($key)`           | `?string` (存在しない / 文字列でないと null)      |
+| `$req->query($key)`          | `?string`                                         |
+| `$req->header($name)`        | `?string` (大文字小文字を無視)                    |
+| `$req->allPost()`            | `array<string, mixed>` (生のボディ全体)           |
+| `$req->allQuery()`           | `array<string, mixed>`                            |
+| `$req->allHeaders()`         | `array<string, string>` (キーは小文字化)          |
+
+テストでは `new Request(method: 'POST', path: '/signup', post: [...])` を
+直接構築すれば良く、スーパーグローバルを書き換える必要はありません。
+
 ## `#[Cache]` による HTTP キャッシュ制御
 
 `Polidog\Relayer\Http\Cache` をページクラスに付与すると、

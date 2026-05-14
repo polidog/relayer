@@ -342,6 +342,60 @@ final class UsersPage extends PageComponent
 You only need to register a Page in `AppConfigurator` if you want non-default
 behavior (e.g. service tags, decorators, factory construction).
 
+## Accessing the HTTP Request
+
+Declare a `Polidog\Relayer\Http\Request` parameter on a page (function-style
+factory **or** class constructor) and the framework will inject an immutable
+snapshot of the current request — pages never need to touch `$_GET`,
+`$_POST`, or `$_SERVER` directly.
+
+```php
+<?php
+// src/app/signup/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Request $req): Closure {
+    $errors = [];
+
+    if ($req->isPost()) {
+        $email = $req->post('email') ?? '';
+        if (!\filter_var($email, \FILTER_VALIDATE_EMAIL)) {
+            $errors['email'] = 'Invalid email';
+        }
+        if ([] === $errors) {
+            \header('Location: /thanks', true, 303);
+            exit;
+        }
+    }
+
+    return function () use ($errors, $req): Element {
+        // ... render form, echoing $req->post('email') back into the input
+    };
+};
+```
+
+`Request` API (all immutable):
+
+| Method                       | Returns                                       |
+| ---------------------------- | --------------------------------------------- |
+| `$req->method`               | uppercase HTTP method                         |
+| `$req->path`                 | request path (no query string)                |
+| `$req->isGet()` / `isPost()` | `bool`                                        |
+| `$req->isMethod('PUT')`      | `bool`                                        |
+| `$req->post($key)`           | `?string` (null if missing / non-string)      |
+| `$req->query($key)`          | `?string`                                     |
+| `$req->header($name)`        | `?string` (case-insensitive)                  |
+| `$req->allPost()`            | `array<string, mixed>` (raw body)             |
+| `$req->allQuery()`           | `array<string, mixed>`                        |
+| `$req->allHeaders()`         | `array<string, string>` (lowercased keys)     |
+
+Tests use `new Request(method: 'POST', path: '/signup', post: [...])`
+directly — no superglobal manipulation needed.
+
 ## HTTP Cache Headers via `#[Cache]`
 
 Attach `Polidog\Relayer\Http\Cache` to a Page class to control

@@ -6,6 +6,7 @@ namespace Polidog\Relayer;
 
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
@@ -30,15 +31,39 @@ use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainer
  */
 final class InjectorContainer implements ContainerInterface
 {
+    private ?Request $currentRequest = null;
+
     public function __construct(private readonly SymfonyContainerInterface $container) {}
+
+    /**
+     * Set the current request snapshot for the duration of a dispatch.
+     * AppRouter calls this in `run()` and clears it on exit so per-request
+     * state doesn't leak across long-lived processes (workerman, RoadRunner).
+     */
+    public function setCurrentRequest(?Request $request): void
+    {
+        $this->currentRequest = $request;
+    }
 
     public function has(string $id): bool
     {
+        if (Request::class === $id) {
+            return null !== $this->currentRequest;
+        }
+
         return $this->container->has($id) || \class_exists($id);
     }
 
     public function get(string $id): object
     {
+        if (Request::class === $id) {
+            if (null === $this->currentRequest) {
+                throw new class('No current Request — AppRouter must call setCurrentRequest() before resolving Request.') extends RuntimeException implements NotFoundExceptionInterface {};
+            }
+
+            return $this->currentRequest;
+        }
+
         // Conditional GET short-circuit: evaluate #[Cache] BEFORE we resolve
         // the page so a 304 response never instantiates the page or its
         // dependencies (the whole point of a fast ETag store).

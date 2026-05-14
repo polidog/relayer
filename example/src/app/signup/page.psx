@@ -2,26 +2,27 @@
 
 declare(strict_types=1);
 
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-return function (PageContext $ctx): Closure {
+return function (PageContext $ctx, Request $req): Closure {
     $ctx->metadata(['title' => 'Signup']);
 
     $values = [];
     $errors = [];
 
-    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-        $csrf = $_POST['_csrf'] ?? '';
-        if (!\is_string($csrf) || !CsrfToken::validate($csrf)) {
+    if ($req->isPost()) {
+        $csrf = $req->post('_csrf') ?? '';
+        if (!CsrfToken::validate($csrf)) {
             \http_response_code(403);
             $errors['_form'] = 'Invalid CSRF token.';
         } else {
             $values = [
-                'email' => \is_string($_POST['email'] ?? null) ? \trim($_POST['email']) : '',
-                'name'  => \is_string($_POST['name']  ?? null) ? \trim($_POST['name'])  : '',
+                'email' => \trim($req->post('email') ?? ''),
+                'name'  => \trim($req->post('name')  ?? ''),
             ];
             if (!\filter_var($values['email'], \FILTER_VALIDATE_EMAIL)) {
                 $errors['email'] = 'Please enter a valid email address.';
