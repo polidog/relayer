@@ -5,19 +5,30 @@ declare(strict_types=1);
 namespace Polidog\Relayer;
 
 use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\NativePasswordHasher;
 use Polidog\Relayer\Auth\NativeSession;
 use Polidog\Relayer\Auth\PasswordHasher;
 use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\Auth\TraceableAuthenticator;
+use Polidog\Relayer\Auth\TraceableSessionStorage;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
+use Polidog\Relayer\Http\TraceableEtagStore;
+use Polidog\Relayer\Profiler\FileProfilerStorage;
+use Polidog\Relayer\Profiler\NullProfiler;
+use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\Profiler\ProfilerStorage;
+use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Router\TraceableAppRouter;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
+use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -53,13 +64,46 @@ final class Relayer
         $appDir = $projectRoot . '/src/Pages';
         $isDev = self::isDev();
 
-        $router = AppRouter::create(
-            $appDir,
-            autoCompilePsx: $isDev,
-        );
+        // Dev: swap in TraceableAppRouter so dispatch lifecycle events
+        // land in the container-bound Profiler. Prod stays on the plain
+        // AppRouter and the Traceable* class is never autoloaded.
+        if ($isDev) {
+            $traceable = new TraceableAppRouter($appDir, autoCompilePsx: true);
+            $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
+            if ([] !== $extraExcludes) {
+                $traceable->setExcludedPrefixes($extraExcludes);
+            }
+            $router = $traceable;
+        } else {
+            $router = AppRouter::create($appDir);
+        }
         $router->setContainer($psr);
 
         return $router;
+    }
+
+    /**
+     * Read a comma-separated env var into a normalized list. Empty entries
+     * are dropped. Returns `[]` when the var is unset or empty.
+     *
+     * @return list<string>
+     */
+    private static function readEnvList(string $name): array
+    {
+        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
+        if (!\is_string($raw) || '' === \trim($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach (\explode(',', $raw) as $entry) {
+            $entry = \trim($entry);
+            if ('' !== $entry) {
+                $out[] = $entry;
+            }
+        }
+
+        return $out;
     }
 
     private static function buildContainer(string $projectRoot, ?AppConfigurator $configurator): ContainerBuilder
@@ -82,6 +126,29 @@ final class Relayer
                 ->setAutowired(true)
                 ->setPublic(true)
             ;
+        }
+
+        // Bind the AuthenticatorInterface ID to the concrete Authenticator
+        // when auth is configured. In dev, swap the alias to point at the
+        // TraceableAuthenticator decorator so framework code (and apps
+        // that depend on the interface) get auth event tracing for free.
+        if ($container->has(Authenticator::class)) {
+            $container->setAlias(AuthenticatorInterface::class, Authenticator::class)
+                ->setPublic(true)
+            ;
+
+            if (self::isDev()) {
+                $container->register(TraceableAuthenticator::class)
+                    ->setArguments([
+                        new Reference(Authenticator::class),
+                        new Reference(Profiler::class),
+                    ])
+                    ->setPublic(true)
+                ;
+                $container->setAlias(AuthenticatorInterface::class, TraceableAuthenticator::class)
+                    ->setPublic(true)
+                ;
+            }
         }
 
         // Autowire-by-default: any service registered without explicit
@@ -137,6 +204,59 @@ final class Relayer
         // deferred step in buildContainer() only when UserProvider has
         // been bound by the user's AppConfigurator. Apps without auth
         // pay nothing.
+
+        // Profiler. Prod resolves to NullProfiler so user code can take a
+        // `Profiler` dependency without any cost; dev swaps the alias to
+        // RecordingProfiler so events land on disk via FileProfilerStorage.
+        $container->register(NullProfiler::class)
+            ->setPublic(true)
+        ;
+        $container->setAlias(Profiler::class, NullProfiler::class)
+            ->setPublic(true)
+        ;
+
+        if (self::isDev()) {
+            $container->register(FileProfilerStorage::class)
+                ->setArguments([$projectRoot . '/var/cache/profiler'])
+                ->setPublic(true)
+            ;
+            $container->setAlias(ProfilerStorage::class, FileProfilerStorage::class)
+                ->setPublic(true)
+            ;
+
+            $container->register(RecordingProfiler::class)
+                ->setAutowired(true)
+                ->setPublic(true)
+            ;
+            $container->setAlias(Profiler::class, RecordingProfiler::class)
+                ->setPublic(true)
+            ;
+
+            // Dev-only: swap EtagStore + SessionStorage aliases to point at
+            // the traceable decorators so cache.etag_* and session.* events
+            // land in the profile alongside the rest of the request timeline.
+            $container->register(TraceableEtagStore::class)
+                ->setArguments([
+                    new Reference(FileEtagStore::class),
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(EtagStore::class, TraceableEtagStore::class)
+                ->setPublic(true)
+            ;
+
+            $container->register(TraceableSessionStorage::class)
+                ->setArguments([
+                    new Reference(NativeSession::class),
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(SessionStorage::class, TraceableSessionStorage::class)
+                ->setPublic(true)
+            ;
+        }
     }
 
     /**

@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
-use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
@@ -83,27 +84,43 @@ final class InjectorContainer implements ContainerInterface
             // page or its dependencies (the whole point of a fast ETag
             // store).
             $cache = CachePolicy::applyFromAttribute($id, $this->resolveEtagStore());
-            if (null !== $cache && CachePolicy::isNotModified($cache)) {
-                CachePolicy::sendNotModified();
+            if (null !== $cache) {
+                $profiler = $this->resolveProfiler();
+                $profiler?->collect('cache', 'apply', [
+                    'source' => 'attribute',
+                    'etag' => $cache->etag,
+                    'etagKey' => $cache->etagKey,
+                    'lastModified' => $cache->lastModified,
+                    'maxAge' => $cache->maxAge,
+                    'sMaxAge' => $cache->sMaxAge,
+                    'directives' => CachePolicy::buildDirectives($cache),
+                ]);
 
-                exit;
+                if (CachePolicy::isNotModified($cache)) {
+                    $profiler?->collect('cache', 'hit_304', [
+                        'etag' => $cache->etag,
+                    ]);
+                    CachePolicy::sendNotModified();
+
+                    exit;
+                }
             }
         }
 
         return $this->resolve($id);
     }
 
-    private function resolveAuthenticator(): ?Authenticator
+    private function resolveAuthenticator(): ?AuthenticatorInterface
     {
         // Gate on UserProvider — an unbound interface signals "auth not
         // configured" and lets apps without auth skip the whole code path.
-        if (!$this->container->has(UserProvider::class) || !$this->container->has(Authenticator::class)) {
+        if (!$this->container->has(UserProvider::class) || !$this->container->has(AuthenticatorInterface::class)) {
             return null;
         }
 
-        $auth = $this->container->get(Authenticator::class);
+        $auth = $this->container->get(AuthenticatorInterface::class);
 
-        return $auth instanceof Authenticator ? $auth : null;
+        return $auth instanceof AuthenticatorInterface ? $auth : null;
     }
 
     private function resolveEtagStore(): ?EtagStore
@@ -115,6 +132,17 @@ final class InjectorContainer implements ContainerInterface
         $store = $this->container->get(EtagStore::class);
 
         return $store instanceof EtagStore ? $store : null;
+    }
+
+    private function resolveProfiler(): ?Profiler
+    {
+        if (!$this->container->has(Profiler::class)) {
+            return null;
+        }
+
+        $profiler = $this->container->get(Profiler::class);
+
+        return $profiler instanceof Profiler ? $profiler : null;
     }
 
     private function resolve(string $id): object

@@ -29,7 +29,7 @@ final class AuthGuard
      * allowed to proceed; false when headers have been written for a
      * redirect / 401 / 403 and the caller must terminate the request.
      */
-    public static function enforce(string $class, Authenticator $auth, ?string $requestUri = null): bool
+    public static function enforce(string $class, AuthenticatorInterface $auth, ?string $requestUri = null): bool
     {
         $attribute = self::extract($class);
         if (null === $attribute) {
@@ -79,7 +79,7 @@ final class AuthGuard
      * Pure decision function — returns one of the DECISION_* constants
      * without touching headers. Used by enforce() and exposed for tests.
      */
-    public static function decide(Auth $attribute, Authenticator $auth): string
+    public static function decide(Auth $attribute, AuthenticatorInterface $auth): string
     {
         if (!$auth->check()) {
             return '' === $attribute->redirectTo

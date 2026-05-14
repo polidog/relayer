@@ -6,7 +6,7 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
-use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
@@ -146,7 +146,7 @@ class AppRouter
         }
     }
 
-    private function handleMatch(RouteMatch $match): void
+    protected function handleMatch(RouteMatch $match): void
     {
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());
 
@@ -170,7 +170,7 @@ class AppRouter
         $this->renderPage($pageComponent, $layoutStack, $match->getParams());
     }
 
-    private function applyFunctionPageCache(FunctionPage $page): void
+    protected function applyFunctionPageCache(FunctionPage $page): void
     {
         $cache = $page->getCache();
         if (null === $cache) {
@@ -185,7 +185,7 @@ class AppRouter
         }
     }
 
-    private function resolveEtagStore(): ?EtagStore
+    protected function resolveEtagStore(): ?EtagStore
     {
         if (null === $this->container || !$this->container->has(EtagStore::class)) {
             return null;
@@ -196,30 +196,13 @@ class AppRouter
         return $store instanceof EtagStore ? $store : null;
     }
 
-    private function resolveAuthenticator(): ?Authenticator
-    {
-        // UserProvider is an interface — `has()` only returns true when
-        // the app explicitly bound an implementation. Used as the gate
-        // for "auth is configured" so apps without auth pay nothing.
-        if (null === $this->container || !$this->container->has(UserProvider::class)) {
-            return null;
-        }
-        if (!$this->container->has(Authenticator::class)) {
-            return null;
-        }
-
-        $auth = $this->container->get(Authenticator::class);
-
-        return $auth instanceof Authenticator ? $auth : null;
-    }
-
     /**
      * Convert an {@see AuthorizationException} (raised by
      * `$ctx->requireAuth()` or by a non-nullable `Identity` parameter on
      * an anonymous request) into the same 302 / 401 / 403 response the
      * class-style `#[Auth]` attribute produces.
      */
-    private function handleAuthorizationFailure(AuthorizationException $exception): void
+    protected function handleAuthorizationFailure(AuthorizationException $exception): void
     {
         if (\headers_sent()) {
             return;
@@ -249,7 +232,7 @@ class AppRouter
         }
     }
 
-    private function handleNotFound(): void
+    protected function handleNotFound(): void
     {
         \http_response_code(404);
 
@@ -282,7 +265,7 @@ class AppRouter
      * @param array<string>         $layoutPaths
      * @param array<string, string> $params
      */
-    private function loadLayouts(array $layoutPaths, array $params): LayoutStack
+    protected function loadLayouts(array $layoutPaths, array $params): LayoutStack
     {
         $stack = new LayoutStack();
 
@@ -299,46 +282,7 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
-    {
-        if (!\file_exists($filePath)) {
-            return null;
-        }
-
-        // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (\str_ends_with($filePath, '.psx')) {
-            $filePath = $this->resolveCompiledPsxPath($filePath);
-        }
-
-        require_once $filePath;
-
-        $className = $this->getClassFromFile($filePath);
-
-        if (null === $className) {
-            return null;
-        }
-
-        if (!\class_exists($className)) {
-            return null;
-        }
-
-        $instance = $this->resolveInstance($className);
-
-        if (!$instance instanceof LayoutInterface) {
-            return null;
-        }
-
-        if ($instance instanceof LayoutComponent) {
-            $instance->setParams($params);
-        }
-
-        return $instance;
-    }
-
-    /**
-     * @param array<string, string> $params
-     */
-    private function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
+    protected function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
         if (!\file_exists($pagePath)) {
             return null;
@@ -377,6 +321,232 @@ class AppRouter
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    {
+        $componentId = $page instanceof FunctionPage
+            ? $page->getComponentId()
+            : 'page:' . $page::class;
+
+        $state = ComponentState::getInstance($componentId);
+        ComponentState::reset();
+
+        // Handle useState action (onClick etc.) before rendering
+        $this->dispatchStateAction($componentId, $state);
+
+        if ($page instanceof BaseComponent) {
+            $page->setComponentState($state);
+        }
+
+        if ($page instanceof PageComponent) {
+            $page->dispatchActionFromRequest();
+        } elseif ($page instanceof FunctionPage) {
+            $page->dispatchActionFromRequest();
+        }
+
+        $pageElement = $page->render();
+
+        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
+            /** @var array<string, string> $metadata */
+            $metadata = $page->getMetadata();
+            $this->document->setMetadata($metadata);
+        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
+            $this->document->setMetadata($page->getMetadata());
+        }
+
+        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
+        $html = $renderer->render($pageElement, $layouts);
+
+        if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+            echo $html;
+
+            return;
+        }
+
+        $wrappedHtml = \sprintf(
+            '<div data-usephp="%s">%s</div>',
+            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
+            $html,
+        );
+
+        $output = $this->document->render($wrappedHtml);
+
+        echo $output;
+    }
+
+    /**
+     * Handle useState setState actions from POST (onClick, onChange, etc.).
+     */
+    protected function dispatchStateAction(string $componentId, ComponentState $state): void
+    {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            return;
+        }
+
+        $actionJson = $_POST['_usephp_action'] ?? null;
+        $postComponentId = $_POST['_usephp_component'] ?? null;
+
+        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
+            return;
+        }
+
+        // Only handle JSON actions (not usephp-action: form tokens)
+        if (\str_starts_with($actionJson, 'usephp-action:')) {
+            return;
+        }
+
+        if ($postComponentId !== $componentId) {
+            return;
+        }
+
+        try {
+            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
+            if (!\is_array($actionData)) {
+                return;
+            }
+
+            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
+            $action = Action::fromArray($actionData);
+
+            if ('setState' === $action->type) {
+                $index = $action->payload['index'] ?? 0;
+                $value = $action->payload['value'] ?? null;
+                if (!\is_int($index)) {
+                    return;
+                }
+                $state->setState($index, $value);
+            }
+        } catch (JsonException) {
+            return;
+        }
+
+        // PRG pattern: redirect after state change (non-AJAX)
+        if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
+            \header('Location: ' . $redirectUrl, true, 303);
+
+            exit;
+        }
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    protected function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
+    {
+        if (!\file_exists($filePath)) {
+            return null;
+        }
+
+        // .psx is the source; the runtime requires the compiled .psx.php sibling.
+        if (\str_ends_with($filePath, '.psx')) {
+            $filePath = $this->resolveCompiledPsxPath($filePath);
+        }
+
+        require_once $filePath;
+
+        $className = $this->getClassFromFile($filePath);
+
+        if (null === $className) {
+            return null;
+        }
+
+        if (!\class_exists($className)) {
+            return null;
+        }
+
+        $instance = $this->resolveInstance($className);
+
+        if (!$instance instanceof LayoutInterface) {
+            return null;
+        }
+
+        if ($instance instanceof LayoutComponent) {
+            $instance->setParams($params);
+        }
+
+        return $instance;
+    }
+
+    /**
+     * Resolve a page.psx path to its cached compiled file. The cache file
+     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the usePHP
+     * convention (CompileCommand::cachePathFor).
+     *
+     * Behaviour by mode:
+     * - autoCompilePsx=true: when the cache file is missing or older than
+     *   the source, the usePHP Compiler runs in-process and rewrites the
+     *   cache atomically (temp + rename).
+     * - autoCompilePsx=false (default, production): if the cache file is
+     *   missing, throw a clear error pointing at `vendor/bin/usephp compile`.
+     *   If it exists, it's treated as authoritative — staleness is NOT
+     *   re-checked at request time. The deployment / build step owns the
+     *   refresh contract via `usephp compile`.
+     */
+    protected function resolveCompiledPsxPath(string $psxPath): string
+    {
+        $compiledPath = $this->cachePathFor($psxPath);
+
+        if (!$this->autoCompilePsx) {
+            if (!\file_exists($compiledPath)) {
+                throw new RuntimeException(
+                    "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
+                    . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
+                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
+                );
+            }
+
+            return $compiledPath;
+        }
+
+        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
+            throw new RuntimeException(
+                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
+                . 'is not available. Update polidog/use-php to a version with PSX support.',
+            );
+        }
+
+        $needsCompile = !\file_exists($compiledPath)
+            || @\filemtime($compiledPath) < @\filemtime($psxPath);
+
+        if ($needsCompile) {
+            $this->ensureCacheDir();
+            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
+
+            /** @var Compiler $compiler */
+            $compiler = new $compilerClass();
+            $source = \file_get_contents($psxPath);
+            if (false === $source) {
+                throw new RuntimeException("Failed to read PSX source: {$psxPath}");
+            }
+            $compiled = $compiler->compile($source);
+            $this->atomicWrite($compiledPath, $compiled);
+        }
+
+        return $compiledPath;
+    }
+
+    private function resolveAuthenticator(): ?AuthenticatorInterface
+    {
+        // UserProvider is an interface — `has()` only returns true when
+        // the app explicitly bound an implementation. Used as the gate
+        // for "auth is configured" so apps without auth pay nothing.
+        if (null === $this->container || !$this->container->has(UserProvider::class)) {
+            return null;
+        }
+        if (!$this->container->has(AuthenticatorInterface::class)) {
+            return null;
+        }
+
+        $auth = $this->container->get(AuthenticatorInterface::class);
+
+        return $auth instanceof AuthenticatorInterface ? $auth : null;
     }
 
     /**
@@ -500,64 +670,6 @@ class AppRouter
     }
 
     /**
-     * Resolve a page.psx path to its cached compiled file. The cache file
-     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the usePHP
-     * convention (CompileCommand::cachePathFor).
-     *
-     * Behaviour by mode:
-     * - autoCompilePsx=true: when the cache file is missing or older than
-     *   the source, the usePHP Compiler runs in-process and rewrites the
-     *   cache atomically (temp + rename).
-     * - autoCompilePsx=false (default, production): if the cache file is
-     *   missing, throw a clear error pointing at `vendor/bin/usephp compile`.
-     *   If it exists, it's treated as authoritative — staleness is NOT
-     *   re-checked at request time. The deployment / build step owns the
-     *   refresh contract via `usephp compile`.
-     */
-    private function resolveCompiledPsxPath(string $psxPath): string
-    {
-        $compiledPath = $this->cachePathFor($psxPath);
-
-        if (!$this->autoCompilePsx) {
-            if (!\file_exists($compiledPath)) {
-                throw new RuntimeException(
-                    "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
-                    . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
-                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
-                );
-            }
-
-            return $compiledPath;
-        }
-
-        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
-            throw new RuntimeException(
-                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
-                . 'is not available. Update polidog/use-php to a version with PSX support.',
-            );
-        }
-
-        $needsCompile = !\file_exists($compiledPath)
-            || @\filemtime($compiledPath) < @\filemtime($psxPath);
-
-        if ($needsCompile) {
-            $this->ensureCacheDir();
-            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
-
-            /** @var Compiler $compiler */
-            $compiler = new $compilerClass();
-            $source = \file_get_contents($psxPath);
-            if (false === $source) {
-                throw new RuntimeException("Failed to read PSX source: {$psxPath}");
-            }
-            $compiled = $compiler->compile($source);
-            $this->atomicWrite($compiledPath, $compiled);
-        }
-
-        return $compiledPath;
-    }
-
-    /**
      * Write to the destination via a tempfile + rename so concurrent
      * requests never see a partially written compiled file. The tempfile
      * is placed in the same directory as the destination so rename is
@@ -644,118 +756,6 @@ class AppRouter
         }
 
         return $instance;
-    }
-
-    /**
-     * @param array<string, string> $params
-     */
-    private function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
-    {
-        $componentId = $page instanceof FunctionPage
-            ? $page->getComponentId()
-            : 'page:' . $page::class;
-
-        $state = ComponentState::getInstance($componentId);
-        ComponentState::reset();
-
-        // Handle useState action (onClick etc.) before rendering
-        $this->dispatchStateAction($componentId, $state);
-
-        if ($page instanceof BaseComponent) {
-            $page->setComponentState($state);
-        }
-
-        if ($page instanceof PageComponent) {
-            $page->dispatchActionFromRequest();
-        } elseif ($page instanceof FunctionPage) {
-            $page->dispatchActionFromRequest();
-        }
-
-        $pageElement = $page->render();
-
-        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
-            /** @var array<string, string> $metadata */
-            $metadata = $page->getMetadata();
-            $this->document->setMetadata($metadata);
-        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
-            $this->document->setMetadata($page->getMetadata());
-        }
-
-        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
-        $html = $renderer->render($pageElement, $layouts);
-
-        if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            echo $html;
-
-            return;
-        }
-
-        $wrappedHtml = \sprintf(
-            '<div data-usephp="%s">%s</div>',
-            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
-            $html,
-        );
-
-        $output = $this->document->render($wrappedHtml);
-
-        echo $output;
-    }
-
-    /**
-     * Handle useState setState actions from POST (onClick, onChange, etc.).
-     */
-    private function dispatchStateAction(string $componentId, ComponentState $state): void
-    {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
-            return;
-        }
-
-        $actionJson = $_POST['_usephp_action'] ?? null;
-        $postComponentId = $_POST['_usephp_component'] ?? null;
-
-        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
-            return;
-        }
-
-        // Only handle JSON actions (not usephp-action: form tokens)
-        if (\str_starts_with($actionJson, 'usephp-action:')) {
-            return;
-        }
-
-        if ($postComponentId !== $componentId) {
-            return;
-        }
-
-        try {
-            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
-            if (!\is_array($actionData)) {
-                return;
-            }
-
-            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
-            $action = Action::fromArray($actionData);
-
-            if ('setState' === $action->type) {
-                $index = $action->payload['index'] ?? 0;
-                $value = $action->payload['value'] ?? null;
-                if (!\is_int($index)) {
-                    return;
-                }
-                $state->setState($index, $value);
-            }
-        } catch (JsonException) {
-            return;
-        }
-
-        // PRG pattern: redirect after state change (non-AJAX)
-        if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
-            \header('Location: ' . $redirectUrl, true, 303);
-
-            exit;
-        }
     }
 
     /**
