@@ -232,4 +232,49 @@ final class CachePolicyTest extends TestCase
         self::assertNotNull($effective);
         self::assertSame('dynamic-from-store', $effective->etag);
     }
+
+    public function testApplyCacheReturnsCacheUnchangedWhenNoStoreOrKey(): void
+    {
+        $cache = new Cache(maxAge: 60, etag: 'static-v1');
+
+        $effective = CachePolicy::applyCache($cache);
+
+        self::assertSame($cache, $effective);
+    }
+
+    public function testApplyCacheSubstitutesDynamicEtagFromStore(): void
+    {
+        $cache = new Cache(maxAge: 60, public: true, etagKey: 'feed');
+        $store = new InMemoryEtagStore(['feed' => 'rev-42']);
+
+        $effective = CachePolicy::applyCache($cache, $store);
+
+        self::assertNotSame($cache, $effective);
+        self::assertSame('rev-42', $effective->etag);
+        // Original fields preserved
+        self::assertSame(60, $effective->maxAge);
+        self::assertTrue($effective->public);
+    }
+
+    public function testApplyCacheKeepsStaticEtagWhenBothAreSet(): void
+    {
+        $cache = new Cache(etag: 'static-wins', etagKey: 'feed');
+        $store = new InMemoryEtagStore(['feed' => 'dynamic-loses']);
+
+        $effective = CachePolicy::applyCache($cache, $store);
+
+        self::assertSame($cache, $effective);
+        self::assertSame('static-wins', $effective->etag);
+    }
+
+    public function testApplyCacheReturnsOriginalWhenStoreHasNoEntry(): void
+    {
+        $cache = new Cache(maxAge: 30, etagKey: 'missing');
+        $store = new InMemoryEtagStore([]);
+
+        $effective = CachePolicy::applyCache($cache, $store);
+
+        self::assertSame($cache, $effective);
+        self::assertNull($effective->etag);
+    }
 }

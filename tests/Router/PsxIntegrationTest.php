@@ -167,6 +167,69 @@ final class PsxIntegrationTest extends TestCase
         self::assertStringContainsString('Pre-compiled output', $output);
     }
 
+    public function testFunctionStylePageDeclaresCacheViaContext(): void
+    {
+        // Verifies the wiring: factory calls $ctx->cache(...), AppRouter
+        // sees the FunctionPage carry the policy, applyFunctionPageCache
+        // runs through CachePolicy::applyCache without exiting (no matching
+        // If-None-Match), and the render closure produces the body.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            <<<'PSX'
+                <?php
+                use Polidog\Relayer\Http\Cache;
+                use Polidog\Relayer\Router\Component\PageContext;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+
+                return function (PageContext $ctx): Closure {
+                    $ctx->cache(new Cache(maxAge: 3600, public: true, etag: 'feed-v1'));
+
+                    return function (): Element {
+                        return <p>Cached feed</p>;
+                    };
+                };
+                PSX,
+        );
+
+        $app = AppRouter::create($this->workDir, autoCompilePsx: true);
+        $output = $this->runApp($app, '/');
+
+        self::assertStringContainsString('Cached feed', $output);
+
+        if (\function_exists('xdebug_get_headers')) {
+            $headers = \xdebug_get_headers();
+            self::assertContains('Cache-Control: public, max-age=3600', $headers);
+            self::assertContains('ETag: "feed-v1"', $headers);
+        }
+    }
+
+    public function testFunctionStylePageWithoutCacheStillRenders(): void
+    {
+        // Regression guard: a factory that never calls $ctx->cache() must
+        // skip applyFunctionPageCache entirely (getCache() === null branch).
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            <<<'PSX'
+                <?php
+                use Polidog\Relayer\Router\Component\PageContext;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+
+                return function (PageContext $ctx): Closure {
+                    return function (): Element {
+                        return <p>No cache here</p>;
+                    };
+                };
+                PSX,
+        );
+
+        $app = AppRouter::create($this->workDir, autoCompilePsx: true);
+        $output = $this->runApp($app, '/');
+
+        self::assertStringContainsString('No cache here', $output);
+    }
+
     private function runApp(AppRouter $app, string $path): string
     {
         $_SERVER['REQUEST_URI'] = $path;
