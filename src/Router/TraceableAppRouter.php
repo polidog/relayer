@@ -35,9 +35,25 @@ class TraceableAppRouter extends AppRouter
 {
     private const PROFILER_PREFIX = '/_profiler';
 
+    /**
+     * Framework-managed prefixes that never produce a profile. Covers
+     * browser/devtools noise (`/.well-known/appspecific/com.chrome.devtools.json`
+     * and similar probes) and the profiler viewer itself. Matched as
+     * exact path or as `prefix + '/'` so `/foo.txt` does not match `/foo`.
+     *
+     * @var list<string>
+     */
+    private const FRAMEWORK_EXCLUDED_PREFIXES = [
+        self::PROFILER_PREFIX,
+        '/.well-known',
+    ];
+
     private ?Profiler $profiler = null;
 
     private ?ProfilerStorage $storage = null;
+
+    /** @var list<string> */
+    private array $userExcludedPrefixes = [];
 
     public function setContainer(ContainerInterface $container): self
     {
@@ -60,12 +76,23 @@ class TraceableAppRouter extends AppRouter
 
     public function run(): void
     {
+        $path = $this->readPath();
+
         // `/_profiler[/<token>]` is the dev-only viewer. Intercept BEFORE
         // beginProfile so visiting the viewer does not create a profile of
         // itself (that would clutter the index and recurse the storage).
-        $path = $this->readPath();
         if (self::PROFILER_PREFIX === $path || \str_starts_with($path, self::PROFILER_PREFIX . '/')) {
             $this->renderProfilerView($path);
+
+            return;
+        }
+
+        // Drop probe-noise paths (DevTools, security.txt, favicon-adjacent
+        // .well-known endpoints, …) from profiling entirely. Dispatch
+        // proceeds normally so the user's 404 still fires — we just skip
+        // beginProfile so the index stays focused on real requests.
+        if ($this->isExcluded($path)) {
+            parent::run();
 
             return;
         }
@@ -84,6 +111,54 @@ class TraceableAppRouter extends AppRouter
             $status = \http_response_code();
             $recording->endProfile(\is_int($status) ? $status : 200);
         }
+    }
+
+    /**
+     * Add app-specific path prefixes to skip when recording profiles.
+     * Useful for health checks, metrics scrapers, or static probes that
+     * would otherwise clutter the index. Framework defaults (`/_profiler`
+     * and `/.well-known`) remain in effect — this list is additive.
+     *
+     * @param list<string> $prefixes
+     */
+    public function setExcludedPrefixes(array $prefixes): self
+    {
+        $cleaned = [];
+        foreach ($prefixes as $prefix) {
+            if ('' === $prefix) {
+                continue;
+            }
+            // Normalize: leading slash required, no trailing slash so the
+            // match logic stays uniform with the framework list.
+            if (!\str_starts_with($prefix, '/')) {
+                $prefix = '/' . $prefix;
+            }
+            $cleaned[] = \rtrim($prefix, '/');
+        }
+        $this->userExcludedPrefixes = $cleaned;
+
+        return $this;
+    }
+
+    private function isExcluded(string $path): bool
+    {
+        foreach (self::FRAMEWORK_EXCLUDED_PREFIXES as $prefix) {
+            if ($this->prefixMatches($path, $prefix)) {
+                return true;
+            }
+        }
+        foreach ($this->userExcludedPrefixes as $prefix) {
+            if ($this->prefixMatches($path, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function prefixMatches(string $path, string $prefix): bool
+    {
+        return $path === $prefix || \str_starts_with($path, $prefix . '/');
     }
 
     /**

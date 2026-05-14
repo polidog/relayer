@@ -62,12 +62,43 @@ final class Relayer
         // Dev: swap in TraceableAppRouter so dispatch lifecycle events
         // land in the container-bound Profiler. Prod stays on the plain
         // AppRouter and the Traceable* class is never autoloaded.
-        $router = $isDev
-            ? new TraceableAppRouter($appDir, autoCompilePsx: true)
-            : AppRouter::create($appDir);
+        if ($isDev) {
+            $traceable = new TraceableAppRouter($appDir, autoCompilePsx: true);
+            $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
+            if ([] !== $extraExcludes) {
+                $traceable->setExcludedPrefixes($extraExcludes);
+            }
+            $router = $traceable;
+        } else {
+            $router = AppRouter::create($appDir);
+        }
         $router->setContainer($psr);
 
         return $router;
+    }
+
+    /**
+     * Read a comma-separated env var into a normalized list. Empty entries
+     * are dropped. Returns `[]` when the var is unset or empty.
+     *
+     * @return list<string>
+     */
+    private static function readEnvList(string $name): array
+    {
+        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
+        if (!\is_string($raw) || '' === \trim($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach (\explode(',', $raw) as $entry) {
+            $entry = \trim($entry);
+            if ('' !== $entry) {
+                $out[] = $entry;
+            }
+        }
+
+        return $out;
     }
 
     private static function buildContainer(string $projectRoot, ?AppConfigurator $configurator): ContainerBuilder

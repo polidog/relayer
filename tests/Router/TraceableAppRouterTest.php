@@ -202,6 +202,78 @@ final class TraceableAppRouterTest extends TestCase
         self::assertStringContainsString('/blog/[slug]', $output);
     }
 
+    public function testWellKnownProbesAreExcludedFromProfiling(): void
+    {
+        // Chrome DevTools (and other browser probes) hit `/.well-known/...`
+        // automatically. These are noise in the profiler index — the request
+        // should still 404 normally, but no Profile should be persisted.
+        $storage = new InMemoryProfilerStorage();
+        $profiler = new RecordingProfiler($storage);
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler, $storage));
+
+        $this->runApp($router, '/.well-known/appspecific/com.chrome.devtools.json');
+
+        self::assertSame([], $storage->saved);
+        self::assertNull($profiler->currentProfile());
+    }
+
+    public function testWellKnownPrefixDoesNotMatchUnrelatedPath(): void
+    {
+        // Anchor the prefix on a trailing slash so `/well-knownish` does not
+        // get accidentally excluded.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>ok</p>;\n",
+        );
+
+        $storage = new InMemoryProfilerStorage();
+        $profiler = new RecordingProfiler($storage);
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler, $storage));
+
+        $this->runApp($router, '/');
+
+        self::assertNotNull($profiler->currentProfile());
+    }
+
+    public function testUserConfiguredPrefixesAreExcluded(): void
+    {
+        // Apps configure extra excludes via `PROFILER_EXCLUDED_PATHS` env var
+        // → Relayer::boot() passes them to setExcludedPrefixes(). Verify the
+        // setter end is honored.
+        $storage = new InMemoryProfilerStorage();
+        $profiler = new RecordingProfiler($storage);
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler, $storage));
+        $router->setExcludedPrefixes(['/healthz', 'metrics']); // second tests leading-slash normalization
+
+        $this->runApp($router, '/healthz');
+        self::assertSame([], $storage->saved, 'exact prefix match should exclude');
+
+        $this->runApp($router, '/metrics/cpu');
+        self::assertSame([], $storage->saved, 'subpath under user prefix should exclude');
+    }
+
+    public function testFrameworkExcludesSurviveUserConfiguration(): void
+    {
+        // Setting user excludes must not remove the framework defaults —
+        // `/_profiler` and `/.well-known` are non-negotiable.
+        $storage = new InMemoryProfilerStorage();
+        $profiler = new RecordingProfiler($storage);
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler, $storage));
+        $router->setExcludedPrefixes(['/healthz']);
+
+        $this->runApp($router, '/.well-known/probe');
+        self::assertSame([], $storage->saved);
+    }
+
     public function testProfilerViewDoesNotRecordOwnProfile(): void
     {
         // Visiting the viewer is intercepted BEFORE beginProfile() runs, so
