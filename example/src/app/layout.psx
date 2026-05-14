@@ -12,16 +12,24 @@ final class RootLayout extends LayoutComponent
 {
     public function render(): Element
     {
+        $navLink = 'text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors';
+
         return (
-            <div className="app">
-                <nav>
-                    <a href="/">Home</a>
-                    <a href="/about" style="margin-left:1rem">About</a>
-                    <a href="/users" style="margin-left:1rem">Users</a>
-                    <a href="/signup" style="margin-left:1rem">Signup</a>
-                </nav>
-                <hr />
-                <main>{$this->getChildren()}</main>
+            <div className="min-h-screen bg-slate-50 text-slate-900">
+                <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur">
+                    <nav className="mx-auto flex max-w-3xl items-center gap-6 px-6 py-4">
+                        <a href="/" className="text-base font-semibold tracking-tight text-slate-900">
+                            Relayer
+                        </a>
+                        <div className="flex items-center gap-5">
+                            <a href="/" className={$navLink}>Home</a>
+                            <a href="/about" className={$navLink}>About</a>
+                            <a href="/users" className={$navLink}>Users</a>
+                            <a href="/signup" className={$navLink}>Signup</a>
+                        </div>
+                    </nav>
+                </header>
+                <main className="mx-auto max-w-3xl px-6 py-10">{$this->getChildren()}</main>
             </div>
         );
     }

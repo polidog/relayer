@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 use Polidog\UsePhp\Html\H;
 
-return fn() => <section>
-    <h1>Thanks!</h1>
-    <p>Your signup was accepted. <a href="/">Back home</a></p>
+return fn() => <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+    <h1 className="text-2xl font-bold tracking-tight text-slate-900">Thanks!</h1>
+    <p className="text-slate-600">Your signup was accepted.</p>
+    <p>
+        <a href="/" className="text-sm font-medium text-slate-700 underline-offset-4 hover:underline">
+            ← Back home
+        </a>
+    </p>
 </section>;

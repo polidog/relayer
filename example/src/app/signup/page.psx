@@ -38,33 +38,62 @@ return function (PageContext $ctx): Closure {
         $emailError = $errors['email'] ?? null;
         $nameError  = $errors['name']  ?? null;
 
+        $inputBase = 'block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-slate-900/10';
+        $inputOk = $inputBase . ' border-slate-300 focus:border-slate-500';
+        $inputErr = $inputBase . ' border-rose-400 focus:border-rose-500 focus:ring-rose-500/10';
+
+        $nameInputClass  = null !== $nameError  ? $inputErr : $inputOk;
+        $emailInputClass = null !== $emailError ? $inputErr : $inputOk;
+
         return (
-            <section>
-                <h1>Signup</h1>
-                <p>Function-style page using <code>$ctx-&gt;action()</code>. The
-                    handler runs before <code>render()</code> on POST; validation
-                    errors flow back into the same request through shared factory
-                    scope (no redirect). CSRF + form-action hidden fields are
-                    injected automatically.</p>
-
-                <form action={$signup}>
-                    <p>
-                        <label>
-                            Name<br />
-                            <input name="name" value={$values['name']} />
-                        </label>
-                        {null !== $nameError ? <span style="color:#b00; margin-left:0.5rem">{$nameError}</span> : null}
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Signup</h1>
+                    <p className="text-slate-600">
+                        Function-style page using{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">$ctx-&gt;action()</code>.
+                        The handler runs before{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">render()</code>{' '}
+                        on POST; validation errors flow back into the same request through
+                        shared factory scope (no redirect). CSRF + form-action hidden
+                        fields are injected automatically.
                     </p>
+                </header>
 
-                    <p>
-                        <label>
-                            Email<br />
-                            <input type="email" name="email" value={$values['email']} />
+                <form action={$signup} className="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <div className="space-y-1.5">
+                        <label htmlFor="name" className="block text-sm font-medium text-slate-700">
+                            Name
                         </label>
-                        {null !== $emailError ? <span style="color:#b00; margin-left:0.5rem">{$emailError}</span> : null}
-                    </p>
+                        <input
+                            id="name"
+                            name="name"
+                            value={$values['name']}
+                            className={$nameInputClass}
+                        />
+                        {null !== $nameError ? <p className="text-sm text-rose-600">{$nameError}</p> : null}
+                    </div>
 
-                    <button type="submit">Sign up</button>
+                    <div className="space-y-1.5">
+                        <label htmlFor="email" className="block text-sm font-medium text-slate-700">
+                            Email
+                        </label>
+                        <input
+                            id="email"
+                            type="email"
+                            name="email"
+                            value={$values['email']}
+                            className={$emailInputClass}
+                        />
+                        {null !== $emailError ? <p className="text-sm text-rose-600">{$emailError}</p> : null}
+                    </div>
+
+                    <button
+                        type="submit"
+                        className="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900/20"
+                    >
+                        Sign up
+                    </button>
                 </form>
             </section>
         );

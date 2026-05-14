@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 use Polidog\UsePhp\Html\H;
 
-return fn() => <section>
-    <h1>About</h1>
-    <p>Minimal function-style page — no services, no state, just a closure
-        that returns an <code>Element</code>.</p>
+return fn() => <section className="space-y-4">
+    <h1 className="text-3xl font-bold tracking-tight text-slate-900">About</h1>
+    <p className="text-slate-600">
+        Minimal function-style page — no services, no state, just a closure that
+        returns an {' '}
+        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Element</code>.
+    </p>
 </section>;

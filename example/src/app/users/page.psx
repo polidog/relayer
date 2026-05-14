@@ -18,18 +18,36 @@ final class UsersPage extends PageComponent
     public function render(): Element
     {
         $items = \array_map(
-            fn(array $u) => <li><a href={"/users/{$u['id']}"}>{$u['name']}</a></li>,
+            fn(array $u) => (
+                <li>
+                    <a
+                        href={"/users/{$u['id']}"}
+                        className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50"
+                    >
+                        <span className="font-medium">{$u['name']}</span>
+                        <span className="text-sm text-slate-400">→</span>
+                    </a>
+                </li>
+            ),
             $this->users->all(),
         );
 
         return (
-            <section>
-                <h1>Users</h1>
-                <p>Class-style page with <code>#[Cache]</code> — responses carry
-                    <code>Cache-Control: public, max-age=60</code> and an
-                    <code>ETag</code>, so a refresh hits the conditional-GET
-                    short-circuit (304) without re-running this method.</p>
-                <ul>{$items}</ul>
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Users</h1>
+                    <p className="text-slate-600">
+                        Class-style page with{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">#[Cache]</code>{' '}
+                        — responses carry{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Cache-Control: public, max-age=60</code>{' '}
+                        and an{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">ETag</code>,
+                        so a refresh hits the conditional-GET short-circuit (304) without
+                        re-running this method.
+                    </p>
+                </header>
+                <ul className="space-y-2">{$items}</ul>
             </section>
         );
     }

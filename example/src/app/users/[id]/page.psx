@@ -21,19 +21,32 @@ final class UserDetailPage extends PageComponent
         if (null === $user) {
             \http_response_code(404);
             return (
-                <section>
-                    <h1>Not found</h1>
-                    <p>No user with id <code>{(string) $id}</code>.</p>
-                    <p><a href="/users">Back to users</a></p>
+                <section className="space-y-4">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Not found</h1>
+                    <p className="text-slate-600">
+                        No user with id{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">{(string) $id}</code>.
+                    </p>
+                    <p>
+                        <a href="/users" className="text-sm font-medium text-slate-700 underline-offset-4 hover:underline">
+                            ← Back to users
+                        </a>
+                    </p>
                 </section>
             );
         }
 
         return (
-            <section>
-                <h1>{$user['name']}</h1>
-                <p>{$user['bio']}</p>
-                <p><a href="/users">Back to users</a></p>
+            <section className="space-y-6">
+                <p>
+                    <a href="/users" className="text-sm font-medium text-slate-500 underline-offset-4 hover:text-slate-700 hover:underline">
+                        ← Back to users
+                    </a>
+                </p>
+                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-900">{$user['name']}</h1>
+                    <p className="mt-3 leading-relaxed text-slate-600">{$user['bio']}</p>
+                </div>
             </section>
         );
     }
