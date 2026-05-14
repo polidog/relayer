@@ -20,17 +20,21 @@ final class UserDetailPage extends PageComponent
 
         if (null === $user) {
             \http_response_code(404);
-            return <section>
-                <h1>Not found</h1>
-                <p>No user with id <code>{(string) $id}</code>.</p>
-                <p><a href="/users">Back to users</a></p>
-            </section>;
+            return (
+                <section>
+                    <h1>Not found</h1>
+                    <p>No user with id <code>{(string) $id}</code>.</p>
+                    <p><a href="/users">Back to users</a></p>
+                </section>
+            );
         }
 
-        return <section>
-            <h1>{$user['name']}</h1>
-            <p>{$user['bio']}</p>
-            <p><a href="/users">Back to users</a></p>
-        </section>;
+        return (
+            <section>
+                <h1>{$user['name']}</h1>
+                <p>{$user['bio']}</p>
+                <p><a href="/users">Back to users</a></p>
+            </section>
+        );
     }
 }

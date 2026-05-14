@@ -218,10 +218,12 @@ page before `render()`:
 ```php
 public function render(): Element
 {
-    return <form method="post">
-        <input type="hidden" name="_usephp_action" value={$this->action([$this, 'save'])} />
-        <input name="title" />
-    </form>;
+    return (
+        <form method="post">
+            <input type="hidden" name="_usephp_action" value={$this->action([$this, 'save'])} />
+            <input name="title" />
+        </form>
+    );
 }
 
 public function save(array $form): void
@@ -233,6 +235,45 @@ public function save(array $form): void
 ```
 
 Invalid CSRF tokens return a `403`.
+
+Function-style pages declare server actions through `PageContext::action()`.
+The factory closure runs on every request — including the POST that submits
+the form — so the action table is rebuilt before dispatch and the token only
+needs to carry `(pageId, name)`:
+
+```php
+<?php
+// src/app/users/page.psx
+declare(strict_types=1);
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, UserRepository $users): Closure {
+    $save = $ctx->action('save', function (array $form) use ($users): void {
+        $users->create($form['name']);
+        \header('Location: /users', true, 303);
+        exit;
+    });
+
+    return function () use ($save, $users): Element {
+        return (
+            <main>
+                <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
+                <form action={$save}>
+                    <input name="name" />
+                    <button>save</button>
+                </form>
+            </main>
+        );
+    };
+};
+```
+
+The handler receives the POST body as its first argument (with
+`_usephp_action` / `_usephp_csrf` stripped). Action names must be unique
+per page — registering the same name twice throws.
 
 ## Service Registration
 

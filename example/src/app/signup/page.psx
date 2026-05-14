@@ -2,77 +2,71 @@
 
 declare(strict_types=1);
 
-use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-return function (PageContext $ctx, Request $req): Closure {
+return function (PageContext $ctx): Closure {
     $ctx->metadata(['title' => 'Signup']);
 
-    $values = [];
+    $values = ['email' => '', 'name' => ''];
     $errors = [];
 
-    if ($req->isPost()) {
-        $csrf = $req->post('_csrf') ?? '';
-        if (!CsrfToken::validate($csrf)) {
-            \http_response_code(403);
-            $errors['_form'] = 'Invalid CSRF token.';
-        } else {
-            $values = [
-                'email' => \trim($req->post('email') ?? ''),
-                'name'  => \trim($req->post('name')  ?? ''),
-            ];
-            if (!\filter_var($values['email'], \FILTER_VALIDATE_EMAIL)) {
-                $errors['email'] = 'Please enter a valid email address.';
-            }
-            if ('' === $values['name']) {
-                $errors['name'] = 'Name is required.';
-            }
-            if ([] === $errors) {
-                \header('Location: /signup/thanks', true, 303);
-                exit;
-            }
-        }
-    }
+    $signup = $ctx->action('signup', function (array $form) use (&$values, &$errors): void {
+        $values = [
+            'email' => \trim((string) ($form['email'] ?? '')),
+            'name'  => \trim((string) ($form['name']  ?? '')),
+        ];
 
-    return function () use ($values, $errors): Element {
-        $token = CsrfToken::getToken();
+        if (!\filter_var($values['email'], \FILTER_VALIDATE_EMAIL)) {
+            $errors['email'] = 'Please enter a valid email address.';
+        }
+        if ('' === $values['name']) {
+            $errors['name'] = 'Name is required.';
+        }
+
+        if ([] === $errors) {
+            \header('Location: /signup/thanks', true, 303);
+            exit;
+        }
+    });
+
+    // $values / $errors are mutated by the $signup action closure, which
+    // runs *after* this render closure is constructed. Capture by reference
+    // so the post-dispatch state — not the empty initial state — is rendered.
+    return function () use ($signup, &$values, &$errors): Element {
         $emailError = $errors['email'] ?? null;
         $nameError  = $errors['name']  ?? null;
-        $formError  = $errors['_form'] ?? null;
 
-        return <section>
-            <h1>Signup</h1>
-            <p>Function-style page handling its own <code>POST</code>.
-                Validation runs in the factory closure before the render
-                closure builds the response, so errors flow into the same
-                request without a redirect.</p>
+        return (
+            <section>
+                <h1>Signup</h1>
+                <p>Function-style page using <code>$ctx-&gt;action()</code>. The
+                    handler runs before <code>render()</code> on POST; validation
+                    errors flow back into the same request through shared factory
+                    scope (no redirect). CSRF + form-action hidden fields are
+                    injected automatically.</p>
 
-            {null !== $formError ? <p style="color:#b00">{$formError}</p> : null}
+                <form action={$signup}>
+                    <p>
+                        <label>
+                            Name<br />
+                            <input name="name" value={$values['name']} />
+                        </label>
+                        {null !== $nameError ? <span style="color:#b00; margin-left:0.5rem">{$nameError}</span> : null}
+                    </p>
 
-            <form method="post" action="/signup">
-                <input type="hidden" name="_csrf" value={$token} />
+                    <p>
+                        <label>
+                            Email<br />
+                            <input type="email" name="email" value={$values['email']} />
+                        </label>
+                        {null !== $emailError ? <span style="color:#b00; margin-left:0.5rem">{$emailError}</span> : null}
+                    </p>
 
-                <p>
-                    <label>
-                        Name<br />
-                        <input name="name" value={$values['name'] ?? ''} />
-                    </label>
-                    {null !== $nameError ? <span style="color:#b00; margin-left:0.5rem">{$nameError}</span> : null}
-                </p>
-
-                <p>
-                    <label>
-                        Email<br />
-                        <input type="email" name="email" value={$values['email'] ?? ''} />
-                    </label>
-                    {null !== $emailError ? <span style="color:#b00; margin-left:0.5rem">{$emailError}</span> : null}
-                </p>
-
-                <button type="submit">Sign up</button>
-            </form>
-        </section>;
+                    <button type="submit">Sign up</button>
+                </form>
+            </section>
+        );
     };
 };

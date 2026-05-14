@@ -282,6 +282,11 @@ class AppRouter
             return null;
         }
 
+        // The route-derived page id must be computed from the original
+        // src/app/.../page.psx path — the compiled cache filename is an
+        // opaque hash and would leak into action tokens / component state keys.
+        $originalPagePath = $pagePath;
+
         // .psx is the source; the runtime requires the compiled .psx.php sibling.
         if (\str_ends_with($pagePath, '.psx')) {
             $pagePath = $this->resolveCompiledPsxPath($pagePath);
@@ -291,7 +296,7 @@ class AppRouter
 
         // Closure return: function-based page
         if ($result instanceof Closure) {
-            return $this->buildFunctionPage($result, $pagePath, $params);
+            return $this->buildFunctionPage($result, $originalPagePath, $params);
         }
 
         // Class-based page (fallback)
@@ -317,7 +322,8 @@ class AppRouter
      */
     private function buildFunctionPage(Closure $factory, string $pagePath, array $params): FunctionPage
     {
-        $context = new Component\PageContext($params);
+        $pageId = $this->computePageId($pagePath);
+        $context = new Component\PageContext($params, $pageId);
         $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
         $result = $factory(...$args);
 
@@ -334,8 +340,6 @@ class AppRouter
         } else {
             throw new RuntimeException("Page factory must return a Closure or Element: {$pagePath}");
         }
-
-        $pageId = $this->computePageId($pagePath);
 
         return new FunctionPage($renderFn, $context, $pageId);
     }
@@ -581,6 +585,8 @@ class AppRouter
         }
 
         if ($page instanceof PageComponent) {
+            $page->dispatchActionFromRequest();
+        } elseif ($page instanceof FunctionPage) {
             $page->dispatchActionFromRequest();
         }
 

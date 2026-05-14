@@ -46,4 +46,19 @@ final class FormActionTest extends TestCase
         self::assertNotNull($decoded);
         self::assertSame([], $decoded['args']);
     }
+
+    public function testCreateForPageEncodesPageScopedPayload(): void
+    {
+        $token = FormAction::createForPage('/users', 'save', ['extra' => 1]);
+
+        self::assertTrue(FormAction::isToken($token));
+
+        $decoded = FormAction::decode($token);
+        self::assertNotNull($decoded);
+        self::assertSame('/users', $decoded['page']);
+        self::assertSame('save', $decoded['name']);
+        self::assertSame(['extra' => 1], $decoded['args']);
+        self::assertArrayNotHasKey('class', $decoded);
+        self::assertArrayNotHasKey('method', $decoded);
+    }
 }

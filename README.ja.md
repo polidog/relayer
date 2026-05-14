@@ -220,10 +220,12 @@ src/app/
 ```php
 public function render(): Element
 {
-    return <form method="post">
-        <input type="hidden" name="_usephp_action" value={$this->action([$this, 'save'])} />
-        <input name="title" />
-    </form>;
+    return (
+        <form method="post">
+            <input type="hidden" name="_usephp_action" value={$this->action([$this, 'save'])} />
+            <input name="title" />
+        </form>
+    );
 }
 
 public function save(array $form): void
@@ -235,6 +237,45 @@ public function save(array $form): void
 ```
 
 CSRF トークンが無効な場合は `403` が返ります。
+
+関数スタイルのページでは `PageContext::action()` でサーバアクションを宣言します。
+ファクトリクロージャはリクエスト毎（フォーム送信時の POST も含む）に再実行され
+るため、ディスパッチ前にアクションテーブルが再構築され、トークンは `(pageId,
+name)` のみを保持すれば十分です:
+
+```php
+<?php
+// src/app/users/page.psx
+declare(strict_types=1);
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, UserRepository $users): Closure {
+    $save = $ctx->action('save', function (array $form) use ($users): void {
+        $users->create($form['name']);
+        \header('Location: /users', true, 303);
+        exit;
+    });
+
+    return function () use ($save, $users): Element {
+        return (
+            <main>
+                <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
+                <form action={$save}>
+                    <input name="name" />
+                    <button>save</button>
+                </form>
+            </main>
+        );
+    };
+};
+```
+
+ハンドラの第1引数には POST ボディが渡されます (`_usephp_action` /
+`_usephp_csrf` は除外済み)。アクション名はページごとに一意で、同じ名前を
+2 回登録すると例外になります。
 
 ## サービス登録
 

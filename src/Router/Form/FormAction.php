@@ -15,12 +15,34 @@ final class FormAction
      */
     public static function create(string $className, string $method, array $args = []): string
     {
-        $payload = [
+        return self::encode([
             'class' => $className,
             'method' => $method,
             'args' => $args,
-        ];
+        ]);
+    }
 
+    /**
+     * Build a token bound to a function-style page (identified by its
+     * route-derived page id) and a named action registered on that page's
+     * PageContext.
+     *
+     * @param array<string, mixed> $args
+     */
+    public static function createForPage(string $pageId, string $name, array $args = []): string
+    {
+        return self::encode([
+            'page' => $pageId,
+            'name' => $name,
+            'args' => $args,
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private static function encode(array $payload): string
+    {
         $json = \json_encode($payload, \JSON_THROW_ON_ERROR);
         $encoded = \rtrim(\strtr(\base64_encode($json), '+/', '-_'), '=');
 
