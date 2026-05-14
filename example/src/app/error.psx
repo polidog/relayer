@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Pages;
+
+use Polidog\Relayer\Router\Component\ErrorPageComponent;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+final class ErrorPage extends ErrorPageComponent
+{
+    public function render(): Element
+    {
+        return <section>
+            <h1>404 — Page not found</h1>
+            <p><a href="/">Back home</a></p>
+        </section>;
+    }
+}

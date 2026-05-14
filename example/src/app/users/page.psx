@@ -1,0 +1,34 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Pages\Users;
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Http\Cache;
+use Polidog\Relayer\Router\Component\PageComponent;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+#[Cache(maxAge: 60, public: true, etag: 'users-v1')]
+final class UsersPage extends PageComponent
+{
+    public function __construct(private readonly UserRepository $users) {}
+
+    public function render(): Element
+    {
+        $items = \array_map(
+            fn(array $u) => <li><a href={"/users/{$u['id']}"}>{$u['name']}</a></li>,
+            $this->users->all(),
+        );
+
+        return <section>
+            <h1>Users</h1>
+            <p>Class-style page with <code>#[Cache]</code> — responses carry
+                <code>Cache-Control: public, max-age=60</code> and an
+                <code>ETag</code>, so a refresh hits the conditional-GET
+                short-circuit (304) without re-running this method.</p>
+            <ul>{$items}</ul>
+        </section>;
+    }
+}

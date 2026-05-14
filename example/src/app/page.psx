@@ -1,0 +1,23 @@
+<?php
+
+declare(strict_types=1);
+
+use App\Service\Clock;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Clock $clock): Closure {
+    $ctx->metadata(['title' => 'Home']);
+    $now = $clock->now()->format('Y-m-d H:i:s');
+
+    return function () use ($now): Element {
+        return <section>
+            <h1>Home</h1>
+            <p>Function-style page. The factory closure is autowired:
+                <code>Clock</code> is injected straight from the DI container,
+                no constructor needed.</p>
+            <p>Server time: <strong>{$now}</strong></p>
+        </section>;
+    };
+};
