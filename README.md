@@ -9,7 +9,8 @@ Opinionated, batteries-included framework on top of
   `layout.psx`, dynamic segments, error pages)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
   for service wiring (autowire, YAML/PHP config auto-load)
-- [vlucas/phpdotenv](https://github.com/vlucas/phpdotenv) for `.env` loading
+- [symfony/dotenv](https://github.com/symfony/dotenv) for `.env` loading
+  with the standard `.env` / `.env.local` / `.env.{APP_ENV}` cascade
 - `#[Cache]` attribute for HTTP cache headers + `If-None-Match` 304 handling
   with pluggable `EtagStore` (file-based default, Redis-ready)
 
@@ -22,7 +23,7 @@ Exposes a single `Relayer::boot()` entrypoint so app code stays small.
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1
-- [vlucas/phpdotenv](https://github.com/vlucas/phpdotenv) ^5.6
+- [symfony/dotenv](https://github.com/symfony/dotenv) ^7.1
 
 ## Installation
 
@@ -90,9 +91,17 @@ APP_ENV=dev
 DATABASE_URL=mysql://localhost/app
 ```
 
-Variables are loaded with `Dotenv::createImmutable()->safeLoad()` — existing
-`$_ENV` / `$_SERVER` / `getenv()` values win, and a missing `.env` file is not
-an error.
+`.env` files are loaded through [`symfony/dotenv`](https://symfony.com/doc/current/configuration.html#configuring-environment-variables-in-env-files)
+with the standard Symfony cascade:
+
+1. `.env`                  — committed defaults
+2. `.env.local`            — local overrides (gitignored)
+3. `.env.{APP_ENV}`        — per-environment defaults (committed)
+4. `.env.{APP_ENV}.local`  — per-environment local overrides (gitignored)
+
+Missing files are skipped silently. Variables already in `$_ENV` /
+`$_SERVER` / `getenv()` win over the base `.env`; the `.local` files
+override the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
 (including unset) treats the app as production: pre-compile with

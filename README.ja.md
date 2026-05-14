@@ -9,7 +9,8 @@
   `layout.psx`, 動的セグメント, エラーページ)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
   によるサービス配線（autowire、YAML/PHP の自動ロード）
-- [vlucas/phpdotenv](https://github.com/vlucas/phpdotenv) による `.env` 読み込み
+- [symfony/dotenv](https://github.com/symfony/dotenv) による `.env` 読み込み
+  （`.env` / `.env.local` / `.env.{APP_ENV}` の cascade 対応）
 - HTTP キャッシュ用 `#[Cache]` アトリビュート + `If-None-Match` による
   304 応答、差し替え可能な `EtagStore`（デフォルトはファイル、Redis 等にも
   簡単に切り替え可能）
@@ -24,7 +25,7 @@
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1
-- [vlucas/phpdotenv](https://github.com/vlucas/phpdotenv) ^5.6
+- [symfony/dotenv](https://github.com/symfony/dotenv) ^7.1
 
 ## インストール
 
@@ -93,8 +94,17 @@ APP_ENV=dev
 DATABASE_URL=mysql://localhost/app
 ```
 
-`Dotenv::createImmutable()->safeLoad()` で読まれます。既存の `$_ENV` /
-`$_SERVER` / `getenv()` の値が優先され、`.env` が無くてもエラーにはなりません。
+[`symfony/dotenv`](https://symfony.com/doc/current/configuration.html#configuring-environment-variables-in-env-files)
+で読まれ、Symfony 標準の cascade に従います:
+
+1. `.env`                  — コミット用デフォルト
+2. `.env.local`            — ローカル上書き（gitignore）
+3. `.env.{APP_ENV}`        — 環境別デフォルト（コミット）
+4. `.env.{APP_ENV}.local`  — 環境別ローカル上書き（gitignore）
+
+存在しないファイルは黙ってスキップされます。`$_ENV` / `$_SERVER` / `getenv()`
+に既に値があれば `.env` を優先せず維持され、`.local` 系ファイルはコミット
+されたカウンタパートを上書きします。
 
 `APP_ENV=dev`（または `development`）で PSX ファイルの auto-compile が
 有効になります。それ以外（未設定含む）は本番扱いで、デプロイ時に

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
-use Dotenv\Dotenv;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
 use Polidog\Relayer\Router\AppRouter;
@@ -13,12 +12,14 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
+use Symfony\Component\Dotenv\Dotenv;
 
 /**
  * One-shot bootstrapper for usePHP applications.
  *
  * Responsibilities:
- * - Load `.env` from the project root (if present) into $_ENV / $_SERVER.
+ * - Load `.env` (and the Symfony cascade `.env.local`, `.env.{APP_ENV}`,
+ *   `.env.{APP_ENV}.local`) from the project root if present.
  * - Build a Symfony DI ContainerBuilder with autowire-by-default semantics.
  * - Apply the caller-supplied AppConfigurator (or a bare default) for custom bindings.
  * - Compile the container and wrap it in a PSR-11 adapter for AppRouter.
@@ -134,13 +135,23 @@ final class Relayer
         }
     }
 
+    /**
+     * Load env vars via Symfony Dotenv. `loadEnv()` walks the standard
+     * cascade — `.env` → `.env.local` → `.env.{APP_ENV}` → `.env.{APP_ENV}.local`
+     * — and skips files that are missing. Existing $_ENV / $_SERVER /
+     * getenv() values win over `.env` (overrideExistingVars=false), while
+     * the `.local` files override their committed counterparts as Symfony
+     * convention prescribes.
+     *
+     * No `.env` at all → silently skip.
+     */
     private static function loadEnv(string $projectRoot): void
     {
         if (!\file_exists($projectRoot . '/.env')) {
             return;
         }
 
-        Dotenv::createImmutable($projectRoot)->safeLoad();
+        (new Dotenv())->loadEnv($projectRoot . '/.env');
     }
 
     private static function isDev(): bool
