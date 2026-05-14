@@ -108,6 +108,18 @@ class TraceableAppRouter extends AppRouter
 
         $recording->beginProfile($this->readUrl(), $this->readMethod());
 
+        // PHP's `finally` blocks do NOT run when control leaves via
+        // `exit/die` — and dispatch has several `exit` paths (304 short-
+        // circuit on class-style #[Cache], PRG redirect after useState
+        // setState, etc.). A shutdown handler is the only reliable hook
+        // for those, since it fires after exit. `endProfile()` is
+        // idempotent, so the normal `finally` path + the shutdown
+        // handler can both run without double-persisting.
+        \register_shutdown_function(static function () use ($recording): void {
+            $status = \http_response_code();
+            $recording->endProfile(\is_int($status) ? $status : 200);
+        });
+
         try {
             parent::run();
         } finally {

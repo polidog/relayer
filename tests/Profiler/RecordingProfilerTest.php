@@ -88,6 +88,45 @@ final class RecordingProfilerTest extends TestCase
         self::assertNotNull($profile->durationMs());
     }
 
+    public function testEndProfileIsIdempotent(): void
+    {
+        // The Traceable router calls endProfile once from `finally` and
+        // once from `register_shutdown_function` — under exit() paths only
+        // the latter actually runs, but on the normal path both fire.
+        // The first call must finalize; the second must be a no-op so the
+        // status code isn't overwritten and the storage isn't double-saved.
+        $storage = new class implements ProfilerStorage {
+            public int $saves = 0;
+
+            public function save(Profile $profile): void
+            {
+                ++$this->saves;
+            }
+
+            public function load(string $token): ?Profile
+            {
+                return null;
+            }
+
+            public function recent(int $limit = 20): array
+            {
+                return [];
+            }
+        };
+
+        $profiler = new RecordingProfiler($storage);
+        $profile = $profiler->beginProfile('/x', 'GET');
+
+        $profiler->endProfile(304);
+        $firstEndedAt = $profile->getEndedAt();
+        \usleep(1000);
+        $profiler->endProfile(200);
+
+        self::assertSame(1, $storage->saves);
+        self::assertSame(304, $profile->getStatusCode(), 'second endProfile must not overwrite status');
+        self::assertSame($firstEndedAt, $profile->getEndedAt(), 'second endProfile must not bump endedAt');
+    }
+
     public function testStopIsIdempotent(): void
     {
         $profiler = new RecordingProfiler();

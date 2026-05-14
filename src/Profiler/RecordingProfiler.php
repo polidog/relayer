@@ -40,9 +40,15 @@ final class RecordingProfiler implements Profiler
         return $this->profile;
     }
 
+    /**
+     * Idempotent — first call finalizes and persists, subsequent calls
+     * are no-ops. Lets a request that ended via `exit/die` get the
+     * profile saved by the shutdown handler without overwriting an
+     * earlier explicit call (e.g. the 304 short-circuit path).
+     */
     public function endProfile(int $statusCode): void
     {
-        if (null === $this->profile) {
+        if (null === $this->profile || null !== $this->profile->getEndedAt()) {
             return;
         }
         $this->profile->end($statusCode);
