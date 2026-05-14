@@ -279,6 +279,29 @@ final class PsxIntegrationTest extends TestCase
         self::assertStringContainsString(ServiceWithDependency::class, $output);
     }
 
+    public function testFunctionStylePageAcceptsSingleClosureShorthand(): void
+    {
+        // The README documents `return fn() => <el>;` as the minimal page
+        // form. buildFunctionPage must accept a factory that produces an
+        // Element directly (no inner render closure) and re-wrap it
+        // transparently.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            <<<'PSX'
+                <?php
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+
+                return fn(): Element => <h1>Single-closure works</h1>;
+                PSX,
+        );
+
+        $app = AppRouter::create($this->workDir, autoCompilePsx: true);
+        $output = $this->runApp($app, '/');
+
+        self::assertStringContainsString('Single-closure works', $output);
+    }
+
     public function testFunctionStylePageWithoutCacheStillRenders(): void
     {
         // Regression guard: a factory that never calls $ctx->cache() must

@@ -26,6 +26,7 @@ use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
+use Polidog\UsePhp\Runtime\Element;
 use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
@@ -300,10 +301,22 @@ class AppRouter
     {
         $context = new Component\PageContext($params);
         $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
-        $renderFn = $factory(...$args);
-        if (!$renderFn instanceof Closure) {
-            throw new RuntimeException("Page factory did not return a Closure: {$pagePath}");
+        $result = $factory(...$args);
+
+        // Two-level form: factory returns the render closure. Standard pattern
+        // used when the page needs to declare cache policy / metadata / etc.
+        // before the render body executes.
+        if ($result instanceof Closure) {
+            $renderFn = $result;
+        // Single-level shorthand: factory IS the render — it returned an
+        // Element directly. Re-wrap in a no-op closure so the same FunctionPage
+        // contract works downstream.
+        } elseif ($result instanceof Element) {
+            $renderFn = static fn (): Element => $result;
+        } else {
+            throw new RuntimeException("Page factory must return a Closure or Element: {$pagePath}");
         }
+
         $pageId = $this->computePageId($pagePath);
 
         return new FunctionPage($renderFn, $context, $pageId);

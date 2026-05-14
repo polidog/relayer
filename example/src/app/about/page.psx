@@ -2,12 +2,10 @@
 
 declare(strict_types=1);
 
-use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
 
-return fn(PageContext $ctx): Closure => fn(): Element => <section>
+return fn() => <section>
     <h1>About</h1>
-    <p>Minimal function-style page — no services, no state, just a render
-        closure produced by a factory.</p>
+    <p>Minimal function-style page — no services, no state, just a closure
+        that returns an <code>Element</code>.</p>
 </section>;

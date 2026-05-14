@@ -2,11 +2,9 @@
 
 declare(strict_types=1);
 
-use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
 
-return fn(PageContext $ctx): Closure => fn(): Element => <section>
+return fn() => <section>
     <h1>Thanks!</h1>
     <p>Your signup was accepted. <a href="/">Back home</a></p>
 </section>;
