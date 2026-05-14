@@ -17,7 +17,7 @@ final class RelayerBootTest extends TestCase
     protected function setUp(): void
     {
         $this->projectRoot = \sys_get_temp_dir() . '/relayer-test-' . \uniqid();
-        \mkdir($this->projectRoot . '/src/app', 0o755, true);
+        \mkdir($this->projectRoot . '/src/App', 0o755, true);
         \file_put_contents(
             $this->projectRoot . '/.env',
             "APP_ENV=dev\nFRAMEWORK_TEST_VALUE=hello\n",

@@ -5,7 +5,7 @@
 Opinionated, batteries-included framework on top of
 [polidog/use-php](https://github.com/polidog/usePHP). Bundles:
 
-- A Next.js App Router-style file-based router (`src/app/page.psx`,
+- A Next.js App Router-style file-based router (`src/App/page.psx`,
   `layout.psx`, dynamic segments, error pages)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
   for service wiring (autowire, YAML/PHP config auto-load)
@@ -44,7 +44,7 @@ your-app/
   public/
     index.php
   src/
-    app/               # AppRouter file-based routes live here
+    App/               # AppRouter file-based routes live here
       layout.psx
       page.psx
       about/
@@ -107,11 +107,11 @@ override the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
 (including unset) treats the app as production: pre-compile with
-`vendor/bin/usephp compile src/app` during deploy.
+`vendor/bin/usephp compile src/App` during deploy.
 
 ## Routing & Pages
 
-The router scans `src/app/` and maps the filesystem to URLs in the spirit of
+The router scans `src/App/` and maps the filesystem to URLs in the spirit of
 the Next.js App Router. The conventions:
 
 | File                 | Role                                                                |
@@ -123,14 +123,14 @@ the Next.js App Router. The conventions:
 
 `.psx` is the JSX-style source. The runtime executes the compiled
 `*.psx.php` sibling — produced automatically in dev (`APP_ENV=dev`) or by
-`vendor/bin/usephp compile src/app` at deploy time. Plain `.php` page files
+`vendor/bin/usephp compile src/App` at deploy time. Plain `.php` page files
 also work and skip the compile step.
 
 ### Class-style page
 
 ```php
 <?php
-// src/app/users/[id]/page.psx
+// src/App/users/[id]/page.psx
 declare(strict_types=1);
 
 namespace App\Pages\Users;
@@ -162,7 +162,7 @@ typed parameter and the framework will inject it.
 
 ```php
 <?php
-// src/app/about/page.psx
+// src/App/about/page.psx
 return fn() => <main><h1>About</h1></main>;
 ```
 
@@ -171,7 +171,7 @@ per-request handle, every other typed parameter comes from the DI container:
 
 ```php
 <?php
-// src/app/users/page.psx
+// src/App/users/page.psx
 declare(strict_types=1);
 
 use App\Service\UserRepository;
@@ -197,7 +197,7 @@ only when the response is not a `304` — keep heavy work there (see
 Each `layout.psx` wraps every page beneath it. Layouts stack:
 
 ```
-src/app/
+src/App/
   layout.psx          # outer shell
   dashboard/
     layout.psx        # dashboard frame
@@ -245,7 +245,7 @@ needs to carry `(pageId, name)`:
 
 ```php
 <?php
-// src/app/users/page.psx
+// src/App/users/page.psx
 declare(strict_types=1);
 
 use App\Service\UserRepository;
@@ -359,7 +359,7 @@ typed dependency from the Symfony container:
 
 ```php
 <?php
-// src/app/users/page.psx
+// src/App/users/page.psx
 declare(strict_types=1);
 
 namespace App\Pages\Users;
@@ -394,7 +394,7 @@ snapshot of the current request — pages never need to touch `$_GET`,
 
 ```php
 <?php
-// src/app/signup/page.psx
+// src/App/signup/page.psx
 declare(strict_types=1);
 
 use Polidog\Relayer\Http\Request;
@@ -524,7 +524,7 @@ session id (defends against session fixation) and stores the
 
 ```php
 <?php
-// src/app/login/page.psx
+// src/App/login/page.psx
 declare(strict_types=1);
 
 use Polidog\Relayer\Auth\Authenticator;
@@ -617,7 +617,7 @@ Function-style factories use a declarative guard on `PageContext`:
 
 ```php
 <?php
-// src/app/dashboard/page.psx
+// src/App/dashboard/page.psx
 declare(strict_types=1);
 
 use Polidog\Relayer\Router\Component\PageContext;
@@ -700,7 +700,7 @@ before the body is written.
 
 ```php
 <?php
-// src/app/page.psx
+// src/App/page.psx
 declare(strict_types=1);
 
 namespace App\Pages;
@@ -776,7 +776,7 @@ declare their cache policy through `PageContext` instead:
 
 ```php
 <?php
-// src/app/feed/page.psx
+// src/App/feed/page.psx
 declare(strict_types=1);
 
 use Polidog\Relayer\Http\Cache;
@@ -913,7 +913,7 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 | `Polidog\Relayer\Relayer`                    | Boot entrypoint (env load + DI build + router wire-up).                |
 | `Polidog\Relayer\AppConfigurator`              | Extension point for service registrations.                             |
 | `Polidog\Relayer\InjectorContainer`            | PSR-11 adapter with reflection autowire + 304 short-circuit.           |
-| `Polidog\Relayer\Router\AppRouter`             | File-based router for `src/app/` (PSR-11 container–driven).            |
+| `Polidog\Relayer\Router\AppRouter`             | File-based router for `src/App/` (PSR-11 container–driven).            |
 | `Polidog\Relayer\Router\Component\*`           | `PageComponent`, `ErrorPageComponent`, `FunctionPage`, `PageContext`.  |
 | `Polidog\Relayer\Router\Layout\*`              | `LayoutComponent` + nested layout rendering.                           |
 | `Polidog\Relayer\Router\Document\*`            | HTML document wrapper / metadata.                                      |
