@@ -7,6 +7,8 @@ namespace Polidog\Relayer\Router;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\Profiler\ProfilerStorage;
+use Polidog\Relayer\Profiler\ProfilerWebView;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Layout\LayoutStack;
@@ -31,7 +33,11 @@ use Psr\Container\ContainerInterface;
  */
 class TraceableAppRouter extends AppRouter
 {
+    private const PROFILER_PREFIX = '/_profiler';
+
     private ?Profiler $profiler = null;
+
+    private ?ProfilerStorage $storage = null;
 
     public function setContainer(ContainerInterface $container): self
     {
@@ -42,12 +48,28 @@ class TraceableAppRouter extends AppRouter
                 $this->profiler = $candidate;
             }
         }
+        if ($container->has(ProfilerStorage::class)) {
+            $candidate = $container->get(ProfilerStorage::class);
+            if ($candidate instanceof ProfilerStorage) {
+                $this->storage = $candidate;
+            }
+        }
 
         return $this;
     }
 
     public function run(): void
     {
+        // `/_profiler[/<token>]` is the dev-only viewer. Intercept BEFORE
+        // beginProfile so visiting the viewer does not create a profile of
+        // itself (that would clutter the index and recurse the storage).
+        $path = $this->readPath();
+        if (self::PROFILER_PREFIX === $path || \str_starts_with($path, self::PROFILER_PREFIX . '/')) {
+            $this->renderProfilerView($path);
+
+            return;
+        }
+
         $recording = $this->profiler instanceof RecordingProfiler ? $this->profiler : null;
         if (null === $recording) {
             parent::run();
@@ -62,6 +84,49 @@ class TraceableAppRouter extends AppRouter
             $status = \http_response_code();
             $recording->endProfile(\is_int($status) ? $status : 200);
         }
+    }
+
+    /**
+     * Render the index or a single profile detail. Falls back to a 503-
+     * style note when no ProfilerStorage is bound — typically only
+     * happens if a user manually clears the dev defaults.
+     */
+    protected function renderProfilerView(string $path): void
+    {
+        if (null === $this->storage) {
+            \http_response_code(503);
+            \header('Content-Type: text/plain; charset=utf-8');
+            echo 'Profiler storage is not configured.';
+
+            return;
+        }
+
+        \header('Content-Type: text/html; charset=utf-8');
+
+        $view = new ProfilerWebView($this->storage);
+
+        // Trim trailing slash so `/_profiler` and `/_profiler/` both hit the index.
+        $suffix = \substr($path, \strlen(self::PROFILER_PREFIX));
+        $suffix = \rtrim($suffix, '/');
+
+        if ('' === $suffix) {
+            echo $view->renderIndex();
+
+            return;
+        }
+
+        $token = \ltrim($suffix, '/');
+        // Defensive: reject anything that smells like path traversal — the
+        // storage layer also rejects unknown tokens, but this keeps the
+        // string we render in error pages constrained.
+        if (!\preg_match('/^[a-zA-Z0-9_-]+$/', $token)) {
+            \http_response_code(404);
+            echo $view->renderDetail($token);
+
+            return;
+        }
+
+        echo $view->renderDetail($token);
     }
 
     protected function handleMatch(RouteMatch $match): void
@@ -187,6 +252,13 @@ class TraceableAppRouter extends AppRouter
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
 
         return \is_string($uri) ? $uri : '/';
+    }
+
+    private function readPath(): string
+    {
+        $path = \parse_url($this->readUrl(), \PHP_URL_PATH);
+
+        return \is_string($path) ? $path : '/';
     }
 
     private function readMethod(): string

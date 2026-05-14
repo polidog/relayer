@@ -5,9 +5,13 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\Relayer\Profiler\Event;
+use Polidog\Relayer\Profiler\Profile;
 use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Router\TraceableAppRouter;
+use Polidog\Relayer\Tests\Profiler\InMemoryProfilerStorage;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use RuntimeException;
@@ -162,23 +166,89 @@ final class TraceableAppRouterTest extends TestCase
         self::assertNull($profiler->currentProfile());
     }
 
-    private function makeContainer(Profiler $profiler): ContainerInterface
+    public function testProfilerIndexIsServedAtUnderscoreProfiler(): void
     {
-        return new class($profiler) implements ContainerInterface {
-            public function __construct(private readonly Profiler $profiler) {}
+        $storage = new InMemoryProfilerStorage();
+        $sample = new Profile('sample-token', '/users', 'GET', \microtime(true));
+        $sample->addEvent(new Event('route', 'match', ['pattern' => '/users'], \microtime(true)));
+        $sample->end(200);
+        $storage->saved[$sample->token] = $sample;
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer(new RecordingProfiler($storage), $storage));
+
+        $output = $this->runApp($router, '/_profiler');
+
+        self::assertStringContainsString('Relayer Profiler', $output);
+        self::assertStringContainsString('/users', $output);
+        self::assertStringContainsString('href="/_profiler/sample-token"', $output);
+    }
+
+    public function testProfilerDetailIsServedForKnownToken(): void
+    {
+        $storage = new InMemoryProfilerStorage();
+        $sample = new Profile('detail-token', '/blog/hi', 'GET', \microtime(true));
+        $sample->addEvent(new Event('route', 'match', ['pattern' => '/blog/[slug]'], \microtime(true)));
+        $sample->end(200);
+        $storage->saved[$sample->token] = $sample;
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer(new RecordingProfiler($storage), $storage));
+
+        $output = $this->runApp($router, '/_profiler/detail-token');
+
+        self::assertStringContainsString('GET /blog/hi', $output);
+        self::assertStringContainsString('detail-token', $output);
+        self::assertStringContainsString('/blog/[slug]', $output);
+    }
+
+    public function testProfilerViewDoesNotRecordOwnProfile(): void
+    {
+        // Visiting the viewer is intercepted BEFORE beginProfile() runs, so
+        // the recorded profile must NOT include a /_profiler entry — otherwise
+        // every viewer hit would clutter the index.
+        $storage = new InMemoryProfilerStorage();
+        $profiler = new RecordingProfiler($storage);
+
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler, $storage));
+
+        $this->runApp($router, '/_profiler');
+
+        self::assertSame([], $storage->saved);
+        self::assertNull($profiler->currentProfile());
+    }
+
+    private function makeContainer(Profiler $profiler, ?ProfilerStorage $storage = null): ContainerInterface
+    {
+        return new class($profiler, $storage) implements ContainerInterface {
+            public function __construct(
+                private readonly Profiler $profiler,
+                private readonly ?ProfilerStorage $storage,
+            ) {}
 
             public function has(string $id): bool
             {
-                return Profiler::class === $id;
+                if (Profiler::class === $id) {
+                    return true;
+                }
+                if (ProfilerStorage::class === $id) {
+                    return null !== $this->storage;
+                }
+
+                return false;
             }
 
             public function get(string $id): object
             {
-                if (Profiler::class !== $id) {
-                    throw new class("not found: {$id}") extends RuntimeException implements NotFoundExceptionInterface {};
+                if (Profiler::class === $id) {
+                    return $this->profiler;
+                }
+                if (ProfilerStorage::class === $id && null !== $this->storage) {
+                    return $this->storage;
                 }
 
-                return $this->profiler;
+                throw new class("not found: {$id}") extends RuntimeException implements NotFoundExceptionInterface {};
             }
         };
     }
