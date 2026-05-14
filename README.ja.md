@@ -440,6 +440,256 @@ return function (PageContext $ctx, Request $req): Closure {
 テストでは `new Request(method: 'POST', path: '/signup', post: [...])` を
 直接構築すれば良く、スーパーグローバルを書き換える必要はありません。
 
+## 認証
+
+セッションベースの認証が標準で組み込まれています。アプリ側はユーザー
+検索（`UserProvider`）だけを実装し、パスワードハッシュ・セッション保存
+された principal・リクエスト時のガード処理はフレームワークが配線します。
+
+### 1. `UserProvider` の実装
+
+ユーザーが入力した識別子（典型的にはメールアドレス）から `Credentials`
+を返します。`Credentials` はセッションに保存される `Identity` と、
+検証に使うパスワードハッシュのペアです。識別子が見つからなければ
+`null` を返してください。
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Auth;
+
+use Polidog\Relayer\Auth\Credentials;
+use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\Auth\UserProvider;
+
+final class PdoUserProvider implements UserProvider
+{
+    public function __construct(private readonly \PDO $pdo) {}
+
+    public function findByIdentifier(string $identifier): ?Credentials
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, name, password_hash, roles FROM users WHERE email = ?'
+        );
+        $stmt->execute([\strtolower(\trim($identifier))]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        if (false === $row) {
+            return null;
+        }
+
+        return new Credentials(
+            identity: new Identity(
+                id: (int) $row['id'],
+                displayName: (string) $row['name'],
+                roles: \json_decode((string) $row['roles'], true) ?: [],
+            ),
+            passwordHash: (string) $row['password_hash'],
+        );
+    }
+}
+```
+
+### 2. プロバイダのバインド
+
+`Authenticator`、`PasswordHasher`（デフォルトは `NativePasswordHasher` /
+`PASSWORD_DEFAULT`）、`SessionStorage`（`NativeSession`）はフレームワーク
+が自動登録します。アプリ側で必要なのは `UserProvider` のバインドだけです:
+
+```yaml
+# config/services.yaml
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: true
+
+  App\Auth\PdoUserProvider: ~
+
+  Polidog\Relayer\Auth\UserProvider:
+    alias: App\Auth\PdoUserProvider
+```
+
+`UserProvider` をバインドしないアプリではコストはかかりません —
+`Authenticator` はインターフェースがバインドされたときだけ登録される
+ので、認証を使わないプロジェクトはこれまで通りに動きます。
+
+### 3. ログイン
+
+ログインページに `Authenticator` を注入し、`attempt()` を呼びます。
+成功時はセッション ID が再生成され（session fixation 対策）、`Identity`
+のスナップショットがセッションに保存されます。
+
+```php
+<?php
+// src/app/login/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Authenticator $auth): Closure {
+    $error = null;
+
+    $login = $ctx->action('login', function (array $form) use ($auth, &$error): void {
+        $identity = $auth->attempt(
+            (string) ($form['email']    ?? ''),
+            (string) ($form['password'] ?? ''),
+        );
+
+        if (null === $identity) {
+            $error = 'メールアドレスかパスワードが違います。';
+
+            return;
+        }
+
+        \header('Location: /dashboard', true, 303);
+        exit;
+    });
+
+    return function () use ($login, $error): Element {
+        // ... フォームを描画、$error は単一の汎用メッセージで表示
+    };
+};
+```
+
+`Authenticator` API:
+
+| メソッド                          | 戻り値        | 備考                                                     |
+| --------------------------------- | ------------- | -------------------------------------------------------- |
+| `attempt($id, $password)`         | `?Identity`   | `UserProvider` + hasher で検証。成功時はログイン処理も。 |
+| `login(Identity $identity)`       | `void`        | 解決済みの principal を即セッションに（SSO・signup）。   |
+| `logout()`                        | `void`        | principal を破棄し、セッション ID を再生成。             |
+| `user()`                          | `?Identity`   | 現在ログイン中の principal、または `null`。              |
+| `check()`                         | `bool`        | `user() !== null` のショートカット。                     |
+| `hasRole($role)` / `hasAnyRole`   | `bool`        | ロール検査。                                             |
+
+`attempt()` は識別子が見つからなくてもダミーハッシュを使って
+`password_verify` を実行するので、応答時間からアカウントの存在を
+推測することはできません。失敗は常に `null` を返すので、呼び出し側は
+どのフィールドが弾かれたかを開示せず、単一の汎用エラーを表示してください。
+
+### 4. ページの保護
+
+#### クラス型: `#[Auth]`
+
+`PageComponent` の派生クラスに `Polidog\Relayer\Auth\Auth` アトリビュート
+を付けます。ガードは `InjectorContainer` でページがインスタンス化される
+**前** に走るので、未認証リクエストはページ本体もその依存サービスも
+構築しません。
+
+```php
+<?php
+namespace App\Pages;
+
+use Polidog\Relayer\Auth\Auth;
+use Polidog\Relayer\Router\Component\PageComponent;
+
+#[Auth] // 認証済みなら誰でも
+final class DashboardPage extends PageComponent { /* ... */ }
+
+#[Auth(roles: ['admin'])] // ロールゲート。一般ユーザーは 403
+final class AdminPage extends PageComponent { /* ... */ }
+
+#[Auth(redirectTo: '')] // 空文字 → リダイレクトせず 401（JSON / API 向け）
+final class ApiEndpoint extends PageComponent { /* ... */ }
+```
+
+| パラメータ      | 既定値      | 効果                                                   |
+| --------------- | ----------- | ------------------------------------------------------ |
+| `roles`         | `[]`        | いずれか 1 つのロールが必要（空 = 認証済みなら誰でも） |
+| `redirectTo`    | `'/login'`  | 未認証リクエストの転送先。空文字 → `401` を返す        |
+
+未認証リクエストは `302 Location: /login?next=<元のパス>` でリダイレクト
+されます（URL エンコード済み・同一オリジンのみ）。認証済みでもロールが
+足りない場合は `403 Forbidden`。
+
+`#[Auth]` は `#[Cache]` より先に評価されるので、未認証リクエストが
+キャッシュ可能な `304` を作って共有キャッシュ経由で漏れることはありません。
+`#[Auth]` と `#[Cache]` の併用は問題ありませんが、ユーザー単位で
+ガートしているページは `Cache-Control: private` を選ぶのが無難です。
+
+#### 関数型: `$ctx->requireAuth()` / `Identity` 注入
+
+関数型ファクトリでは `PageContext` の宣言的ガードを使います:
+
+```php
+<?php
+// src/app/dashboard/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx): Closure {
+    $user = $ctx->requireAuth(); // 失敗時 AuthorizationException
+
+    return fn(): Element => <h1>こんにちは、{$user->displayName}</h1>;
+};
+```
+
+`requireAuth($roles = [], $redirectTo = '/login')` は `Identity` を返す
+ので、そのまま埋め込めます。例外は AppRouter が捕捉し、`#[Auth]` と
+同じ `302` / `401` / `403` レスポンスを返します。
+
+ログイン状態によって描画を切り替えるページなら、ファクトリに `?Identity`
+を宣言してください。フレームワークが現在の principal を注入します
+（未ログインなら `null`）:
+
+```php
+return function (PageContext $ctx, ?Identity $user): Closure {
+    $ctx->metadata(['title' => $user?->displayName ?? 'ようこそ']);
+
+    return fn(): Element => null !== $user
+        ? <p>こんにちは、{$user->displayName}</p>
+        : <a href="/login">ログイン</a>;
+};
+```
+
+null 許容でない `Identity` を宣言すると「認証必須」とみなされ、未認証
+時には `requireAuth()` と同じくリダイレクトされます（クラス型での
+`#[Auth]` 相当）。
+
+### 5. 差し替え可能なパーツ
+
+既定値は実用的ですが、すべて差し替え可能です。`services.yaml`（または
+`AppConfigurator`）で別の実装をバインドすれば上書きできます:
+
+| インターフェース                            | 既定値                    | 差し替えどき…                                |
+| ------------------------------------------- | ------------------------- | -------------------------------------------- |
+| `Polidog\Relayer\Auth\UserProvider`         | *(未バインド・アプリ供給)*| 常に — これがアプリの user lookup            |
+| `Polidog\Relayer\Auth\PasswordHasher`       | `NativePasswordHasher`    | 特定アルゴリズム / pepper を使いたいとき     |
+| `Polidog\Relayer\Auth\SessionStorage`       | `NativeSession`           | Redis / DB 等で session を持ちたいとき       |
+
+`NativePasswordHasher` は `PASSWORD_DEFAULT` を使うので、その時点の
+PHP が最強と判断するアルゴリズムを自動採用します（現状は bcrypt）。
+libargon2 が使える環境で argon2id を強制したい場合は:
+
+```php
+$container->register(NativePasswordHasher::class)
+    ->setArguments([\PASSWORD_ARGON2ID]);
+```
+
+`NativeSession` は最初の read/write で `session_start()` を遅延起動する
+ので、DI で解決しただけでは `Set-Cookie` は送りません。既存の CSRF
+トークン機構と `$_SESSION` を共有するため、`session_start` の重複も
+起きません。
+
+### 注意点
+
+- 認証ガードは `InjectorContainer`（クラス型ページ）と factory 引数
+  リゾルバ（`Identity` 注入・`requireAuth`）で走ります。レイアウトは
+  別経路で解決されるため自動ガードの対象外。レイアウト側で認証状態を
+  読みたい場合は、コンストラクタに `?Authenticator` を注入して
+  `render()` から `$auth?->user()` を呼んでください。
+- ログインリダイレクトの `?next=<path>` は同一オリジン専用です。
+  `//` 始まりや絶対 URL は破棄してログインページからの open redirect
+  を防ぎます。
+- セッションはログインとログアウト **両方** で再生成します。攻撃者が
+  ログイン前のセッション ID を奪取しても、ユーザーが認証した時点で
+  そのセッション ID は無効になります。
+
 ## `#[Cache]` による HTTP キャッシュ制御
 
 `Polidog\Relayer\Http\Cache` をページクラスに付与すると、
@@ -668,6 +918,12 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 | `Polidog\Relayer\Http\CachePolicy`             | ヘッダー送出 + 条件付き GET 評価                                    |
 | `Polidog\Relayer\Http\EtagStore`               | 差し替え可能な ETag ストレージインターフェース                      |
 | `Polidog\Relayer\Http\FileEtagStore`           | ファイルベースのデフォルト `EtagStore` 実装                         |
+| `Polidog\Relayer\Auth\Auth`                    | `#[Auth]` アトリビュート                                            |
+| `Polidog\Relayer\Auth\Authenticator`           | セッションベースの認証オーケストレータ                              |
+| `Polidog\Relayer\Auth\Identity` / `Credentials`| principal とログインハンドシェイクの値オブジェクト                  |
+| `Polidog\Relayer\Auth\UserProvider`            | アプリ供給のユーザー検索インターフェース                            |
+| `Polidog\Relayer\Auth\PasswordHasher`          | パスワードハッシュ抽象（既定: `NativePasswordHasher`）              |
+| `Polidog\Relayer\Auth\SessionStorage`          | セッションストレージ抽象（既定: `NativeSession`）                   |
 
 サードパーティのランタイム依存は `polidog/use-php`（JSX 風コンポーネント
 ランタイム）のみ。DI、dotenv、Symfony の YAML config はすべて
