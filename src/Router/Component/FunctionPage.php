@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Component;
 
 use Closure;
+use Polidog\Relayer\Http\Cache;
 use Polidog\UsePhp\Runtime\Element;
 
 final class FunctionPage
@@ -34,5 +35,10 @@ final class FunctionPage
     public function getComponentId(): string
     {
         return 'page:' . $this->pageId;
+    }
+
+    public function getCache(): ?Cache
+    {
+        return $this->context->getCache();
     }
 }

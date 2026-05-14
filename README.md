@@ -392,6 +392,38 @@ ETag comparison follows the weak comparison rules of RFC 7232 §2.3.2, so
 final class HomePage extends PageComponent { /* ... */ }
 ```
 
+### Function-style pages: `$ctx->cache()`
+
+PHP attributes only attach to classes, so function-style `page.psx` files
+declare their cache policy through `PageContext` instead:
+
+```php
+<?php
+// src/app/feed/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Cache;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx): Closure {
+    // Lightweight setup: declare cache, read params. NO DB queries here.
+    $ctx->cache(new Cache(maxAge: 60, public: true, etagKey: 'feed'));
+
+    return function () use ($ctx): Element {
+        // Heavy work goes here — only runs on cache miss.
+        // ... query DB, build the page
+    };
+};
+```
+
+The factory closure runs once per request (lightweight); the inner render
+closure runs only when the response is not a `304`. So the 304 short-circuit
+saves the inner closure's body — keep DB/expensive work there to get the
+same "never touch the database" benefit class-style pages get.
+
+All `#[Cache]` parameters are available on the `Cache` constructor.
+
 ### Dynamic ETag via `EtagStore`
 
 A static `etag: 'home-v1'` works for content that only changes on deploy.

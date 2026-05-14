@@ -32,6 +32,18 @@ final class CachePolicy
             return null;
         }
 
+        return self::applyCache($cache, $store);
+    }
+
+    /**
+     * Resolve any dynamic `etagKey` and emit the cache headers. Returns the
+     * effective Cache so the caller can pass it to `isNotModified()`.
+     *
+     * Used by both the `#[Cache]` attribute path (class-style pages) and the
+     * `PageContext::cache()` path (function-style pages).
+     */
+    public static function applyCache(Cache $cache, ?EtagStore $store = null): Cache
+    {
         $effective = self::resolveWithStore($cache, $store);
         self::emit($effective);
 

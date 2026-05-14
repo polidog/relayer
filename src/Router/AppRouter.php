@@ -6,6 +6,8 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
+use Polidog\Relayer\Http\CachePolicy;
+use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
@@ -126,7 +128,42 @@ class AppRouter
             return;
         }
 
+        // Function-style pages declare their cache policy via
+        // $ctx->cache(...) inside the factory. The factory has already run by
+        // the time we reach here, so this only saves the render-closure body
+        // (the heavy work) on a cache hit — the contract is "lightweight setup
+        // in the factory, expensive work in the returned render closure".
+        if ($pageComponent instanceof FunctionPage) {
+            $this->applyFunctionPageCache($pageComponent);
+        }
+
         $this->renderPage($pageComponent, $layoutStack, $match->getParams());
+    }
+
+    private function applyFunctionPageCache(FunctionPage $page): void
+    {
+        $cache = $page->getCache();
+        if (null === $cache) {
+            return;
+        }
+
+        $effective = CachePolicy::applyCache($cache, $this->resolveEtagStore());
+        if (CachePolicy::isNotModified($effective)) {
+            CachePolicy::sendNotModified();
+
+            exit;
+        }
+    }
+
+    private function resolveEtagStore(): ?EtagStore
+    {
+        if (null === $this->container || !$this->container->has(EtagStore::class)) {
+            return null;
+        }
+
+        $store = $this->container->get(EtagStore::class);
+
+        return $store instanceof EtagStore ? $store : null;
     }
 
     private function handleNotFound(): void
