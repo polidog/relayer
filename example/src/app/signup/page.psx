@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Polidog\Relayer\Form\Z;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
@@ -9,26 +10,30 @@ use Polidog\UsePhp\Runtime\Element;
 return function (PageContext $ctx): Closure {
     $ctx->metadata(['title' => 'Signup']);
 
+    $schema = Z::object([
+        'name'  => Z::string()->trim()->min(1, 'Name is required.'),
+        'email' => Z::string()->trim()->email(),
+    ]);
+
     $values = ['email' => '', 'name' => ''];
     $errors = [];
 
-    $signup = $ctx->action('signup', function (array $form) use (&$values, &$errors): void {
+    $signup = $ctx->action('signup', function (array $form) use ($schema, &$values, &$errors): void {
+        // Preserve the raw input verbatim so the re-render shows whatever
+        // the user typed, even when validation rejects it.
         $values = [
-            'email' => \trim((string) ($form['email'] ?? '')),
-            'name'  => \trim((string) ($form['name']  ?? '')),
+            'email' => (string) ($form['email'] ?? ''),
+            'name'  => (string) ($form['name']  ?? ''),
         ];
 
-        if (!\filter_var($values['email'], \FILTER_VALIDATE_EMAIL)) {
-            $errors['email'] = 'Please enter a valid email address.';
-        }
-        if ('' === $values['name']) {
-            $errors['name'] = 'Name is required.';
-        }
+        $result = $schema->safeParse($form);
 
-        if ([] === $errors) {
+        if ($result->success) {
             \header('Location: /signup/thanks', true, 303);
             exit;
         }
+
+        $errors = $result->errors;
     });
 
     // $values / $errors are mutated by the $signup action closure, which
