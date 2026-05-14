@@ -1,0 +1,18 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+use Polidog\Relayer\Router\Component\PageContext;
+
+return function (PageContext $ctx) {
+    $ctx->metadata(['title' => 'PSX home']);
+
+    return function (): Element {
+        return <div>
+            <h1>Hello from a PSX page</h1>
+            <p>Compiled by usephp compile, served by AppRouter.</p>
+        </div>;
+    };
+};

@@ -1,0 +1,149 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Polidog\Relayer;
+
+use Dotenv\Dotenv;
+use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Http\EtagStore;
+use Polidog\Relayer\Http\FileEtagStore;
+use Symfony\Component\Config\FileLocator;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
+use Symfony\Component\DependencyInjection\Definition;
+use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
+use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
+
+/**
+ * One-shot bootstrapper for usePHP applications.
+ *
+ * Responsibilities:
+ * - Load `.env` from the project root (if present) into $_ENV / $_SERVER.
+ * - Build a Symfony DI ContainerBuilder with autowire-by-default semantics.
+ * - Apply the caller-supplied AppConfigurator (or a bare default) for custom bindings.
+ * - Compile the container and wrap it in a PSR-11 adapter for AppRouter.
+ *
+ * Returns the configured AppRouter so the caller decides when to `->run()`
+ * and can still call setJsPath/addCssPath/etc. before running.
+ */
+final class Relayer
+{
+    /**
+     * @param string $projectRoot Absolute path to the project root (the
+     *   directory that contains composer.json, .env, and `src/app/`).
+     * @param AppConfigurator|null $configurator Optional configurator.
+     *   Defaults to a bare AppConfigurator with no extra services.
+     */
+    public static function boot(string $projectRoot, ?AppConfigurator $configurator = null): AppRouter
+    {
+        $projectRoot = \rtrim($projectRoot, '/');
+
+        self::loadEnv($projectRoot);
+
+        $container = self::buildContainer($projectRoot, $configurator);
+        $psr = new InjectorContainer($container);
+
+        $appDir = $projectRoot . '/src/app';
+        $isDev = self::isDev();
+
+        $router = AppRouter::create(
+            $appDir,
+            autoCompilePsx: $isDev,
+        );
+        $router->setContainer($psr);
+
+        return $router;
+    }
+
+    private static function buildContainer(string $projectRoot, ?AppConfigurator $configurator): ContainerBuilder
+    {
+        $container = new ContainerBuilder();
+        $container->setParameter('app.project_root', $projectRoot);
+
+        self::registerDefaults($container, $projectRoot);
+        self::loadConventionConfigs($container, $projectRoot);
+
+        $configurator ??= new AppConfigurator($projectRoot);
+        $configurator->configure($container);
+
+        // Autowire-by-default: any service registered without explicit
+        // arguments gets autowiring + public visibility so it can be fetched
+        // via PSR-11 get($id). YAML/_defaults values win because we only fill
+        // in when nothing was specified.
+        foreach ($container->getDefinitions() as $definition) {
+            self::applyDefaults($definition);
+        }
+
+        $container->compile();
+
+        return $container;
+    }
+
+    /**
+     * Register framework-provided defaults that users may override. These
+     * land in the container BEFORE convention configs and the user's
+     * AppConfigurator, so anything registered later wins.
+     */
+    private static function registerDefaults(ContainerBuilder $container, string $projectRoot): void
+    {
+        $container->register(FileEtagStore::class)
+            ->setArguments([$projectRoot . '/var/cache/etags'])
+            ->setPublic(true);
+
+        $container->setAlias(EtagStore::class, FileEtagStore::class)
+            ->setPublic(true);
+    }
+
+    /**
+     * Auto-load `config/services.{yaml,yml,php}` if present. Symfony's loaders
+     * honor `_defaults: { autowire: true, public: true }` blocks naturally,
+     * so users get full Symfony semantics; the AppConfigurator runs after
+     * these files and can override anything they registered.
+     */
+    private static function loadConventionConfigs(ContainerBuilder $container, string $projectRoot): void
+    {
+        $configDir = $projectRoot . '/config';
+        if (!\is_dir($configDir)) {
+            return;
+        }
+
+        $locator = new FileLocator($configDir);
+
+        foreach (['services.yaml', 'services.yml'] as $name) {
+            if (\file_exists($configDir . '/' . $name)) {
+                (new YamlFileLoader($container, $locator))->load($name);
+                break;
+            }
+        }
+
+        if (\file_exists($configDir . '/services.php')) {
+            (new PhpFileLoader($container, $locator))->load('services.php');
+        }
+    }
+
+    private static function applyDefaults(Definition $definition): void
+    {
+        if (!$definition->isAutowired() && $definition->getArguments() === []) {
+            $definition->setAutowired(true);
+        }
+        if (!$definition->isPublic()) {
+            $definition->setPublic(true);
+        }
+    }
+
+    private static function loadEnv(string $projectRoot): void
+    {
+        if (!\file_exists($projectRoot . '/.env')) {
+            return;
+        }
+
+        Dotenv::createImmutable($projectRoot)->safeLoad();
+    }
+
+    private static function isDev(): bool
+    {
+        $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? \getenv('APP_ENV') ?: 'prod';
+
+        return $env === 'dev' || $env === 'development';
+    }
+}
