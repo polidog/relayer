@@ -37,7 +37,7 @@ final class Relayer
 {
     /**
      * @param string               $projectRoot  Absolute path to the project root (the
-     *                                           directory that contains composer.json, .env, and `src/App/`).
+     *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
      *                                           Defaults to a bare AppConfigurator with no extra services.
      */
@@ -50,7 +50,7 @@ final class Relayer
         $container = self::buildContainer($projectRoot, $configurator);
         $psr = new InjectorContainer($container);
 
-        $appDir = $projectRoot . '/src/App';
+        $appDir = $projectRoot . '/src/Pages';
         $isDev = self::isDev();
 
         $router = AppRouter::create(

@@ -2,14 +2,14 @@
 
 A tiny app that exercises the main Relayer features:
 
-- Function-style page receiving services via DI — `src/App/page.psx`
-- Minimal function-style page (no DI) — `src/App/about/page.psx`
-- Class-style page with `#[Cache]` — `src/App/users/page.psx`
-- Dynamic route segment with constructor injection — `src/App/users/[id]/page.psx`
+- Function-style page receiving services via DI — `src/Pages/page.psx`
+- Minimal function-style page (no DI) — `src/Pages/about/page.psx`
+- Class-style page with `#[Cache]` — `src/Pages/users/page.psx`
+- Dynamic route segment with constructor injection — `src/Pages/users/[id]/page.psx`
 - Function-style page using `$ctx->action()` for server-side validation —
-  `src/App/signup/page.psx`
-- Root layout — `src/App/layout.psx`
-- 404 error page — `src/App/error.psx`
+  `src/Pages/signup/page.psx`
+- Root layout — `src/Pages/layout.psx`
+- 404 error page — `src/Pages/error.psx`
 
 `composer.json` wires `polidog/relayer` through a local path repository
 (`../`) so the example always runs against the working copy in this repo.
@@ -36,7 +36,7 @@ example/
     index.php           single entrypoint: Relayer::boot()->run()
   src/
     Service/            application services injected into pages
-    App/                file-based routes (Next.js App Router-style)
+    Pages/              file-based routes (Next.js App Router-style)
 ```
 
 ## Production
@@ -45,5 +45,5 @@ example/
 unset (or change) `APP_ENV` and pre-compile once:
 
 ```bash
-vendor/bin/usephp compile src/App
+vendor/bin/usephp compile src/Pages
 ```

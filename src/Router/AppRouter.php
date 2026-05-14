@@ -63,7 +63,7 @@ class AppRouter
         // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
         // is the parent of the appDirectory. This matches the usePHP CLI's
         // default of <cwd>/var/cache/psx for the typical layout where the
-        // app dir is `src/App` (so cache lands beside src/, not inside it).
+        // app dir is `src/Pages` (so cache lands beside src/, not inside it).
         $this->psxCacheDir = $psxCacheDir
             ?? \dirname($this->appDirectory) . '/var/cache/psx';
     }
@@ -345,7 +345,7 @@ class AppRouter
         }
 
         // The route-derived page id must be computed from the original
-        // src/App/.../page.psx path — the compiled cache filename is an
+        // src/Pages/.../page.psx path — the compiled cache filename is an
         // opaque hash and would leak into action tokens / component state keys.
         $originalPagePath = $pagePath;
 
