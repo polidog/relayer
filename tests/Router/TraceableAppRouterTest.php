@@ -10,6 +10,7 @@ use Polidog\Relayer\Profiler\Profile;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
+use Polidog\Relayer\Profiler\TraceSpan;
 use Polidog\Relayer\Router\TraceableAppRouter;
 use Polidog\Relayer\Tests\Profiler\InMemoryProfilerStorage;
 use Psr\Container\ContainerInterface;
@@ -142,12 +143,12 @@ final class TraceableAppRouterTest extends TestCase
         $profiler = new class implements Profiler {
             public function collect(string $collector, string $label, array $payload = []): void {}
 
-            public function start(string $collector, string $label): \Polidog\Relayer\Profiler\TraceSpan
+            public function start(string $collector, string $label): TraceSpan
             {
-                return new \Polidog\Relayer\Profiler\TraceSpan(static fn (float $ms, array $p): null => null, \microtime(true));
+                return new TraceSpan(static fn (float $ms, array $p): null => null, \microtime(true));
             }
 
-            public function currentProfile(): ?\Polidog\Relayer\Profiler\Profile
+            public function currentProfile(): ?Profile
             {
                 return null;
             }
@@ -326,7 +327,7 @@ final class TraceableAppRouterTest extends TestCase
     }
 
     /**
-     * @param list<\Polidog\Relayer\Profiler\Event> $events
+     * @param list<Event> $events
      *
      * @return list<string>
      */
@@ -336,9 +337,9 @@ final class TraceableAppRouterTest extends TestCase
     }
 
     /**
-     * @param list<\Polidog\Relayer\Profiler\Event> $events
+     * @param list<Event> $events
      */
-    private function firstEvent(array $events, string $collector, string $label): ?\Polidog\Relayer\Profiler\Event
+    private function firstEvent(array $events, string $collector, string $label): ?Event
     {
         foreach ($events as $event) {
             if ($event->collector === $collector && $event->label === $label) {

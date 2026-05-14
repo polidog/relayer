@@ -196,23 +196,6 @@ class AppRouter
         return $store instanceof EtagStore ? $store : null;
     }
 
-    private function resolveAuthenticator(): ?Authenticator
-    {
-        // UserProvider is an interface — `has()` only returns true when
-        // the app explicitly bound an implementation. Used as the gate
-        // for "auth is configured" so apps without auth pay nothing.
-        if (null === $this->container || !$this->container->has(UserProvider::class)) {
-            return null;
-        }
-        if (!$this->container->has(Authenticator::class)) {
-            return null;
-        }
-
-        $auth = $this->container->get(Authenticator::class);
-
-        return $auth instanceof Authenticator ? $auth : null;
-    }
-
     /**
      * Convert an {@see AuthorizationException} (raised by
      * `$ctx->requireAuth()` or by a non-nullable `Identity` parameter on
@@ -299,45 +282,6 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
-    {
-        if (!\file_exists($filePath)) {
-            return null;
-        }
-
-        // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (\str_ends_with($filePath, '.psx')) {
-            $filePath = $this->resolveCompiledPsxPath($filePath);
-        }
-
-        require_once $filePath;
-
-        $className = $this->getClassFromFile($filePath);
-
-        if (null === $className) {
-            return null;
-        }
-
-        if (!\class_exists($className)) {
-            return null;
-        }
-
-        $instance = $this->resolveInstance($className);
-
-        if (!$instance instanceof LayoutInterface) {
-            return null;
-        }
-
-        if ($instance instanceof LayoutComponent) {
-            $instance->setParams($params);
-        }
-
-        return $instance;
-    }
-
-    /**
-     * @param array<string, string> $params
-     */
     protected function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
         if (!\file_exists($pagePath)) {
@@ -377,6 +321,174 @@ class AppRouter
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    {
+        $componentId = $page instanceof FunctionPage
+            ? $page->getComponentId()
+            : 'page:' . $page::class;
+
+        $state = ComponentState::getInstance($componentId);
+        ComponentState::reset();
+
+        // Handle useState action (onClick etc.) before rendering
+        $this->dispatchStateAction($componentId, $state);
+
+        if ($page instanceof BaseComponent) {
+            $page->setComponentState($state);
+        }
+
+        if ($page instanceof PageComponent) {
+            $page->dispatchActionFromRequest();
+        } elseif ($page instanceof FunctionPage) {
+            $page->dispatchActionFromRequest();
+        }
+
+        $pageElement = $page->render();
+
+        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
+            /** @var array<string, string> $metadata */
+            $metadata = $page->getMetadata();
+            $this->document->setMetadata($metadata);
+        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
+            $this->document->setMetadata($page->getMetadata());
+        }
+
+        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
+        $html = $renderer->render($pageElement, $layouts);
+
+        if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+            echo $html;
+
+            return;
+        }
+
+        $wrappedHtml = \sprintf(
+            '<div data-usephp="%s">%s</div>',
+            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
+            $html,
+        );
+
+        $output = $this->document->render($wrappedHtml);
+
+        echo $output;
+    }
+
+    /**
+     * Handle useState setState actions from POST (onClick, onChange, etc.).
+     */
+    protected function dispatchStateAction(string $componentId, ComponentState $state): void
+    {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            return;
+        }
+
+        $actionJson = $_POST['_usephp_action'] ?? null;
+        $postComponentId = $_POST['_usephp_component'] ?? null;
+
+        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
+            return;
+        }
+
+        // Only handle JSON actions (not usephp-action: form tokens)
+        if (\str_starts_with($actionJson, 'usephp-action:')) {
+            return;
+        }
+
+        if ($postComponentId !== $componentId) {
+            return;
+        }
+
+        try {
+            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
+            if (!\is_array($actionData)) {
+                return;
+            }
+
+            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
+            $action = Action::fromArray($actionData);
+
+            if ('setState' === $action->type) {
+                $index = $action->payload['index'] ?? 0;
+                $value = $action->payload['value'] ?? null;
+                if (!\is_int($index)) {
+                    return;
+                }
+                $state->setState($index, $value);
+            }
+        } catch (JsonException) {
+            return;
+        }
+
+        // PRG pattern: redirect after state change (non-AJAX)
+        if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
+            \header('Location: ' . $redirectUrl, true, 303);
+
+            exit;
+        }
+    }
+
+    private function resolveAuthenticator(): ?Authenticator
+    {
+        // UserProvider is an interface — `has()` only returns true when
+        // the app explicitly bound an implementation. Used as the gate
+        // for "auth is configured" so apps without auth pay nothing.
+        if (null === $this->container || !$this->container->has(UserProvider::class)) {
+            return null;
+        }
+        if (!$this->container->has(Authenticator::class)) {
+            return null;
+        }
+
+        $auth = $this->container->get(Authenticator::class);
+
+        return $auth instanceof Authenticator ? $auth : null;
+    }
+
+    /**
+     * @param array<string, string> $params
+     */
+    private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
+    {
+        if (!\file_exists($filePath)) {
+            return null;
+        }
+
+        // .psx is the source; the runtime requires the compiled .psx.php sibling.
+        if (\str_ends_with($filePath, '.psx')) {
+            $filePath = $this->resolveCompiledPsxPath($filePath);
+        }
+
+        require_once $filePath;
+
+        $className = $this->getClassFromFile($filePath);
+
+        if (null === $className) {
+            return null;
+        }
+
+        if (!\class_exists($className)) {
+            return null;
+        }
+
+        $instance = $this->resolveInstance($className);
+
+        if (!$instance instanceof LayoutInterface) {
+            return null;
+        }
+
+        if ($instance instanceof LayoutComponent) {
+            $instance->setParams($params);
+        }
+
+        return $instance;
     }
 
     /**
@@ -644,118 +756,6 @@ class AppRouter
         }
 
         return $instance;
-    }
-
-    /**
-     * @param array<string, string> $params
-     */
-    protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
-    {
-        $componentId = $page instanceof FunctionPage
-            ? $page->getComponentId()
-            : 'page:' . $page::class;
-
-        $state = ComponentState::getInstance($componentId);
-        ComponentState::reset();
-
-        // Handle useState action (onClick etc.) before rendering
-        $this->dispatchStateAction($componentId, $state);
-
-        if ($page instanceof BaseComponent) {
-            $page->setComponentState($state);
-        }
-
-        if ($page instanceof PageComponent) {
-            $page->dispatchActionFromRequest();
-        } elseif ($page instanceof FunctionPage) {
-            $page->dispatchActionFromRequest();
-        }
-
-        $pageElement = $page->render();
-
-        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
-            /** @var array<string, string> $metadata */
-            $metadata = $page->getMetadata();
-            $this->document->setMetadata($metadata);
-        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
-            $this->document->setMetadata($page->getMetadata());
-        }
-
-        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
-        $html = $renderer->render($pageElement, $layouts);
-
-        if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            echo $html;
-
-            return;
-        }
-
-        $wrappedHtml = \sprintf(
-            '<div data-usephp="%s">%s</div>',
-            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
-            $html,
-        );
-
-        $output = $this->document->render($wrappedHtml);
-
-        echo $output;
-    }
-
-    /**
-     * Handle useState setState actions from POST (onClick, onChange, etc.).
-     */
-    protected function dispatchStateAction(string $componentId, ComponentState $state): void
-    {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
-            return;
-        }
-
-        $actionJson = $_POST['_usephp_action'] ?? null;
-        $postComponentId = $_POST['_usephp_component'] ?? null;
-
-        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
-            return;
-        }
-
-        // Only handle JSON actions (not usephp-action: form tokens)
-        if (\str_starts_with($actionJson, 'usephp-action:')) {
-            return;
-        }
-
-        if ($postComponentId !== $componentId) {
-            return;
-        }
-
-        try {
-            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
-            if (!\is_array($actionData)) {
-                return;
-            }
-
-            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
-            $action = Action::fromArray($actionData);
-
-            if ('setState' === $action->type) {
-                $index = $action->payload['index'] ?? 0;
-                $value = $action->payload['value'] ?? null;
-                if (!\is_int($index)) {
-                    return;
-                }
-                $state->setState($index, $value);
-            }
-        } catch (JsonException) {
-            return;
-        }
-
-        // PRG pattern: redirect after state change (non-AJAX)
-        if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
-            \header('Location: ' . $redirectUrl, true, 303);
-
-            exit;
-        }
     }
 
     /**

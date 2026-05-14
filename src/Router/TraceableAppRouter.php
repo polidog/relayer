@@ -10,6 +10,7 @@ use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\ProfilerWebView;
 use Polidog\Relayer\Profiler\RecordingProfiler;
+use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Routing\RouteMatch;
@@ -20,7 +21,7 @@ use Psr\Container\ContainerInterface;
 /**
  * Dev-only {@see AppRouter} that records dispatch lifecycle events into the
  * container-bound {@see Profiler}. Swapped in for the plain AppRouter by
- * {@see \Polidog\Relayer\Relayer::boot()} when `APP_ENV=dev`, so prod never
+ * {@see Relayer::boot()} when `APP_ENV=dev`, so prod never
  * loads this class.
  *
  * Each instrumented hook calls `parent::xxx()` so behavior is identical —
@@ -105,6 +106,7 @@ class TraceableAppRouter extends AppRouter
         }
 
         $recording->beginProfile($this->readUrl(), $this->readMethod());
+
         try {
             parent::run();
         } finally {
@@ -138,27 +140,6 @@ class TraceableAppRouter extends AppRouter
         $this->userExcludedPrefixes = $cleaned;
 
         return $this;
-    }
-
-    private function isExcluded(string $path): bool
-    {
-        foreach (self::FRAMEWORK_EXCLUDED_PREFIXES as $prefix) {
-            if ($this->prefixMatches($path, $prefix)) {
-                return true;
-            }
-        }
-        foreach ($this->userExcludedPrefixes as $prefix) {
-            if ($this->prefixMatches($path, $prefix)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function prefixMatches(string $path, string $prefix): bool
-    {
-        return $path === $prefix || \str_starts_with($path, $prefix . '/');
     }
 
     /**
@@ -296,6 +277,7 @@ class TraceableAppRouter extends AppRouter
             : 'page:' . $page::class;
 
         $span = $this->profiler?->start('page', 'render');
+
         try {
             parent::renderPage($page, $layouts, $params);
         } finally {
@@ -320,6 +302,27 @@ class TraceableAppRouter extends AppRouter
         }
 
         parent::dispatchStateAction($componentId, $state);
+    }
+
+    private function isExcluded(string $path): bool
+    {
+        foreach (self::FRAMEWORK_EXCLUDED_PREFIXES as $prefix) {
+            if ($this->prefixMatches($path, $prefix)) {
+                return true;
+            }
+        }
+        foreach ($this->userExcludedPrefixes as $prefix) {
+            if ($this->prefixMatches($path, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function prefixMatches(string $path, string $prefix): bool
+    {
+        return $path === $prefix || \str_starts_with($path, $prefix . '/');
     }
 
     private function readUrl(): string

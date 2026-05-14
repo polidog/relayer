@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Profiler;
 
+use Polidog\Relayer\Router\TraceableAppRouter;
+
 /**
  * Dev-time {@see Profiler} that builds a {@see Profile} per request and
  * hands it to a {@see ProfilerStorage} on completion.
  *
  * Lifecycle:
- * - {@see beginProfile()} is called by {@see \Polidog\Relayer\Router\TraceableAppRouter::run()}
+ * - {@see beginProfile()} is called by {@see TraceableAppRouter::run()}
  *   at the start of dispatch.
  * - During dispatch, framework code and user code call {@see collect()} /
  *   {@see start()} which mutate the in-flight Profile.

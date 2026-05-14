@@ -7,7 +7,6 @@ namespace Polidog\Relayer\Tests\Profiler;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Profiler\Event;
 use Polidog\Relayer\Profiler\Profile;
-use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\ProfilerWebView;
 
 final class ProfilerWebViewTest extends TestCase

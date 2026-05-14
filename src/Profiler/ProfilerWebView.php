@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Profiler;
 
+use Polidog\Relayer\Router\TraceableAppRouter;
+
 /**
  * Renders the dev-only profiler UI: a list of recent profiles and a per-
  * profile detail page. Pure HTML — no JS, no external CSS — so the view
  * works offline in any environment that hits `/_profiler` in development.
  *
- * Wired in by {@see \Polidog\Relayer\Router\TraceableAppRouter} which
+ * Wired in by {@see TraceableAppRouter} which
  * intercepts requests under `/_profiler` before normal dispatch (so the
  * view does not create a profile of itself).
  */
