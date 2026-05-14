@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
-use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
@@ -93,17 +93,17 @@ final class InjectorContainer implements ContainerInterface
         return $this->resolve($id);
     }
 
-    private function resolveAuthenticator(): ?Authenticator
+    private function resolveAuthenticator(): ?AuthenticatorInterface
     {
         // Gate on UserProvider — an unbound interface signals "auth not
         // configured" and lets apps without auth skip the whole code path.
-        if (!$this->container->has(UserProvider::class) || !$this->container->has(Authenticator::class)) {
+        if (!$this->container->has(UserProvider::class) || !$this->container->has(AuthenticatorInterface::class)) {
             return null;
         }
 
-        $auth = $this->container->get(Authenticator::class);
+        $auth = $this->container->get(AuthenticatorInterface::class);
 
-        return $auth instanceof Authenticator ? $auth : null;
+        return $auth instanceof AuthenticatorInterface ? $auth : null;
     }
 
     private function resolveEtagStore(): ?EtagStore

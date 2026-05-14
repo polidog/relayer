@@ -7,7 +7,7 @@ namespace Polidog\Relayer\Router\Component;
 use Closure;
 use InvalidArgumentException;
 use Polidog\Relayer\Auth\Auth;
-use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
@@ -25,7 +25,7 @@ final class PageContext
     /** @var array<string, Closure> */
     private array $actions = [];
 
-    private ?Authenticator $authenticator = null;
+    private ?AuthenticatorInterface $authenticator = null;
 
     /**
      * @param array<string, string> $params
@@ -44,7 +44,7 @@ final class PageContext
      *           `$ctx->requireAuth()` / `$ctx->user()` work without the
      *           page needing to depend on Authenticator directly
      */
-    public function setAuthenticator(?Authenticator $authenticator): void
+    public function setAuthenticator(?AuthenticatorInterface $authenticator): void
     {
         $this->authenticator = $authenticator;
     }

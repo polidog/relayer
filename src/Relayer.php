@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Polidog\Relayer;
 
 use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\NativePasswordHasher;
 use Polidog\Relayer\Auth\NativeSession;
 use Polidog\Relayer\Auth\PasswordHasher;
 use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\Auth\TraceableAuthenticator;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
@@ -24,6 +26,7 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
+use Symfony\Component\DependencyInjection\Reference;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -121,6 +124,29 @@ final class Relayer
                 ->setAutowired(true)
                 ->setPublic(true)
             ;
+        }
+
+        // Bind the AuthenticatorInterface ID to the concrete Authenticator
+        // when auth is configured. In dev, swap the alias to point at the
+        // TraceableAuthenticator decorator so framework code (and apps
+        // that depend on the interface) get auth event tracing for free.
+        if ($container->has(Authenticator::class)) {
+            $container->setAlias(AuthenticatorInterface::class, Authenticator::class)
+                ->setPublic(true)
+            ;
+
+            if (self::isDev()) {
+                $container->register(TraceableAuthenticator::class)
+                    ->setArguments([
+                        new Reference(Authenticator::class),
+                        new Reference(Profiler::class),
+                    ])
+                    ->setPublic(true)
+                ;
+                $container->setAlias(AuthenticatorInterface::class, TraceableAuthenticator::class)
+                    ->setPublic(true)
+                ;
+            }
         }
 
         // Autowire-by-default: any service registered without explicit

@@ -26,7 +26,7 @@ namespace Polidog\Relayer\Auth;
  * session fixation: a captured pre-login id stops working the moment the
  * user authenticates.
  */
-final class Authenticator
+final class Authenticator implements AuthenticatorInterface
 {
     private const SESSION_KEY = 'relayer.auth.identity';
 

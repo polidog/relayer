@@ -6,7 +6,7 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
-use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
@@ -435,7 +435,7 @@ class AppRouter
         }
     }
 
-    private function resolveAuthenticator(): ?Authenticator
+    private function resolveAuthenticator(): ?AuthenticatorInterface
     {
         // UserProvider is an interface — `has()` only returns true when
         // the app explicitly bound an implementation. Used as the gate
@@ -443,13 +443,13 @@ class AppRouter
         if (null === $this->container || !$this->container->has(UserProvider::class)) {
             return null;
         }
-        if (!$this->container->has(Authenticator::class)) {
+        if (!$this->container->has(AuthenticatorInterface::class)) {
             return null;
         }
 
-        $auth = $this->container->get(Authenticator::class);
+        $auth = $this->container->get(AuthenticatorInterface::class);
 
-        return $auth instanceof Authenticator ? $auth : null;
+        return $auth instanceof AuthenticatorInterface ? $auth : null;
     }
 
     /**
