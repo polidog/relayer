@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Http;
 
+use ReflectionClass;
+
 /**
  * Reads `#[Cache]` from a class and emits matching HTTP headers, plus
  * implements RFC 7232 conditional GET (`If-None-Match`, `If-Modified-Since`)
@@ -26,7 +28,7 @@ final class CachePolicy
     public static function applyFromAttribute(string $class, ?EtagStore $store = null): ?Cache
     {
         $cache = self::extract($class);
-        if ($cache === null) {
+        if (null === $cache) {
             return null;
         }
 
@@ -43,12 +45,12 @@ final class CachePolicy
      */
     public static function resolveWithStore(Cache $cache, ?EtagStore $store): Cache
     {
-        if ($cache->etag !== null || $cache->etagKey === null || $store === null) {
+        if (null !== $cache->etag || null === $cache->etagKey || null === $store) {
             return $cache;
         }
 
         $dynamic = $store->get($cache->etagKey);
-        if ($dynamic === null || $dynamic === '') {
+        if (null === $dynamic || '' === $dynamic) {
             return $cache;
         }
 
@@ -79,8 +81,8 @@ final class CachePolicy
             return null;
         }
 
-        $attributes = (new \ReflectionClass($class))->getAttributes(Cache::class);
-        if ($attributes === []) {
+        $attributes = (new ReflectionClass($class))->getAttributes(Cache::class);
+        if ([] === $attributes) {
             return null;
         }
 
@@ -94,20 +96,20 @@ final class CachePolicy
         }
 
         $directives = self::buildDirectives($cache);
-        if ($directives !== []) {
+        if ([] !== $directives) {
             \header('Cache-Control: ' . \implode(', ', $directives));
         }
 
-        if ($cache->vary !== []) {
+        if ([] !== $cache->vary) {
             \header('Vary: ' . \implode(', ', $cache->vary));
         }
 
-        if ($cache->etag !== null) {
+        if (null !== $cache->etag) {
             \header('ETag: ' . self::formatEtag($cache->etag, $cache->etagWeak));
         }
 
         $lastModified = self::parseLastModified($cache->lastModified);
-        if ($lastModified !== null) {
+        if (null !== $lastModified) {
             \header('Last-Modified: ' . \gmdate('D, d M Y H:i:s', $lastModified) . ' GMT');
         }
     }
@@ -118,15 +120,16 @@ final class CachePolicy
      */
     public static function isNotModified(Cache $cache): bool
     {
-        $method = \strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
-        if ($method !== 'GET' && $method !== 'HEAD') {
+        $rawMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        $method = \is_string($rawMethod) ? \strtoupper($rawMethod) : 'GET';
+        if ('GET' !== $method && 'HEAD' !== $method) {
             return false;
         }
 
-        if ($cache->etag !== null) {
+        if (null !== $cache->etag) {
             $ifNoneMatch = self::requestHeader('IF_NONE_MATCH');
-            if ($ifNoneMatch !== null) {
-                if ($ifNoneMatch === '*') {
+            if (null !== $ifNoneMatch) {
+                if ('*' === $ifNoneMatch) {
                     return true;
                 }
                 if (self::etagMatchesAny(self::formatEtag($cache->etag, $cache->etagWeak), $ifNoneMatch)) {
@@ -136,11 +139,11 @@ final class CachePolicy
         }
 
         $lastModified = self::parseLastModified($cache->lastModified);
-        if ($lastModified !== null) {
+        if (null !== $lastModified) {
             $ifModifiedSince = self::requestHeader('IF_MODIFIED_SINCE');
-            if ($ifModifiedSince !== null) {
+            if (null !== $ifModifiedSince) {
                 $clientTime = \strtotime($ifModifiedSince);
-                if ($clientTime !== false && $lastModified <= $clientTime) {
+                if (false !== $clientTime && $lastModified <= $clientTime) {
                     return true;
                 }
             }
@@ -182,10 +185,10 @@ final class CachePolicy
         if ($cache->noCache) {
             $directives[] = 'no-cache';
         }
-        if ($cache->maxAge !== null) {
+        if (null !== $cache->maxAge) {
             $directives[] = 'max-age=' . $cache->maxAge;
         }
-        if ($cache->sMaxAge !== null) {
+        if (null !== $cache->sMaxAge) {
             $directives[] = 's-maxage=' . $cache->sMaxAge;
         }
         if ($cache->mustRevalidate) {
@@ -213,17 +216,17 @@ final class CachePolicy
     }
 
     /**
-     * @return int|null Unix timestamp, or null when input is null/unparseable.
+     * @return null|int unix timestamp, or null when input is null/unparseable
      */
     private static function parseLastModified(?string $value): ?int
     {
-        if ($value === null) {
+        if (null === $value) {
             return null;
         }
 
         $timestamp = \strtotime($value);
 
-        return $timestamp === false ? null : $timestamp;
+        return false === $timestamp ? null : $timestamp;
     }
 
     private static function quoteEtag(string $value): string
@@ -245,7 +248,7 @@ final class CachePolicy
 
         foreach (\explode(',', $ifNoneMatch) as $candidate) {
             $candidate = \trim($candidate);
-            if ($candidate === '') {
+            if ('' === $candidate) {
                 continue;
             }
             if (self::stripWeakPrefix($candidate) === $serverBare) {
@@ -266,6 +269,6 @@ final class CachePolicy
         $key = 'HTTP_' . $name;
         $value = $_SERVER[$key] ?? null;
 
-        return \is_string($value) && $value !== '' ? $value : null;
+        return \is_string($value) && '' !== $value ? $value : null;
     }
 }

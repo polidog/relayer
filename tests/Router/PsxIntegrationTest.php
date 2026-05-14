@@ -6,15 +6,11 @@ namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\UsePhp\Psx\CompileCommand;
+use Polidog\UsePhp\Psx\Compiler;
+use RuntimeException;
 
-/**
- * End-to-end tests for the .psx page support added in feat/psx-pages.
- *
- * AppRouter has no public test seam for `loadPage`, so we exercise the path
- * through the public surface: build a small fixture app on disk, point
- * AppRouter at it, and observe behaviour by simulating a request.
- */
-class PsxIntegrationTest extends TestCase
+final class PsxIntegrationTest extends TestCase
 {
     private string $workDir;
 
@@ -39,7 +35,7 @@ class PsxIntegrationTest extends TestCase
 
         $app = AppRouter::create($this->workDir);
 
-        $this->expectException(\RuntimeException::class);
+        $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Compiled PSX not found');
         $this->runApp($app, '/');
     }
@@ -74,7 +70,7 @@ class PsxIntegrationTest extends TestCase
 
         // The cache dir should now contain a sha1-named compiled file.
         self::assertDirectoryExists($cacheDir);
-        $expected = \Polidog\UsePhp\Psx\CompileCommand::cachePathFor(
+        $expected = CompileCommand::cachePathFor(
             $cacheDir,
             $this->workDir . '/page.psx',
         );
@@ -110,21 +106,22 @@ class PsxIntegrationTest extends TestCase
 
         $cacheDir = $this->workDir . '/cache';
         \mkdir($cacheDir, 0o755, true);
-        $compiler = new \Polidog\UsePhp\Psx\Compiler();
-        $cachePath = \Polidog\UsePhp\Psx\CompileCommand::cachePathFor(
+        $compiler = new Compiler();
+        $cachePath = CompileCommand::cachePathFor(
             $cacheDir,
             $this->workDir . '/page.psx',
         );
+        $psxSource = (string) \file_get_contents($this->workDir . '/page.psx');
         \file_put_contents(
             $cachePath,
-            $compiler->compile(\file_get_contents($this->workDir . '/page.psx')),
+            $compiler->compile($psxSource),
         );
 
         // Edit the .psx so the source is now newer than the cache.
         \sleep(1); // ensure mtime advances on coarse filesystems
         \file_put_contents(
             $this->workDir . '/page.psx',
-            \str_replace('Cached version', 'Live edit', \file_get_contents($this->workDir . '/page.psx')),
+            \str_replace('Cached version', 'Live edit', $psxSource),
         );
         \touch($this->workDir . '/page.psx', \time() + 60);
 
@@ -156,9 +153,9 @@ class PsxIntegrationTest extends TestCase
         $cacheDir = $this->workDir . '/cache';
         \mkdir($cacheDir, 0o755, true);
 
-        $compiler = new \Polidog\UsePhp\Psx\Compiler();
-        $compiled = $compiler->compile(\file_get_contents($this->workDir . '/page.psx'));
-        $cachePath = \Polidog\UsePhp\Psx\CompileCommand::cachePathFor(
+        $compiler = new Compiler();
+        $compiled = $compiler->compile((string) \file_get_contents($this->workDir . '/page.psx'));
+        $cachePath = CompileCommand::cachePathFor(
             $cacheDir,
             $this->workDir . '/page.psx',
         );
@@ -175,11 +172,13 @@ class PsxIntegrationTest extends TestCase
         $_SERVER['REQUEST_URI'] = $path;
         $_SERVER['REQUEST_METHOD'] = 'GET';
         \ob_start();
+
         try {
             $app->run();
         } finally {
             $output = (string) \ob_get_clean();
         }
+
         return $output;
     }
 
@@ -190,14 +189,15 @@ class PsxIntegrationTest extends TestCase
         }
         if (\is_file($path) || \is_link($path)) {
             @\unlink($path);
+
             return;
         }
         $entries = \scandir($path);
-        if ($entries === false) {
+        if (false === $entries) {
             return;
         }
         foreach ($entries as $entry) {
-            if ($entry === '.' || $entry === '..') {
+            if ('.' === $entry || '..' === $entry) {
                 continue;
             }
             $this->rmrf($path . '/' . $entry);

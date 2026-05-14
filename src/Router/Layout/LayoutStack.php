@@ -26,12 +26,12 @@ final class LayoutStack implements Countable
 
     public function count(): int
     {
-        return count($this->layouts);
+        return \count($this->layouts);
     }
 
     public function isEmpty(): bool
     {
-        return count($this->layouts) === 0;
+        return 0 === \count($this->layouts);
     }
 
     /**
@@ -39,6 +39,6 @@ final class LayoutStack implements Countable
      */
     public function reversed(): array
     {
-        return array_reverse($this->layouts);
+        return \array_reverse($this->layouts);
     }
 }

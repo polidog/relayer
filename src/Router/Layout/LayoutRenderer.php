@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Layout;
 
+use Polidog\Relayer\Router\Form\FormActionTransformer;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
-use Polidog\Relayer\Router\Form\FormActionTransformer;
 
 final class LayoutRenderer
 {
@@ -16,13 +16,18 @@ final class LayoutRenderer
     public function __construct(string $componentId = 'page', ?string $formActionUrl = null)
     {
         $this->renderer = new Renderer($componentId);
-        $this->formActionUrl = $formActionUrl ?? ($_SERVER['REQUEST_URI'] ?? '/');
+        if (null === $formActionUrl) {
+            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+            $formActionUrl = \is_string($requestUri) ? $requestUri : '/';
+        }
+        $this->formActionUrl = $formActionUrl;
     }
 
     public function render(Element $pageContent, LayoutStack $layouts): string
     {
         if ($layouts->isEmpty()) {
             $pageContent = FormActionTransformer::apply($pageContent, $this->formActionUrl);
+
             return $this->renderer->renderElement($pageContent);
         }
 

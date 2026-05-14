@@ -12,9 +12,7 @@ use Polidog\Relayer\Http\EtagStore;
 final class InMemoryEtagStore implements EtagStore
 {
     /** @param array<string, string> $values */
-    public function __construct(private array $values = [])
-    {
-    }
+    public function __construct(private array $values = []) {}
 
     public function get(string $key): ?string
     {

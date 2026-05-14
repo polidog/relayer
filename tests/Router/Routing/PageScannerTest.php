@@ -6,8 +6,9 @@ namespace Polidog\Relayer\Tests\Router\Routing;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Routing\PageScanner;
+use RuntimeException;
 
-class PageScannerTest extends TestCase
+final class PageScannerTest extends TestCase
 {
     private string $fixturesDir;
 
@@ -22,7 +23,7 @@ class PageScannerTest extends TestCase
         $collection = $scanner->scan();
 
         // Should find: /, /about, /blog/[slug], /form
-        $this->assertCount(4, $collection);
+        self::assertCount(4, $collection);
     }
 
     public function testScanCreatesCorrectPatterns(): void
@@ -35,12 +36,12 @@ class PageScannerTest extends TestCase
             $patterns[] = $route->pattern;
         }
 
-        sort($patterns);
+        \sort($patterns);
 
-        $this->assertContains('/', $patterns);
-        $this->assertContains('/about', $patterns);
-        $this->assertContains('/blog/[slug]', $patterns);
-        $this->assertContains('/form', $patterns);
+        self::assertContains('/', $patterns);
+        self::assertContains('/about', $patterns);
+        self::assertContains('/blog/[slug]', $patterns);
+        self::assertContains('/form', $patterns);
     }
 
     public function testScanDetectsDynamicSegments(): void
@@ -55,8 +56,8 @@ class PageScannerTest extends TestCase
             }
         }
 
-        $this->assertCount(1, $dynamicRoutes);
-        $this->assertSame(['slug'], $dynamicRoutes[0]->paramNames);
+        self::assertCount(1, $dynamicRoutes);
+        self::assertSame(['slug'], $dynamicRoutes[0]->paramNames);
     }
 
     public function testScanFindsLayouts(): void
@@ -65,10 +66,10 @@ class PageScannerTest extends TestCase
         $collection = $scanner->scan();
 
         foreach ($collection as $route) {
-            if ($route->pattern === '/') {
+            if ('/' === $route->pattern) {
                 // Root page should have root layout
-                $this->assertNotEmpty($route->layoutPaths);
-                $this->assertStringEndsWith('layout.php', $route->layoutPaths[0]);
+                self::assertNotEmpty($route->layoutPaths);
+                self::assertStringEndsWith('layout.php', $route->layoutPaths[0]);
             }
         }
     }
@@ -78,8 +79,8 @@ class PageScannerTest extends TestCase
         $scanner = new PageScanner($this->fixturesDir);
         $errorPath = $scanner->getErrorPagePath();
 
-        $this->assertNotNull($errorPath);
-        $this->assertStringEndsWith('error.php', $errorPath);
+        self::assertNotNull($errorPath);
+        self::assertStringEndsWith('error.php', $errorPath);
     }
 
     public function testScanNoErrorPage(): void
@@ -88,14 +89,14 @@ class PageScannerTest extends TestCase
         $scanner = new PageScanner($this->fixturesDir . '/about');
         $errorPath = $scanner->getErrorPagePath();
 
-        $this->assertNull($errorPath);
+        self::assertNull($errorPath);
     }
 
     public function testScanThrowsForNonexistentDirectory(): void
     {
         $scanner = new PageScanner('/nonexistent/directory');
 
-        $this->expectException(\RuntimeException::class);
+        $this->expectException(RuntimeException::class);
         $scanner->scan();
     }
 
@@ -105,13 +106,13 @@ class PageScannerTest extends TestCase
         $collection = $scanner->scan();
 
         foreach ($collection as $route) {
-            if ($route->pattern === '/blog/[slug]') {
+            if ('/blog/[slug]' === $route->pattern) {
                 $params = $route->match('/blog/hello-world');
-                $this->assertNotNull($params);
-                $this->assertSame('hello-world', $params['slug']);
+                self::assertNotNull($params);
+                self::assertSame('hello-world', $params['slug']);
 
-                $this->assertNull($route->match('/blog'));
-                $this->assertNull($route->match('/about'));
+                self::assertNull($route->match('/blog'));
+                self::assertNull($route->match('/about'));
             }
         }
     }

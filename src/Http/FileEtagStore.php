@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Http;
 
+use RuntimeException;
+
 /**
  * Filesystem-backed EtagStore.
  *
@@ -13,9 +15,7 @@ namespace Polidog\Relayer\Http;
  */
 final class FileEtagStore implements EtagStore
 {
-    public function __construct(private readonly string $directory)
-    {
-    }
+    public function __construct(private readonly string $directory) {}
 
     public function get(string $key): ?string
     {
@@ -25,7 +25,7 @@ final class FileEtagStore implements EtagStore
         }
 
         $value = @\file_get_contents($path);
-        if ($value === false || $value === '') {
+        if (false === $value || '' === $value) {
             return null;
         }
 
@@ -39,12 +39,13 @@ final class FileEtagStore implements EtagStore
         $path = $this->path($key);
         $tmp = $path . '.' . \bin2hex(\random_bytes(4)) . '.tmp';
 
-        if (@\file_put_contents($tmp, $etag, \LOCK_EX) === false) {
-            throw new \RuntimeException("Failed to write ETag file: $tmp");
+        if (false === @\file_put_contents($tmp, $etag, \LOCK_EX)) {
+            throw new RuntimeException("Failed to write ETag file: {$tmp}");
         }
         if (!@\rename($tmp, $path)) {
             @\unlink($tmp);
-            throw new \RuntimeException("Failed to publish ETag file: $path");
+
+            throw new RuntimeException("Failed to publish ETag file: {$path}");
         }
     }
 
@@ -67,7 +68,7 @@ final class FileEtagStore implements EtagStore
             return;
         }
         if (!@\mkdir($this->directory, 0o755, true) && !\is_dir($this->directory)) {
-            throw new \RuntimeException("Failed to create ETag directory: {$this->directory}");
+            throw new RuntimeException("Failed to create ETag directory: {$this->directory}");
         }
     }
 }

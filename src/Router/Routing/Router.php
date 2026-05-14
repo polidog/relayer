@@ -12,8 +12,7 @@ final class Router implements RouterInterface
 
     public function __construct(
         private readonly PageScanner $scanner,
-    ) {
-    }
+    ) {}
 
     public static function create(string $appDirectory): self
     {
@@ -40,7 +39,7 @@ final class Router implements RouterInterface
 
     public function getRoutes(): RouteCollection
     {
-        if ($this->routes === null) {
+        if (null === $this->routes) {
             $this->routes = $this->scanner->scan();
         }
 
@@ -49,9 +48,10 @@ final class Router implements RouterInterface
 
     private function normalizePath(string $path): string
     {
-        $path = parse_url($path, PHP_URL_PATH) ?? '/';
-        $path = '/' . trim($path, '/');
+        $parsed = \parse_url($path, \PHP_URL_PATH);
+        $path = \is_string($parsed) ? $parsed : '/';
+        $path = '/' . \trim($path, '/');
 
-        return $path !== '/' ? rtrim($path, '/') : $path;
+        return '/' !== $path ? \rtrim($path, '/') : $path;
     }
 }

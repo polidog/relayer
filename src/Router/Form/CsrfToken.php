@@ -14,8 +14,8 @@ final class CsrfToken
 
         $token = $_SESSION[self::SESSION_KEY] ?? null;
 
-        if (!is_string($token) || $token === '') {
-            $token = bin2hex(random_bytes(32));
+        if (!\is_string($token) || '' === $token) {
+            $token = \bin2hex(\random_bytes(32));
             $_SESSION[self::SESSION_KEY] = $token;
         }
 
@@ -28,17 +28,17 @@ final class CsrfToken
 
         $expected = $_SESSION[self::SESSION_KEY] ?? null;
 
-        if (!is_string($expected) || $expected === '') {
+        if (!\is_string($expected) || '' === $expected) {
             return false;
         }
 
-        return hash_equals($expected, $token);
+        return \hash_equals($expected, $token);
     }
 
     private static function ensureSession(): void
     {
-        if (session_status() === PHP_SESSION_NONE) {
-            session_start();
+        if (\PHP_SESSION_NONE === \session_status()) {
+            \session_start();
         }
     }
 }

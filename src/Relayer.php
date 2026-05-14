@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace Polidog\Relayer;
 
 use Dotenv\Dotenv;
-use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
+use Polidog\Relayer\Router\AppRouter;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
@@ -29,10 +29,10 @@ use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
 final class Relayer
 {
     /**
-     * @param string $projectRoot Absolute path to the project root (the
-     *   directory that contains composer.json, .env, and `src/app/`).
-     * @param AppConfigurator|null $configurator Optional configurator.
-     *   Defaults to a bare AppConfigurator with no extra services.
+     * @param string               $projectRoot  Absolute path to the project root (the
+     *                                           directory that contains composer.json, .env, and `src/app/`).
+     * @param null|AppConfigurator $configurator Optional configurator.
+     *                                           Defaults to a bare AppConfigurator with no extra services.
      */
     public static function boot(string $projectRoot, ?AppConfigurator $configurator = null): AppRouter
     {
@@ -88,10 +88,12 @@ final class Relayer
     {
         $container->register(FileEtagStore::class)
             ->setArguments([$projectRoot . '/var/cache/etags'])
-            ->setPublic(true);
+            ->setPublic(true)
+        ;
 
         $container->setAlias(EtagStore::class, FileEtagStore::class)
-            ->setPublic(true);
+            ->setPublic(true)
+        ;
     }
 
     /**
@@ -112,6 +114,7 @@ final class Relayer
         foreach (['services.yaml', 'services.yml'] as $name) {
             if (\file_exists($configDir . '/' . $name)) {
                 (new YamlFileLoader($container, $locator))->load($name);
+
                 break;
             }
         }
@@ -123,7 +126,7 @@ final class Relayer
 
     private static function applyDefaults(Definition $definition): void
     {
-        if (!$definition->isAutowired() && $definition->getArguments() === []) {
+        if (!$definition->isAutowired() && [] === $definition->getArguments()) {
             $definition->setAutowired(true);
         }
         if (!$definition->isPublic()) {
@@ -144,6 +147,6 @@ final class Relayer
     {
         $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? \getenv('APP_ENV') ?: 'prod';
 
-        return $env === 'dev' || $env === 'development';
+        return 'dev' === $env || 'development' === $env;
     }
 }

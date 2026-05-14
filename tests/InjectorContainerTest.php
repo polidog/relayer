@@ -15,7 +15,7 @@ final class InjectorContainerTest extends TestCase
         $container = new InjectorContainer($this->compile(static function (): void {}));
 
         self::assertTrue($container->has(Fixtures\PlainService::class));
-        self::assertFalse($container->has('Nope\\DoesNotExist'));
+        self::assertFalse($container->has('Nope\DoesNotExist'));
     }
 
     public function testGetAutoWiresUnregisteredClass(): void
@@ -32,10 +32,12 @@ final class InjectorContainerTest extends TestCase
         $container = new InjectorContainer($this->compile(static function (ContainerBuilder $c): void {
             $c->register(Fixtures\PlainService::class)
                 ->setAutowired(true)
-                ->setPublic(true);
+                ->setPublic(true)
+            ;
             $c->register(Fixtures\ServiceWithDependency::class)
                 ->setAutowired(true)
-                ->setPublic(true);
+                ->setPublic(true)
+            ;
         }));
 
         $service = $container->get(Fixtures\ServiceWithDependency::class);
@@ -49,7 +51,8 @@ final class InjectorContainerTest extends TestCase
         $container = new InjectorContainer($this->compile(static function (ContainerBuilder $c): void {
             $c->register(Fixtures\PlainService::class)
                 ->setAutowired(true)
-                ->setPublic(true);
+                ->setPublic(true)
+            ;
         }));
 
         $service = $container->get(Fixtures\ServiceWithDependency::class);

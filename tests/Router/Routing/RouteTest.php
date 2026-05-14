@@ -7,7 +7,7 @@ namespace Polidog\Relayer\Tests\Router\Routing;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Routing\Route;
 
-class RouteTest extends TestCase
+final class RouteTest extends TestCase
 {
     public function testStaticRouteMatches(): void
     {
@@ -21,9 +21,9 @@ class RouteTest extends TestCase
             totalSegments: 0,
         );
 
-        $this->assertFalse($route->isDynamic());
-        $this->assertSame([], $route->match('/'));
-        $this->assertNull($route->match('/about'));
+        self::assertFalse($route->isDynamic());
+        self::assertSame([], $route->match('/'));
+        self::assertNull($route->match('/about'));
     }
 
     public function testStaticMultiSegmentRouteMatches(): void
@@ -38,10 +38,10 @@ class RouteTest extends TestCase
             totalSegments: 1,
         );
 
-        $this->assertFalse($route->isDynamic());
-        $this->assertSame([], $route->match('/about'));
-        $this->assertNull($route->match('/'));
-        $this->assertNull($route->match('/about/extra'));
+        self::assertFalse($route->isDynamic());
+        self::assertSame([], $route->match('/about'));
+        self::assertNull($route->match('/'));
+        self::assertNull($route->match('/about/extra'));
     }
 
     public function testDynamicRouteMatches(): void
@@ -56,11 +56,11 @@ class RouteTest extends TestCase
             totalSegments: 2,
         );
 
-        $this->assertTrue($route->isDynamic());
-        $this->assertSame(['slug' => 'hello-world'], $route->match('/blog/hello-world'));
-        $this->assertSame(['slug' => '123'], $route->match('/blog/123'));
-        $this->assertNull($route->match('/blog'));
-        $this->assertNull($route->match('/'));
+        self::assertTrue($route->isDynamic());
+        self::assertSame(['slug' => 'hello-world'], $route->match('/blog/hello-world'));
+        self::assertSame(['slug' => '123'], $route->match('/blog/123'));
+        self::assertNull($route->match('/blog'));
+        self::assertNull($route->match('/'));
     }
 
     public function testDynamicRouteDoesNotMatchExtraSegments(): void
@@ -75,6 +75,6 @@ class RouteTest extends TestCase
             totalSegments: 2,
         );
 
-        $this->assertNull($route->match('/blog/hello/extra'));
+        self::assertNull($route->match('/blog/hello/extra'));
     }
 }

@@ -11,7 +11,7 @@ interface LayoutInterface
     public function render(): Element;
 
     /**
-     * @param Element|array<Element|string>|string $children
+     * @param array<Element|string>|Element|string $children
      */
-    public function setChildren(Element|array|string $children): void;
+    public function setChildren(array|Element|string $children): void;
 }

@@ -9,35 +9,36 @@ use Polidog\UsePhp\Runtime\Element;
 
 abstract class LayoutComponent extends BaseComponent implements LayoutInterface
 {
-    /** @var Element|array<Element|string>|string */
-    private Element|array|string $children = [];
+    /** @var array<Element|string>|Element|string */
+    private array|Element|string $children = [];
 
     /** @var array<string, string> */
     private array $params = [];
 
     /**
-     * @param Element|array<Element|string>|string $children
+     * @param array<Element|string>|Element|string $children
      */
-    public function setChildren(Element|array|string $children): void
+    public function setChildren(array|Element|string $children): void
     {
         $this->children = $children;
     }
 
     /**
-     * @return Element|array<Element|string>|string
-     */
-    protected function getChildren(): Element|array|string
-    {
-        return $this->children;
-    }
-
-    /**
      * @param array<string, string> $params
+     *
      * @internal
      */
     public function setParams(array $params): void
     {
         $this->params = $params;
+    }
+
+    /**
+     * @return array<Element|string>|Element|string
+     */
+    protected function getChildren(): array|Element|string
+    {
+        return $this->children;
     }
 
     protected function getParam(string $name): ?string

@@ -90,7 +90,7 @@ final class FileEtagStoreTest extends TestCase
             return;
         }
         foreach (\scandir($dir) ?: [] as $entry) {
-            if ($entry === '.' || $entry === '..') {
+            if ('.' === $entry || '..' === $entry) {
                 continue;
             }
             $path = $dir . '/' . $entry;

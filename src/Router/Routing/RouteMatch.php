@@ -7,14 +7,13 @@ namespace Polidog\Relayer\Router\Routing;
 final class RouteMatch
 {
     /**
-     * @param Route $route The matched route
+     * @param Route                 $route  The matched route
      * @param array<string, string> $params Extracted parameters from dynamic segments
      */
     public function __construct(
         public readonly Route $route,
         public readonly array $params,
-    ) {
-    }
+    ) {}
 
     public function getParam(string $name): ?string
     {

@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests;
 
 use PHPUnit\Framework\TestCase;
-use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\AppConfigurator;
 use Polidog\Relayer\Relayer;
+use Polidog\Relayer\Router\AppRouter;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 final class RelayerBootTest extends TestCase
 {
@@ -25,8 +27,7 @@ final class RelayerBootTest extends TestCase
     protected function tearDown(): void
     {
         $this->rrmdir($this->projectRoot);
-        unset($_ENV['APP_ENV'], $_ENV['FRAMEWORK_TEST_VALUE']);
-        unset($_SERVER['APP_ENV'], $_SERVER['FRAMEWORK_TEST_VALUE']);
+        unset($_ENV['APP_ENV'], $_ENV['FRAMEWORK_TEST_VALUE'], $_SERVER['APP_ENV'], $_SERVER['FRAMEWORK_TEST_VALUE']);
     }
 
     public function testBootReturnsAppRouterAndLoadsEnv(): void
@@ -52,21 +53,21 @@ final class RelayerBootTest extends TestCase
         \mkdir($this->projectRoot . '/config', 0o755, true);
         \file_put_contents(
             $this->projectRoot . '/config/services.yaml',
-            <<<YAML
+            <<<'YAML'
             services:
               _defaults:
                 autowire: true
                 public: true
 
-              Polidog\\Relayer\\Tests\\Fixtures\\PlainService: ~
-              Polidog\\Relayer\\Tests\\Fixtures\\ServiceWithDependency: ~
+              Polidog\Relayer\Tests\Fixtures\PlainService: ~
+              Polidog\Relayer\Tests\Fixtures\ServiceWithDependency: ~
             YAML,
         );
 
-        $configurator = new class ($this->projectRoot) extends \Polidog\Relayer\AppConfigurator {
-            public ?\Symfony\Component\DependencyInjection\ContainerBuilder $captured = null;
+        $configurator = new class($this->projectRoot) extends AppConfigurator {
+            public ?ContainerBuilder $captured = null;
 
-            public function configure(\Symfony\Component\DependencyInjection\ContainerBuilder $container): void
+            public function configure(ContainerBuilder $container): void
             {
                 $this->captured = $container;
             }
@@ -85,7 +86,7 @@ final class RelayerBootTest extends TestCase
             return;
         }
         foreach (\scandir($dir) ?: [] as $entry) {
-            if ($entry === '.' || $entry === '..') {
+            if ('.' === $entry || '..' === $entry) {
                 continue;
             }
             $path = $dir . '/' . $entry;

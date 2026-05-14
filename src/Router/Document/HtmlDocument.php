@@ -9,11 +9,14 @@ final class HtmlDocument implements DocumentInterface
     private string $lang = 'en';
     private string $title = 'usePHP App';
     private string $jsPath = '/usephp.js';
+
     /** @var array<int, string> */
     private array $cssPaths = [];
     private bool $includeDefaultStyles = true;
+
     /** @var array<int, string> */
     private array $headHtml = [];
+
     /** @var array<string, string> */
     private array $metadata = [];
 
@@ -25,18 +28,21 @@ final class HtmlDocument implements DocumentInterface
     public function setLang(string $lang): self
     {
         $this->lang = $lang;
+
         return $this;
     }
 
     public function setTitle(string $title): self
     {
         $this->title = $title;
+
         return $this;
     }
 
     public function addHeadHtml(string $html): self
     {
         $this->headHtml[] = $html;
+
         return $this;
     }
 
@@ -46,24 +52,28 @@ final class HtmlDocument implements DocumentInterface
     public function setMetadata(array $metadata): self
     {
         $this->metadata = $metadata;
+
         return $this;
     }
 
     public function setJsPath(string $path): self
     {
         $this->jsPath = $path;
+
         return $this;
     }
 
     public function addCssPath(string $path): self
     {
         $this->cssPaths[] = $path;
+
         return $this;
     }
 
     public function disableDefaultStyles(): self
     {
         $this->includeDefaultStyles = false;
+
         return $this;
     }
 
@@ -73,9 +83,9 @@ final class HtmlDocument implements DocumentInterface
         $defaultStyles = $this->getDefaultStyles();
         $headHtml = $this->getHeadHtml();
         $title = $this->getTitle();
-        $escapedTitle = htmlspecialchars($title, ENT_QUOTES, 'UTF-8');
-        $escapedLang = htmlspecialchars($this->lang, ENT_QUOTES, 'UTF-8');
-        $escapedJsPath = htmlspecialchars($this->jsPath, ENT_QUOTES, 'UTF-8');
+        $escapedTitle = \htmlspecialchars($title, \ENT_QUOTES, 'UTF-8');
+        $escapedLang = \htmlspecialchars($this->lang, \ENT_QUOTES, 'UTF-8');
+        $escapedJsPath = \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8');
         $metaTags = $this->getMetaTags();
 
         return <<<HTML
@@ -100,9 +110,9 @@ HTML;
 
     public function renderError(int $statusCode, string $message): string
     {
-        $escapedMessage = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
-        $escapedTitle = htmlspecialchars("{$statusCode} - {$message}", ENT_QUOTES, 'UTF-8');
-        $escapedLang = htmlspecialchars($this->lang, ENT_QUOTES, 'UTF-8');
+        $escapedMessage = \htmlspecialchars($message, \ENT_QUOTES, 'UTF-8');
+        $escapedTitle = \htmlspecialchars("{$statusCode} - {$message}", \ENT_QUOTES, 'UTF-8');
+        $escapedLang = \htmlspecialchars($this->lang, \ENT_QUOTES, 'UTF-8');
         $cssLinks = $this->getCssLinks();
         $headHtml = $this->getHeadHtml();
         $defaultStyles = $this->getDefaultErrorStyles();
@@ -132,34 +142,34 @@ HTML;
 
     private function getCssLinks(): string
     {
-        if ($this->cssPaths === []) {
+        if ([] === $this->cssPaths) {
             return '';
         }
 
         $links = [];
 
         foreach ($this->cssPaths as $path) {
-            $escapedPath = htmlspecialchars($path, ENT_QUOTES, 'UTF-8');
-            $links[] = sprintf('<link rel="stylesheet" href="%s">', $escapedPath);
+            $escapedPath = \htmlspecialchars($path, \ENT_QUOTES, 'UTF-8');
+            $links[] = \sprintf('<link rel="stylesheet" href="%s">', $escapedPath);
         }
 
-        return implode("\n    ", $links);
+        return \implode("\n    ", $links);
     }
 
     private function getHeadHtml(): string
     {
-        if ($this->headHtml === []) {
+        if ([] === $this->headHtml) {
             return '';
         }
 
-        return implode("\n    ", $this->headHtml);
+        return \implode("\n    ", $this->headHtml);
     }
 
     private function getTitle(): string
     {
         $title = $this->metadata['title'] ?? null;
 
-        if (is_string($title) && $title !== '') {
+        if (\is_string($title) && '' !== $title) {
             return $title;
         }
 
@@ -168,41 +178,43 @@ HTML;
 
     private function getMetaTags(): string
     {
-        if ($this->metadata === []) {
+        if ([] === $this->metadata) {
             return '';
         }
 
         $tags = [];
 
         foreach ($this->metadata as $key => $value) {
-            if (!is_string($value) || $value === '') {
+            if ('' === $value) {
                 continue;
             }
 
-            if ($key === 'title') {
+            if ('title' === $key) {
                 continue;
             }
 
-            $escapedValue = htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+            $escapedValue = \htmlspecialchars($value, \ENT_QUOTES, 'UTF-8');
 
-            if ($key === 'description') {
-                $tags[] = sprintf('<meta name="description" content="%s">', $escapedValue);
+            if ('description' === $key) {
+                $tags[] = \sprintf('<meta name="description" content="%s">', $escapedValue);
+
                 continue;
             }
 
-            if (str_starts_with($key, 'og:')) {
-                $tags[] = sprintf('<meta property="%s" content="%s">', htmlspecialchars($key, ENT_QUOTES, 'UTF-8'), $escapedValue);
+            if (\str_starts_with($key, 'og:')) {
+                $tags[] = \sprintf('<meta property="%s" content="%s">', \htmlspecialchars($key, \ENT_QUOTES, 'UTF-8'), $escapedValue);
+
                 continue;
             }
 
-            $tags[] = sprintf('<meta name="%s" content="%s">', htmlspecialchars($key, ENT_QUOTES, 'UTF-8'), $escapedValue);
+            $tags[] = \sprintf('<meta name="%s" content="%s">', \htmlspecialchars($key, \ENT_QUOTES, 'UTF-8'), $escapedValue);
         }
 
-        if ($tags === []) {
+        if ([] === $tags) {
             return '';
         }
 
-        return implode("\n    ", $tags);
+        return \implode("\n    ", $tags);
     }
 
     private function getDefaultStyles(): string
@@ -211,7 +223,7 @@ HTML;
             return '';
         }
 
-        return <<<HTML
+        return <<<'HTML'
     <style>
         * { box-sizing: border-box; }
         body {
@@ -234,7 +246,7 @@ HTML;
             return '';
         }
 
-        return <<<HTML
+        return <<<'HTML'
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

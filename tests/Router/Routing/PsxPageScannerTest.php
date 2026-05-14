@@ -6,8 +6,9 @@ namespace Polidog\Relayer\Tests\Router\Routing;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Routing\PageScanner;
+use RuntimeException;
 
-class PsxPageScannerTest extends TestCase
+final class PsxPageScannerTest extends TestCase
 {
     private string $fixturesDir;
 
@@ -49,12 +50,13 @@ class PsxPageScannerTest extends TestCase
     {
         $tmp = \sys_get_temp_dir() . '/psx-scanner-' . \uniqid();
         \mkdir($tmp, 0o777, true);
+
         try {
             \file_put_contents($tmp . '/page.psx', "<?php\nreturn fn() => null;\n");
             \file_put_contents($tmp . '/page.php', "<?php\nreturn fn() => null;\n");
 
             $scanner = new PageScanner($tmp);
-            $this->expectException(\RuntimeException::class);
+            $this->expectException(RuntimeException::class);
             $this->expectExceptionMessage('Both page.psx and page.php exist');
             $scanner->scan();
         } finally {

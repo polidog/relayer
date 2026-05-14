@@ -7,7 +7,9 @@ namespace Polidog\Relayer\Tests\Http;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Http\CachePolicy;
-use Polidog\Relayer\Tests\Fixtures;
+use Polidog\Relayer\Tests\Fixtures\CachedPage;
+use Polidog\Relayer\Tests\Fixtures\DynamicEtagPage;
+use stdClass;
 
 final class CachePolicyTest extends TestCase
 {
@@ -65,17 +67,17 @@ final class CachePolicyTest extends TestCase
 
     public function testExtractReturnsNullForClassWithoutAttribute(): void
     {
-        self::assertNull(CachePolicy::extract(\stdClass::class));
+        self::assertNull(CachePolicy::extract(stdClass::class));
     }
 
     public function testExtractReturnsNullForUnknownClass(): void
     {
-        self::assertNull(CachePolicy::extract('Nope\\Missing'));
+        self::assertNull(CachePolicy::extract('Nope\Missing'));
     }
 
     public function testExtractReturnsAttributeInstance(): void
     {
-        $cache = CachePolicy::extract(\Polidog\Relayer\Tests\Fixtures\CachedPage::class);
+        $cache = CachePolicy::extract(CachedPage::class);
 
         self::assertInstanceOf(Cache::class, $cache);
         self::assertSame(3600, $cache->maxAge);
@@ -223,7 +225,7 @@ final class CachePolicyTest extends TestCase
         ]);
 
         $effective = CachePolicy::applyFromAttribute(
-            \Polidog\Relayer\Tests\Fixtures\DynamicEtagPage::class,
+            DynamicEtagPage::class,
             $store,
         );
 

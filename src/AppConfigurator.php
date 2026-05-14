@@ -19,9 +19,7 @@ use Symfony\Component\DependencyInjection\ContainerBuilder;
  */
 class AppConfigurator
 {
-    public function __construct(protected readonly string $projectRoot)
-    {
-    }
+    public function __construct(protected readonly string $projectRoot) {}
 
     public function configure(ContainerBuilder $container): void
     {

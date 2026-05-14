@@ -4,11 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router;
 
-use Psr\Container\ContainerInterface;
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Component\ComponentInterface;
-use Polidog\UsePhp\Runtime\Action;
-use Polidog\UsePhp\Runtime\ComponentState;
+use Closure;
+use JsonException;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
@@ -21,6 +18,14 @@ use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
+use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\UsePhp\Component\ComponentInterface;
+use Polidog\UsePhp\Psx\CompileCommand;
+use Polidog\UsePhp\Psx\Compiler;
+use Polidog\UsePhp\Runtime\Action;
+use Polidog\UsePhp\Runtime\ComponentState;
+use Psr\Container\ContainerInterface;
+use RuntimeException;
 
 class AppRouter
 {
@@ -37,7 +42,7 @@ class AppRouter
         bool $autoCompilePsx = false,
         ?string $psxCacheDir = null,
     ) {
-        $this->appDirectory = rtrim($appDirectory, '/');
+        $this->appDirectory = \rtrim($appDirectory, '/');
         $this->container = $container;
         $this->router = Router::create($this->appDirectory);
         $this->document = new HtmlDocument();
@@ -65,6 +70,7 @@ class AppRouter
     public function setContainer(ContainerInterface $container): self
     {
         $this->container = $container;
+
         return $this;
     }
 
@@ -73,6 +79,7 @@ class AppRouter
         if ($this->document instanceof HtmlDocument) {
             $this->document->setJsPath($path);
         }
+
         return $this;
     }
 
@@ -81,12 +88,14 @@ class AppRouter
         if ($this->document instanceof HtmlDocument) {
             $this->document->addCssPath($path);
         }
+
         return $this;
     }
 
     public function setDocument(DocumentInterface $document): self
     {
         $this->document = $document;
+
         return $this;
     }
 
@@ -96,8 +105,9 @@ class AppRouter
 
         $match = $this->router->match($path);
 
-        if ($match === null) {
+        if (null === $match) {
             $this->handleNotFound();
+
             return;
         }
 
@@ -110,8 +120,9 @@ class AppRouter
 
         $pageComponent = $this->loadPage($match->getPagePath(), $match->getParams());
 
-        if ($pageComponent === null) {
+        if (null === $pageComponent) {
             $this->handleNotFound();
+
             return;
         }
 
@@ -120,25 +131,26 @@ class AppRouter
 
     private function handleNotFound(): void
     {
-        http_response_code(404);
+        \http_response_code(404);
 
         $errorPagePath = $this->router->getErrorPagePath();
 
-        if ($errorPagePath !== null) {
+        if (null !== $errorPagePath) {
             $errorComponent = $this->loadErrorPage($errorPagePath, 404, 'Page not found');
 
-            if ($errorComponent !== null) {
+            if (null !== $errorComponent) {
                 $rootLayoutPath = $this->findRootLayoutPath();
                 $layoutStack = new LayoutStack();
 
-                if ($rootLayoutPath !== null) {
+                if (null !== $rootLayoutPath) {
                     $layout = $this->loadLayoutFromFile($rootLayoutPath, []);
-                    if ($layout !== null) {
+                    if (null !== $layout) {
                         $layoutStack->push($layout);
                     }
                 }
 
                 $this->renderPage($errorComponent, $layoutStack, []);
+
                 return;
             }
         }
@@ -147,7 +159,7 @@ class AppRouter
     }
 
     /**
-     * @param array<string> $layoutPaths
+     * @param array<string>         $layoutPaths
      * @param array<string, string> $params
      */
     private function loadLayouts(array $layoutPaths, array $params): LayoutStack
@@ -156,7 +168,7 @@ class AppRouter
 
         foreach ($layoutPaths as $layoutPath) {
             $layout = $this->loadLayoutFromFile($layoutPath, $params);
-            if ($layout !== null) {
+            if (null !== $layout) {
                 $stack->push($layout);
             }
         }
@@ -169,12 +181,12 @@ class AppRouter
      */
     private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
     {
-        if (!file_exists($filePath)) {
+        if (!\file_exists($filePath)) {
             return null;
         }
 
         // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (str_ends_with($filePath, '.psx')) {
+        if (\str_ends_with($filePath, '.psx')) {
             $filePath = $this->resolveCompiledPsxPath($filePath);
         }
 
@@ -182,11 +194,11 @@ class AppRouter
 
         $className = $this->getClassFromFile($filePath);
 
-        if ($className === null) {
+        if (null === $className) {
             return null;
         }
 
-        if (!class_exists($className)) {
+        if (!\class_exists($className)) {
             return null;
         }
 
@@ -208,26 +220,26 @@ class AppRouter
      */
     private function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
-        if (!file_exists($pagePath)) {
+        if (!\file_exists($pagePath)) {
             return null;
         }
 
         // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (str_ends_with($pagePath, '.psx')) {
+        if (\str_ends_with($pagePath, '.psx')) {
             $pagePath = $this->resolveCompiledPsxPath($pagePath);
         }
 
         $result = require_once $pagePath;
 
         // Closure return: function-based page
-        if ($result instanceof \Closure) {
+        if ($result instanceof Closure) {
             return $this->buildFunctionPage($result, $pagePath, $params);
         }
 
         // Class-based page (fallback)
         $className = $this->getClassFromFile($pagePath);
 
-        if ($className !== null && class_exists($className)) {
+        if (null !== $className && \class_exists($className)) {
             $instance = $this->resolveInstance($className);
 
             if ($instance instanceof ComponentInterface) {
@@ -245,10 +257,13 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function buildFunctionPage(\Closure $factory, string $pagePath, array $params): FunctionPage
+    private function buildFunctionPage(Closure $factory, string $pagePath, array $params): FunctionPage
     {
         $context = new Component\PageContext($params);
         $renderFn = $factory($context);
+        if (!$renderFn instanceof Closure) {
+            throw new RuntimeException("Page factory did not return a Closure: {$pagePath}");
+        }
         $pageId = $this->computePageId($pagePath);
 
         return new FunctionPage($renderFn, $context, $pageId);
@@ -256,10 +271,10 @@ class AppRouter
 
     private function computePageId(string $pagePath): string
     {
-        $relative = str_replace($this->appDirectory, '', $pagePath);
-        $relative = preg_replace('#/page\.(psx\.php|psx|php)$#', '', $relative);
+        $relative = \str_replace($this->appDirectory, '', $pagePath);
+        $relative = (string) \preg_replace('#/page\.(psx\.php|psx|php)$#', '', $relative);
 
-        if ($relative === '' || $relative === '/') {
+        if ('' === $relative || '/' === $relative) {
             return '/';
         }
 
@@ -286,34 +301,36 @@ class AppRouter
         $compiledPath = $this->cachePathFor($psxPath);
 
         if (!$this->autoCompilePsx) {
-            if (!file_exists($compiledPath)) {
-                throw new \RuntimeException(
-                    "Compiled PSX not found for $psxPath (expected $compiledPath). "
+            if (!\file_exists($compiledPath)) {
+                throw new RuntimeException(
+                    "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
                     . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
-                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.'
+                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
                 );
             }
+
             return $compiledPath;
         }
 
-        if (!class_exists('Polidog\\UsePhp\\Psx\\Compiler')) {
-            throw new \RuntimeException(
-                'autoCompilePsx is enabled but Polidog\\UsePhp\\Psx\\Compiler '
-                . 'is not available. Update polidog/use-php to a version with PSX support.'
+        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
+            throw new RuntimeException(
+                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
+                . 'is not available. Update polidog/use-php to a version with PSX support.',
             );
         }
 
-        $needsCompile = !file_exists($compiledPath)
-            || @filemtime($compiledPath) < @filemtime($psxPath);
+        $needsCompile = !\file_exists($compiledPath)
+            || @\filemtime($compiledPath) < @\filemtime($psxPath);
 
         if ($needsCompile) {
             $this->ensureCacheDir();
-            $compilerClass = 'Polidog\\UsePhp\\Psx\\Compiler';
-            /** @var object{compile: callable} $compiler */
+            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
+
+            /** @var Compiler $compiler */
             $compiler = new $compilerClass();
-            $source = file_get_contents($psxPath);
-            if ($source === false) {
-                throw new \RuntimeException("Failed to read PSX source: $psxPath");
+            $source = \file_get_contents($psxPath);
+            if (false === $source) {
+                throw new RuntimeException("Failed to read PSX source: {$psxPath}");
             }
             $compiled = $compiler->compile($source);
             $this->atomicWrite($compiledPath, $compiled);
@@ -332,16 +349,18 @@ class AppRouter
     {
         $dir = \dirname($destination);
         $tmp = @\tempnam($dir, 'psx-');
-        if ($tmp === false) {
-            throw new \RuntimeException("Failed to create temp file in $dir");
+        if (false === $tmp) {
+            throw new RuntimeException("Failed to create temp file in {$dir}");
         }
-        if (\file_put_contents($tmp, $content) === false) {
+        if (false === \file_put_contents($tmp, $content)) {
             @\unlink($tmp);
-            throw new \RuntimeException("Failed to write temp file: $tmp");
+
+            throw new RuntimeException("Failed to write temp file: {$tmp}");
         }
         if (!@\rename($tmp, $destination)) {
             @\unlink($tmp);
-            throw new \RuntimeException("Failed to rename $tmp to $destination");
+
+            throw new RuntimeException("Failed to rename {$tmp} to {$destination}");
         }
     }
 
@@ -350,8 +369,8 @@ class AppRouter
         // Mirror usePHP's CompileCommand::cachePathFor — same hashing + naming
         // so a pre-compiled cache produced by `vendor/bin/usephp compile` is
         // findable here without consulting the manifest.
-        if (\class_exists('Polidog\\UsePhp\\Psx\\CompileCommand')) {
-            return \Polidog\UsePhp\Psx\CompileCommand::cachePathFor(
+        if (\class_exists('Polidog\UsePhp\Psx\CompileCommand')) {
+            return CompileCommand::cachePathFor(
                 $this->psxCacheDir,
                 $sourcePath,
             );
@@ -359,27 +378,28 @@ class AppRouter
         // Fallback (CompileCommand not loaded for some reason): use the same
         // algorithm so we never disagree with the upstream tool.
         $abs = \realpath($sourcePath);
-        if ($abs === false) {
+        if (false === $abs) {
             $abs = $sourcePath;
         }
-        return rtrim($this->psxCacheDir, '/') . '/' . sha1($abs) . '.php';
+
+        return \rtrim($this->psxCacheDir, '/') . '/' . \sha1($abs) . '.php';
     }
 
     private function ensureCacheDir(): void
     {
-        if (!is_dir($this->psxCacheDir)) {
-            @mkdir($this->psxCacheDir, 0o755, true);
+        if (!\is_dir($this->psxCacheDir)) {
+            @\mkdir($this->psxCacheDir, 0o755, true);
         }
     }
 
     private function loadErrorPage(string $errorPath, int $statusCode, string $message): ?ComponentInterface
     {
-        if (!file_exists($errorPath)) {
+        if (!\file_exists($errorPath)) {
             return null;
         }
 
         // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (str_ends_with($errorPath, '.psx')) {
+        if (\str_ends_with($errorPath, '.psx')) {
             $errorPath = $this->resolveCompiledPsxPath($errorPath);
         }
 
@@ -387,11 +407,11 @@ class AppRouter
 
         $className = $this->getClassFromFile($errorPath);
 
-        if ($className === null) {
+        if (null === $className) {
             return null;
         }
 
-        if (!class_exists($className)) {
+        if (!\class_exists($className)) {
             return null;
         }
 
@@ -434,23 +454,27 @@ class AppRouter
         $pageElement = $page->render();
 
         if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
-            $this->document->setMetadata($page->getMetadata());
+            /** @var array<string, string> $metadata */
+            $metadata = $page->getMetadata();
+            $this->document->setMetadata($metadata);
         } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
             $this->document->setMetadata($page->getMetadata());
         }
 
-        $renderer = new LayoutRenderer($componentId, $_SERVER['REQUEST_URI'] ?? '/');
+        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
         $html = $renderer->render($pageElement, $layouts);
 
         if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
             echo $html;
+
             return;
         }
 
-        $wrappedHtml = sprintf(
+        $wrappedHtml = \sprintf(
             '<div data-usephp="%s">%s</div>',
-            htmlspecialchars($componentId, ENT_QUOTES, 'UTF-8'),
-            $html
+            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
+            $html,
         );
 
         $output = $this->document->render($wrappedHtml);
@@ -470,12 +494,12 @@ class AppRouter
         $actionJson = $_POST['_usephp_action'] ?? null;
         $postComponentId = $_POST['_usephp_component'] ?? null;
 
-        if (!is_string($actionJson) || !is_string($postComponentId)) {
+        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
             return;
         }
 
         // Only handle JSON actions (not usephp-action: form tokens)
-        if (str_starts_with($actionJson, 'usephp-action:')) {
+        if (\str_starts_with($actionJson, 'usephp-action:')) {
             return;
         }
 
@@ -484,33 +508,48 @@ class AppRouter
         }
 
         try {
-            $actionData = json_decode($actionJson, true, 512, JSON_THROW_ON_ERROR);
+            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
+            if (!\is_array($actionData)) {
+                return;
+            }
+
+            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
             $action = Action::fromArray($actionData);
 
-            if ($action->type === 'setState') {
+            if ('setState' === $action->type) {
                 $index = $action->payload['index'] ?? 0;
                 $value = $action->payload['value'] ?? null;
+                if (!\is_int($index)) {
+                    return;
+                }
                 $state->setState($index, $value);
             }
-        } catch (\JsonException) {
+        } catch (JsonException) {
             return;
         }
 
         // PRG pattern: redirect after state change (non-AJAX)
         if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            $redirectUrl = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
-            header('Location: ' . $redirectUrl, true, 303);
+            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
+            \header('Location: ' . $redirectUrl, true, 303);
+
             exit;
         }
     }
 
     /**
      * Resolve a class instance using the container or direct instantiation.
+     *
+     * @param class-string $className
      */
     private function resolveInstance(string $className): object
     {
-        if ($this->container !== null && $this->container->has($className)) {
-            return $this->container->get($className);
+        if (null !== $this->container && $this->container->has($className)) {
+            $instance = $this->container->get($className);
+            \assert(\is_object($instance));
+
+            return $instance;
         }
 
         return new $className();
@@ -518,77 +557,79 @@ class AppRouter
 
     private function getClassFromFile(string $filePath): ?string
     {
-        $content = file_get_contents($filePath);
+        $content = \file_get_contents($filePath);
 
-        if ($content === false) {
+        if (false === $content) {
             return null;
         }
 
-        $tokens = token_get_all($content);
-        $tokenCount = count($tokens);
+        $tokens = \token_get_all($content);
+        $tokenCount = \count($tokens);
         $namespace = null;
         $className = null;
 
-        for ($i = 0; $i < $tokenCount; $i++) {
+        for ($i = 0; $i < $tokenCount; ++$i) {
             $token = $tokens[$i];
 
-            if (!is_array($token)) {
+            if (!\is_array($token)) {
                 continue;
             }
 
-            if ($token[0] === T_NAMESPACE) {
+            if (\T_NAMESPACE === $token[0]) {
                 $namespaceParts = [];
-                $i++;
+                ++$i;
 
                 while ($i < $tokenCount) {
                     $nextToken = $tokens[$i];
 
-                    if ($nextToken === ';' || $nextToken === '{') {
+                    if (';' === $nextToken || '{' === $nextToken) {
                         break;
                     }
 
-                    if (is_array($nextToken)) {
-                        if ($nextToken[0] === T_NAME_QUALIFIED || $nextToken[0] === T_STRING) {
+                    if (\is_array($nextToken)) {
+                        if (\T_NAME_QUALIFIED === $nextToken[0] || \T_STRING === $nextToken[0]) {
                             $namespaceParts[] = $nextToken[1];
                         }
                     }
 
-                    $i++;
+                    ++$i;
                 }
 
-                $namespace = implode('', $namespaceParts);
+                $namespace = \implode('', $namespaceParts);
             }
 
-            if ($token[0] === T_CLASS) {
-                $i++;
+            if (\T_CLASS === $token[0]) {
+                ++$i;
 
                 while ($i < $tokenCount) {
                     $nextToken = $tokens[$i];
 
-                    if (is_array($nextToken) && $nextToken[0] === T_STRING) {
+                    if (\is_array($nextToken) && \T_STRING === $nextToken[0]) {
                         $className = $nextToken[1];
+
                         break;
                     }
 
-                    if (is_array($nextToken) && $nextToken[0] === T_WHITESPACE) {
-                        $i++;
+                    if (\is_array($nextToken) && \T_WHITESPACE === $nextToken[0]) {
+                        ++$i;
+
                         continue;
                     }
 
                     break;
                 }
 
-                if ($className !== null) {
+                if (null !== $className) {
                     break;
                 }
             }
         }
 
-        if ($className === null) {
+        if (null === $className) {
             return null;
         }
 
-        if ($namespace !== null) {
+        if (null !== $namespace) {
             return $namespace . '\\' . $className;
         }
 
@@ -599,18 +640,22 @@ class AppRouter
     {
         foreach (['layout.psx', 'layout.php'] as $name) {
             $candidate = $this->appDirectory . '/' . $name;
-            if (file_exists($candidate)) {
+            if (\file_exists($candidate)) {
                 return $candidate;
             }
         }
+
         return null;
     }
 
     private function getRequestPath(): string
     {
         $uri = $_SERVER['REQUEST_URI'] ?? '/';
-        $path = parse_url($uri, PHP_URL_PATH);
+        if (!\is_string($uri)) {
+            return '/';
+        }
+        $path = \parse_url($uri, \PHP_URL_PATH);
 
-        return $path ?? '/';
+        return \is_string($path) ? $path : '/';
     }
 }

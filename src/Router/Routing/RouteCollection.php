@@ -31,6 +31,7 @@ final class RouteCollection implements IteratorAggregate, Countable
     public function all(): array
     {
         $this->sort();
+
         return $this->routes;
     }
 
@@ -40,7 +41,7 @@ final class RouteCollection implements IteratorAggregate, Countable
 
         foreach ($this->routes as $route) {
             $params = $route->match($path);
-            if ($params !== null) {
+            if (null !== $params) {
                 return new RouteMatch($route, $params);
             }
         }
@@ -50,7 +51,7 @@ final class RouteCollection implements IteratorAggregate, Countable
 
     public function count(): int
     {
-        return count($this->routes);
+        return \count($this->routes);
     }
 
     /**
@@ -59,6 +60,7 @@ final class RouteCollection implements IteratorAggregate, Countable
     public function getIterator(): Traversable
     {
         $this->sort();
+
         return new ArrayIterator($this->routes);
     }
 
@@ -68,7 +70,7 @@ final class RouteCollection implements IteratorAggregate, Countable
             return;
         }
 
-        usort($this->routes, function (Route $a, Route $b): int {
+        \usort($this->routes, static function (Route $a, Route $b): int {
             $aDynamic = $a->isDynamic() ? 1 : 0;
             $bDynamic = $b->isDynamic() ? 1 : 0;
 

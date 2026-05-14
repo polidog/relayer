@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Http;
 
+use Attribute;
+
 /**
  * Declare HTTP cache policy on a Page class.
  *
@@ -20,24 +22,24 @@ namespace Polidog\Relayer\Http;
  *   #[Cache(maxAge: 3600, public: true, etag: 'home-v1')]
  *   final class HomePage extends PageComponent {}
  */
-#[\Attribute(\Attribute::TARGET_CLASS)]
+#[Attribute(Attribute::TARGET_CLASS)]
 final class Cache
 {
     /**
-     * @param int|null      $maxAge          `max-age` directive (seconds).
-     * @param int|null      $sMaxAge         `s-maxage` directive (seconds, shared/CDN cache).
-     * @param bool          $public          Emit `public` directive.
-     * @param bool          $private         Emit `private` directive.
-     * @param bool          $noStore         Emit `no-store`.
-     * @param bool          $noCache         Emit `no-cache`.
-     * @param bool          $mustRevalidate  Emit `must-revalidate`.
-     * @param bool          $immutable       Emit `immutable`.
-     * @param string[]      $vary            Values for the `Vary` header.
-     * @param string|null   $etag            Literal ETag value (raw or already quoted).
-     * @param bool          $etagWeak        Emit ETag as a weak validator (`W/"…"`).
-     * @param string|null   $lastModified    `Last-Modified` value (anything `strtotime()` accepts; UTC recommended).
-     * @param string|null   $etagKey         Logical key looked up against the configured `EtagStore`.
-     *                                       Static `etag` takes precedence when both are set.
+     * @param null|int    $maxAge         `max-age` directive (seconds)
+     * @param null|int    $sMaxAge        `s-maxage` directive (seconds, shared/CDN cache)
+     * @param bool        $public         emit `public` directive
+     * @param bool        $private        emit `private` directive
+     * @param bool        $noStore        emit `no-store`
+     * @param bool        $noCache        emit `no-cache`
+     * @param bool        $mustRevalidate emit `must-revalidate`
+     * @param bool        $immutable      emit `immutable`
+     * @param string[]    $vary           values for the `Vary` header
+     * @param null|string $etag           literal ETag value (raw or already quoted)
+     * @param bool        $etagWeak       emit ETag as a weak validator (`W/"…"`)
+     * @param null|string $lastModified   `Last-Modified` value (anything `strtotime()` accepts; UTC recommended)
+     * @param null|string $etagKey        Logical key looked up against the configured `EtagStore`.
+     *                                    Static `etag` takes precedence when both are set.
      */
     public function __construct(
         public readonly ?int $maxAge = null,
@@ -53,6 +55,5 @@ final class Cache
         public readonly bool $etagWeak = false,
         public readonly ?string $lastModified = null,
         public readonly ?string $etagKey = null,
-    ) {
-    }
+    ) {}
 }

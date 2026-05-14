@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Routing\Route;
 use Polidog\Relayer\Router\Routing\RouteCollection;
 
-class RouteCollectionTest extends TestCase
+final class RouteCollectionTest extends TestCase
 {
     public function testMatchStaticRoute(): void
     {
@@ -35,8 +35,8 @@ class RouteCollectionTest extends TestCase
         ));
 
         $match = $collection->match('/about');
-        $this->assertNotNull($match);
-        $this->assertSame('/about', $match->route->pattern);
+        self::assertNotNull($match);
+        self::assertSame('/about', $match->route->pattern);
     }
 
     public function testMatchRootRoute(): void
@@ -54,8 +54,8 @@ class RouteCollectionTest extends TestCase
         ));
 
         $match = $collection->match('/');
-        $this->assertNotNull($match);
-        $this->assertSame('/', $match->route->pattern);
+        self::assertNotNull($match);
+        self::assertSame('/', $match->route->pattern);
     }
 
     public function testMatchDynamicRoute(): void
@@ -73,8 +73,8 @@ class RouteCollectionTest extends TestCase
         ));
 
         $match = $collection->match('/blog/my-post');
-        $this->assertNotNull($match);
-        $this->assertSame('my-post', $match->getParam('slug'));
+        self::assertNotNull($match);
+        self::assertSame('my-post', $match->getParam('slug'));
     }
 
     public function testNoMatch(): void
@@ -91,7 +91,7 @@ class RouteCollectionTest extends TestCase
             totalSegments: 0,
         ));
 
-        $this->assertNull($collection->match('/nonexistent'));
+        self::assertNull($collection->match('/nonexistent'));
     }
 
     public function testStaticRoutePriorityOverDynamic(): void
@@ -122,15 +122,15 @@ class RouteCollectionTest extends TestCase
 
         // Static should match first
         $match = $collection->match('/blog/featured');
-        $this->assertNotNull($match);
-        $this->assertSame('/blog/featured', $match->route->pattern);
-        $this->assertSame([], $match->getParams());
+        self::assertNotNull($match);
+        self::assertSame('/blog/featured', $match->route->pattern);
+        self::assertSame([], $match->getParams());
     }
 
     public function testCount(): void
     {
         $collection = new RouteCollection();
-        $this->assertCount(0, $collection);
+        self::assertCount(0, $collection);
 
         $collection->add(new Route(
             pattern: '/',
@@ -142,7 +142,7 @@ class RouteCollectionTest extends TestCase
             totalSegments: 0,
         ));
 
-        $this->assertCount(1, $collection);
+        self::assertCount(1, $collection);
     }
 
     public function testIterable(): void
@@ -174,6 +174,6 @@ class RouteCollectionTest extends TestCase
             $routes[] = $route->pattern;
         }
 
-        $this->assertCount(2, $routes);
+        self::assertCount(2, $routes);
     }
 }

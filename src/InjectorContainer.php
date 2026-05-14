@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
-use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
+use Polidog\Relayer\Router\Component\PageComponent;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
+use ReflectionClass;
+use ReflectionNamedType;
+use RuntimeException;
 use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
 
 /**
@@ -27,9 +30,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainer
  */
 final class InjectorContainer implements ContainerInterface
 {
-    public function __construct(private readonly SymfonyContainerInterface $container)
-    {
-    }
+    public function __construct(private readonly SymfonyContainerInterface $container) {}
 
     public function has(string $id): bool
     {
@@ -43,8 +44,9 @@ final class InjectorContainer implements ContainerInterface
         // dependencies (the whole point of a fast ETag store).
         if (\is_subclass_of($id, PageComponent::class)) {
             $cache = CachePolicy::applyFromAttribute($id, $this->resolveEtagStore());
-            if ($cache !== null && CachePolicy::isNotModified($cache)) {
+            if (null !== $cache && CachePolicy::isNotModified($cache)) {
                 CachePolicy::sendNotModified();
+
                 exit;
             }
         }
@@ -66,14 +68,11 @@ final class InjectorContainer implements ContainerInterface
     private function resolve(string $id): object
     {
         if ($this->container->has($id)) {
-            /** @var object $service */
-            $service = $this->container->get($id);
-
-            return $service;
+            return $this->container->get($id);
         }
 
         if (!\class_exists($id)) {
-            throw new class ("Service or class not found: $id") extends \RuntimeException implements NotFoundExceptionInterface {};
+            throw new class("Service or class not found: {$id}") extends RuntimeException implements NotFoundExceptionInterface {};
         }
 
         return $this->autowire($id);
@@ -83,36 +82,42 @@ final class InjectorContainer implements ContainerInterface
      * Reflection-based constructor autowiring for classes not registered in
      * the container. Each non-builtin typed parameter is resolved recursively
      * via `$this->get()`; parameters with defaults fall back to their default.
+     *
+     * @param class-string $id
      */
     private function autowire(string $id): object
     {
-        $reflection = new \ReflectionClass($id);
+        $reflection = new ReflectionClass($id);
 
         if (!$reflection->isInstantiable()) {
-            throw new class ("Class is not instantiable: $id") extends \RuntimeException implements NotFoundExceptionInterface {};
+            throw new class("Class is not instantiable: {$id}") extends RuntimeException implements NotFoundExceptionInterface {};
         }
 
         $constructor = $reflection->getConstructor();
-        if ($constructor === null || $constructor->getNumberOfParameters() === 0) {
+        if (null === $constructor || 0 === $constructor->getNumberOfParameters()) {
             return new $id();
         }
 
         $args = [];
         foreach ($constructor->getParameters() as $parameter) {
             $type = $parameter->getType();
-            if ($type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
+            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
                 $args[] = $this->get($type->getName());
+
                 continue;
             }
             if ($parameter->isDefaultValueAvailable()) {
                 $args[] = $parameter->getDefaultValue();
+
                 continue;
             }
             if ($parameter->allowsNull()) {
                 $args[] = null;
+
                 continue;
             }
-            throw new \RuntimeException(\sprintf(
+
+            throw new RuntimeException(\sprintf(
                 'Cannot autowire parameter $%s of %s: no type, default, or container binding.',
                 $parameter->getName(),
                 $id,
