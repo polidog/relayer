@@ -11,9 +11,11 @@ use Polidog\Relayer\Auth\NativeSession;
 use Polidog\Relayer\Auth\PasswordHasher;
 use Polidog\Relayer\Auth\SessionStorage;
 use Polidog\Relayer\Auth\TraceableAuthenticator;
+use Polidog\Relayer\Auth\TraceableSessionStorage;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
+use Polidog\Relayer\Http\TraceableEtagStore;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\NullProfiler;
 use Polidog\Relayer\Profiler\Profiler;
@@ -227,6 +229,31 @@ final class Relayer
                 ->setPublic(true)
             ;
             $container->setAlias(Profiler::class, RecordingProfiler::class)
+                ->setPublic(true)
+            ;
+
+            // Dev-only: swap EtagStore + SessionStorage aliases to point at
+            // the traceable decorators so cache.etag_* and session.* events
+            // land in the profile alongside the rest of the request timeline.
+            $container->register(TraceableEtagStore::class)
+                ->setArguments([
+                    new Reference(FileEtagStore::class),
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(EtagStore::class, TraceableEtagStore::class)
+                ->setPublic(true)
+            ;
+
+            $container->register(TraceableSessionStorage::class)
+                ->setArguments([
+                    new Reference(NativeSession::class),
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(SessionStorage::class, TraceableSessionStorage::class)
                 ->setPublic(true)
             ;
         }

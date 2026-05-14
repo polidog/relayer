@@ -12,6 +12,7 @@ use Polidog\Relayer\Profiler\ProfilerWebView;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Component\FunctionPage;
+use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\UsePhp\Component\ComponentInterface;
@@ -270,11 +271,44 @@ class TraceableAppRouter extends AppRouter
         return $result;
     }
 
+    protected function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
+    {
+        $layout = parent::loadLayoutFromFile($filePath, $params);
+        $this->profiler?->collect('layout', 'load', [
+            'filePath' => $filePath,
+            'loaded' => null !== $layout,
+        ]);
+
+        return $layout;
+    }
+
+    protected function resolveCompiledPsxPath(string $psxPath): string
+    {
+        // Time the resolution because in dev it may trigger an in-process
+        // PSX compile — a noticeable spike on first hit of a touched page.
+        $span = $this->profiler?->start('psx', 'compile');
+        $compiled = parent::resolveCompiledPsxPath($psxPath);
+        $span?->stop([
+            'source' => $psxPath,
+            'compiled' => $compiled,
+        ]);
+
+        return $compiled;
+    }
+
     protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
             : 'page:' . $page::class;
+
+        // Surface a server-action dispatch (form POST hitting `$ctx->action()`
+        // or a class-style `actionXyz` handler) as `action.dispatch`. The
+        // parent invokes `dispatchActionFromRequest()` inside renderPage,
+        // and the token format is the same for both page kinds — so we can
+        // detect the attempt by sniffing $_POST here without rerunning the
+        // dispatcher itself.
+        $this->recordActionDispatch($page);
 
         $span = $this->profiler?->start('page', 'render');
 
@@ -283,6 +317,29 @@ class TraceableAppRouter extends AppRouter
         } finally {
             $span?->stop(['componentId' => $componentId]);
         }
+    }
+
+    protected function recordActionDispatch(ComponentInterface|FunctionPage $page): void
+    {
+        if (null === $this->profiler) {
+            return;
+        }
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            return;
+        }
+        $token = $_POST['_usephp_action'] ?? null;
+        // `usephp-action:` prefix is the form-action token shape; raw JSON
+        // is the useState path (already covered by state.action).
+        if (!\is_string($token) || !\str_starts_with($token, 'usephp-action:')) {
+            return;
+        }
+
+        $this->profiler->collect('action', 'dispatch', [
+            'kind' => $page instanceof FunctionPage ? 'function' : 'class',
+            'page' => $page instanceof FunctionPage
+                ? $page->getComponentId()
+                : 'page:' . $page::class,
+        ]);
     }
 
     protected function dispatchStateAction(string $componentId, ComponentState $state): void

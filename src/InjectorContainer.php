@@ -10,6 +10,7 @@ use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
@@ -83,10 +84,26 @@ final class InjectorContainer implements ContainerInterface
             // page or its dependencies (the whole point of a fast ETag
             // store).
             $cache = CachePolicy::applyFromAttribute($id, $this->resolveEtagStore());
-            if (null !== $cache && CachePolicy::isNotModified($cache)) {
-                CachePolicy::sendNotModified();
+            if (null !== $cache) {
+                $profiler = $this->resolveProfiler();
+                $profiler?->collect('cache', 'apply', [
+                    'source' => 'attribute',
+                    'etag' => $cache->etag,
+                    'etagKey' => $cache->etagKey,
+                    'lastModified' => $cache->lastModified,
+                    'maxAge' => $cache->maxAge,
+                    'sMaxAge' => $cache->sMaxAge,
+                    'directives' => CachePolicy::buildDirectives($cache),
+                ]);
 
-                exit;
+                if (CachePolicy::isNotModified($cache)) {
+                    $profiler?->collect('cache', 'hit_304', [
+                        'etag' => $cache->etag,
+                    ]);
+                    CachePolicy::sendNotModified();
+
+                    exit;
+                }
             }
         }
 
@@ -115,6 +132,17 @@ final class InjectorContainer implements ContainerInterface
         $store = $this->container->get(EtagStore::class);
 
         return $store instanceof EtagStore ? $store : null;
+    }
+
+    private function resolveProfiler(): ?Profiler
+    {
+        if (!$this->container->has(Profiler::class)) {
+            return null;
+        }
+
+        $profiler = $this->container->get(Profiler::class);
+
+        return $profiler instanceof Profiler ? $profiler : null;
     }
 
     private function resolve(string $id): object

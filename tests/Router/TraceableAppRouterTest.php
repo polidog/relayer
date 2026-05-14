@@ -167,6 +167,108 @@ final class TraceableAppRouterTest extends TestCase
         self::assertNull($profiler->currentProfile());
     }
 
+    public function testLayoutLoadEventIsRecordedPerLayout(): void
+    {
+        // A layout file alongside page → loadLayoutFromFile fires for it.
+        // Use a non-anonymous class so the LSP-incompatibility check the
+        // engine performs on PSX-compiled anon classes does not bite us
+        // (`render()` has no params on the LayoutComponent base).
+        \file_put_contents(
+            $this->workDir . '/layout.psx',
+            "<?php\n"
+            . 'namespace Polidog\\Relayer\\Tests\\Router\\Tmp' . \str_replace('-', '', \uniqid()) . ";\n"
+            . "use Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "use Polidog\\Relayer\\Router\\Layout\\LayoutComponent;\n"
+            . "class TmpLayout extends LayoutComponent {\n"
+            . "    public function render(): Element {\n"
+            . "        return new Element('div', [], [\$this->getChildren()]);\n"
+            . "    }\n"
+            . "}\n",
+        );
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>page</p>;\n",
+        );
+
+        $profiler = new RecordingProfiler();
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler));
+
+        $this->runApp($router, '/');
+
+        $layoutEvents = \array_values(\array_filter(
+            $profiler->currentProfile()?->getEvents() ?? [],
+            static fn ($e): bool => 'layout' === $e->collector && 'load' === $e->label,
+        ));
+        self::assertCount(1, $layoutEvents);
+        self::assertTrue($layoutEvents[0]->payload['loaded']);
+        $filePath = $layoutEvents[0]->payload['filePath'];
+        self::assertIsString($filePath);
+        self::assertStringEndsWith('/layout.psx', $filePath);
+    }
+
+    public function testPsxCompileIsTimed(): void
+    {
+        // autoCompilePsx + a fresh page.psx triggers a real compile, which
+        // resolveCompiledPsxPath() wraps in a span.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>compiled</p>;\n",
+        );
+
+        $profiler = new RecordingProfiler();
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler));
+
+        $this->runApp($router, '/');
+
+        $compileEvents = \array_values(\array_filter(
+            $profiler->currentProfile()?->getEvents() ?? [],
+            static fn ($e): bool => 'psx' === $e->collector && 'compile' === $e->label,
+        ));
+        self::assertNotEmpty($compileEvents);
+        self::assertNotNull($compileEvents[0]->durationMs);
+    }
+
+    public function testActionDispatchIsRecordedOnFormActionPost(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>form</p>;\n",
+        );
+
+        $profiler = new RecordingProfiler();
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler));
+
+        // Simulate the form-action token shape — the recorder only inspects
+        // the prefix, not whether the token is dispatchable. We can't use
+        // runApp() because it hardcodes REQUEST_METHOD=GET.
+        $_SERVER['REQUEST_URI'] = '/';
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_POST = ['_usephp_action' => 'usephp-action:eyJwYWdlIjoiLyJ9'];
+
+        \ob_start();
+
+        try {
+            $router->run();
+        } finally {
+            \ob_get_clean();
+            $_POST = [];
+            $_SERVER['REQUEST_METHOD'] = 'GET';
+        }
+
+        $actionEvents = \array_values(\array_filter(
+            $profiler->currentProfile()?->getEvents() ?? [],
+            static fn ($e): bool => 'action' === $e->collector && 'dispatch' === $e->label,
+        ));
+        self::assertCount(1, $actionEvents);
+        self::assertSame('function', $actionEvents[0]->payload['kind']);
+    }
+
     public function testProfilerIndexIsServedAtUnderscoreProfiler(): void
     {
         $storage = new InMemoryProfilerStorage();

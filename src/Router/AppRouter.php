@@ -435,27 +435,10 @@ class AppRouter
         }
     }
 
-    private function resolveAuthenticator(): ?AuthenticatorInterface
-    {
-        // UserProvider is an interface — `has()` only returns true when
-        // the app explicitly bound an implementation. Used as the gate
-        // for "auth is configured" so apps without auth pay nothing.
-        if (null === $this->container || !$this->container->has(UserProvider::class)) {
-            return null;
-        }
-        if (!$this->container->has(AuthenticatorInterface::class)) {
-            return null;
-        }
-
-        $auth = $this->container->get(AuthenticatorInterface::class);
-
-        return $auth instanceof AuthenticatorInterface ? $auth : null;
-    }
-
     /**
      * @param array<string, string> $params
      */
-    private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
+    protected function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
     {
         if (!\file_exists($filePath)) {
             return null;
@@ -489,6 +472,81 @@ class AppRouter
         }
 
         return $instance;
+    }
+
+    /**
+     * Resolve a page.psx path to its cached compiled file. The cache file
+     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the usePHP
+     * convention (CompileCommand::cachePathFor).
+     *
+     * Behaviour by mode:
+     * - autoCompilePsx=true: when the cache file is missing or older than
+     *   the source, the usePHP Compiler runs in-process and rewrites the
+     *   cache atomically (temp + rename).
+     * - autoCompilePsx=false (default, production): if the cache file is
+     *   missing, throw a clear error pointing at `vendor/bin/usephp compile`.
+     *   If it exists, it's treated as authoritative — staleness is NOT
+     *   re-checked at request time. The deployment / build step owns the
+     *   refresh contract via `usephp compile`.
+     */
+    protected function resolveCompiledPsxPath(string $psxPath): string
+    {
+        $compiledPath = $this->cachePathFor($psxPath);
+
+        if (!$this->autoCompilePsx) {
+            if (!\file_exists($compiledPath)) {
+                throw new RuntimeException(
+                    "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
+                    . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
+                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
+                );
+            }
+
+            return $compiledPath;
+        }
+
+        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
+            throw new RuntimeException(
+                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
+                . 'is not available. Update polidog/use-php to a version with PSX support.',
+            );
+        }
+
+        $needsCompile = !\file_exists($compiledPath)
+            || @\filemtime($compiledPath) < @\filemtime($psxPath);
+
+        if ($needsCompile) {
+            $this->ensureCacheDir();
+            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
+
+            /** @var Compiler $compiler */
+            $compiler = new $compilerClass();
+            $source = \file_get_contents($psxPath);
+            if (false === $source) {
+                throw new RuntimeException("Failed to read PSX source: {$psxPath}");
+            }
+            $compiled = $compiler->compile($source);
+            $this->atomicWrite($compiledPath, $compiled);
+        }
+
+        return $compiledPath;
+    }
+
+    private function resolveAuthenticator(): ?AuthenticatorInterface
+    {
+        // UserProvider is an interface — `has()` only returns true when
+        // the app explicitly bound an implementation. Used as the gate
+        // for "auth is configured" so apps without auth pay nothing.
+        if (null === $this->container || !$this->container->has(UserProvider::class)) {
+            return null;
+        }
+        if (!$this->container->has(AuthenticatorInterface::class)) {
+            return null;
+        }
+
+        $auth = $this->container->get(AuthenticatorInterface::class);
+
+        return $auth instanceof AuthenticatorInterface ? $auth : null;
     }
 
     /**
@@ -609,64 +667,6 @@ class AppRouter
         }
 
         return $relative;
-    }
-
-    /**
-     * Resolve a page.psx path to its cached compiled file. The cache file
-     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the usePHP
-     * convention (CompileCommand::cachePathFor).
-     *
-     * Behaviour by mode:
-     * - autoCompilePsx=true: when the cache file is missing or older than
-     *   the source, the usePHP Compiler runs in-process and rewrites the
-     *   cache atomically (temp + rename).
-     * - autoCompilePsx=false (default, production): if the cache file is
-     *   missing, throw a clear error pointing at `vendor/bin/usephp compile`.
-     *   If it exists, it's treated as authoritative — staleness is NOT
-     *   re-checked at request time. The deployment / build step owns the
-     *   refresh contract via `usephp compile`.
-     */
-    private function resolveCompiledPsxPath(string $psxPath): string
-    {
-        $compiledPath = $this->cachePathFor($psxPath);
-
-        if (!$this->autoCompilePsx) {
-            if (!\file_exists($compiledPath)) {
-                throw new RuntimeException(
-                    "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
-                    . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
-                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
-                );
-            }
-
-            return $compiledPath;
-        }
-
-        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
-            throw new RuntimeException(
-                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
-                . 'is not available. Update polidog/use-php to a version with PSX support.',
-            );
-        }
-
-        $needsCompile = !\file_exists($compiledPath)
-            || @\filemtime($compiledPath) < @\filemtime($psxPath);
-
-        if ($needsCompile) {
-            $this->ensureCacheDir();
-            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
-
-            /** @var Compiler $compiler */
-            $compiler = new $compilerClass();
-            $source = \file_get_contents($psxPath);
-            if (false === $source) {
-                throw new RuntimeException("Failed to read PSX source: {$psxPath}");
-            }
-            $compiled = $compiler->compile($source);
-            $this->atomicWrite($compiledPath, $compiled);
-        }
-
-        return $compiledPath;
     }
 
     /**
