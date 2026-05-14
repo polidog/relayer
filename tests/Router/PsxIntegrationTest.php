@@ -263,7 +263,7 @@ final class PsxIntegrationTest extends TestCase
             public function get(string $id): object
             {
                 if (!isset($this->services[$id])) {
-                    throw new class("not found: {$id}") extends \RuntimeException implements NotFoundExceptionInterface {};
+                    throw new class("not found: {$id}") extends RuntimeException implements NotFoundExceptionInterface {};
                 }
 
                 return $this->services[$id];
