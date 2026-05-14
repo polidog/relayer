@@ -27,6 +27,8 @@ use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Psr\Container\ContainerInterface;
+use ReflectionFunction;
+use ReflectionNamedType;
 use RuntimeException;
 
 class AppRouter
@@ -297,13 +299,70 @@ class AppRouter
     private function buildFunctionPage(Closure $factory, string $pagePath, array $params): FunctionPage
     {
         $context = new Component\PageContext($params);
-        $renderFn = $factory($context);
+        $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
+        $renderFn = $factory(...$args);
         if (!$renderFn instanceof Closure) {
             throw new RuntimeException("Page factory did not return a Closure: {$pagePath}");
         }
         $pageId = $this->computePageId($pagePath);
 
         return new FunctionPage($renderFn, $context, $pageId);
+    }
+
+    /**
+     * Reflection-based autowiring for a function-style page's factory closure.
+     * `PageContext` parameters receive the per-request context; every other
+     * typed parameter is resolved from the container, matching the constructor
+     * injection class-style pages already get.
+     *
+     * @return array<int, mixed>
+     */
+    private function resolveFactoryArguments(Closure $factory, Component\PageContext $context, string $pagePath): array
+    {
+        $reflection = new ReflectionFunction($factory);
+        $args = [];
+
+        foreach ($reflection->getParameters() as $parameter) {
+            $type = $parameter->getType();
+
+            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
+                $typeName = $type->getName();
+
+                if (Component\PageContext::class === $typeName
+                    || \is_subclass_of($typeName, Component\PageContext::class)
+                ) {
+                    $args[] = $context;
+
+                    continue;
+                }
+
+                if (null !== $this->container && $this->container->has($typeName)) {
+                    $args[] = $this->container->get($typeName);
+
+                    continue;
+                }
+            }
+
+            if ($parameter->isDefaultValueAvailable()) {
+                $args[] = $parameter->getDefaultValue();
+
+                continue;
+            }
+
+            if ($parameter->allowsNull()) {
+                $args[] = null;
+
+                continue;
+            }
+
+            throw new RuntimeException(\sprintf(
+                'Cannot autowire parameter $%s of function-style page %s: no type, default, or container binding.',
+                $parameter->getName(),
+                $pagePath,
+            ));
+        }
+
+        return $args;
     }
 
     private function computePageId(string $pagePath): string

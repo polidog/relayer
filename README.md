@@ -154,13 +154,41 @@ Constructor injection runs through the DI container — see
 
 ### Function-style page
 
-For pages without services you can `return` a closure instead:
+You can `return` a closure instead of declaring a class. The factory closure
+is autowired the same way class-style page constructors are: declare any
+typed parameter and the framework will inject it.
 
 ```php
 <?php
 // src/app/about/page.psx
 return fn() => <main><h1>About</h1></main>;
 ```
+
+Services from the container are resolved by type — `PageContext` is the
+per-request handle, every other typed parameter comes from the DI container:
+
+```php
+<?php
+// src/app/users/page.psx
+declare(strict_types=1);
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, UserRepository $users): Closure {
+    $ctx->metadata(['title' => 'Users']);
+
+    return function () use ($users): Element {
+        $list = $users->all();
+        return <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
+    };
+};
+```
+
+The factory closure runs once per request. The inner render closure runs
+only when the response is not a `304` — keep heavy work there (see
+[Function-style pages: `$ctx->cache()`](#function-style-pages-ctxcache)).
 
 ### Layouts
 

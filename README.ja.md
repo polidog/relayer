@@ -157,13 +157,41 @@ final class UserDetailPage extends PageComponent
 
 ### 関数型ページ
 
-サービス不要のページは closure を `return` するだけでも書けます:
+クラスを書かずに closure を `return` するだけでもページを定義できます。
+ファクトリ closure はクラス型ページのコンストラクタと同じ autowire が効くので、
+型付き引数を宣言すれば DI コンテナから注入されます。
 
 ```php
 <?php
 // src/app/about/page.psx
 return fn() => <main><h1>About</h1></main>;
 ```
+
+サービスは型で解決されます。`PageContext` はリクエストごとのハンドル、
+それ以外の型付き引数はすべて DI コンテナから注入されます:
+
+```php
+<?php
+// src/app/users/page.psx
+declare(strict_types=1);
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, UserRepository $users): Closure {
+    $ctx->metadata(['title' => 'Users']);
+
+    return function () use ($users): Element {
+        $list = $users->all();
+        return <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
+    };
+};
+```
+
+ファクトリ closure はリクエストごとに 1 回呼ばれます。内側の render closure は
+レスポンスが `304` でないときだけ走るので、重い処理は内側に寄せてください
+（[関数型ページ: `$ctx->cache()`](#関数型ページ-ctxcache) 参照）。
 
 ### レイアウト
 

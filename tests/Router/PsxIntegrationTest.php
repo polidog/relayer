@@ -6,8 +6,12 @@ namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Tests\Fixtures\PlainService;
+use Polidog\Relayer\Tests\Fixtures\ServiceWithDependency;
 use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Psx\Compiler;
+use Psr\Container\ContainerInterface;
+use Psr\Container\NotFoundExceptionInterface;
 use RuntimeException;
 
 final class PsxIntegrationTest extends TestCase
@@ -202,6 +206,77 @@ final class PsxIntegrationTest extends TestCase
             self::assertContains('Cache-Control: public, max-age=3600', $headers);
             self::assertContains('ETag: "feed-v1"', $headers);
         }
+    }
+
+    public function testFunctionStylePageReceivesAutowiredServices(): void
+    {
+        // Function-style factories are autowired the same way class-style page
+        // constructors are: PageContext is the per-request handle, and every
+        // other typed parameter is resolved from the container.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            <<<'PSX'
+                <?php
+                use Polidog\Relayer\Router\Component\PageContext;
+                use Polidog\Relayer\Tests\Fixtures\PlainService;
+                use Polidog\Relayer\Tests\Fixtures\ServiceWithDependency;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+
+                return function (
+                    PageContext $ctx,
+                    PlainService $plain,
+                    ServiceWithDependency $nested,
+                ): Closure {
+                    return function () use ($plain, $nested): Element {
+                        $marker = \sprintf(
+                            'plain=%s nested=%s inner=%s',
+                            $plain::class,
+                            $nested::class,
+                            $nested->inner::class,
+                        );
+                        return <p>{$marker}</p>;
+                    };
+                };
+                PSX,
+        );
+
+        $plain = new PlainService();
+        $nested = new ServiceWithDependency($plain);
+        $container = new class($plain, $nested) implements ContainerInterface {
+            /** @var array<class-string, object> */
+            private array $services;
+
+            public function __construct(PlainService $plain, ServiceWithDependency $nested)
+            {
+                $this->services = [
+                    PlainService::class => $plain,
+                    ServiceWithDependency::class => $nested,
+                ];
+            }
+
+            public function has(string $id): bool
+            {
+                return isset($this->services[$id]);
+            }
+
+            public function get(string $id): object
+            {
+                if (!isset($this->services[$id])) {
+                    throw new class("not found: {$id}") extends \RuntimeException implements NotFoundExceptionInterface {};
+                }
+
+                return $this->services[$id];
+            }
+        };
+
+        $app = AppRouter::create($this->workDir, autoCompilePsx: true);
+        $app->setContainer($container);
+
+        $output = $this->runApp($app, '/');
+
+        self::assertStringContainsString(PlainService::class, $output);
+        self::assertStringContainsString(ServiceWithDependency::class, $output);
     }
 
     public function testFunctionStylePageWithoutCacheStillRenders(): void
