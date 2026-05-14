@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Auth;
 
+use Polidog\Relayer\Router\Form\CsrfToken;
+
 /**
  * Default {@see SessionStorage} that wraps PHP's native session handlers.
  *
@@ -11,7 +13,7 @@ namespace Polidog\Relayer\Auth;
  * the service from the container (which happens during page wiring) does
  * not eagerly emit `Set-Cookie` headers. Once started, this object shares
  * `$_SESSION` with the rest of the request — including the CSRF token
- * machinery already in {@see \Polidog\Relayer\Router\Form\CsrfToken}.
+ * machinery already in {@see CsrfToken}.
  *
  * `regenerateId(true)` is used so the previous session id is invalidated
  * server-side; otherwise a stolen pre-login id would remain valid.

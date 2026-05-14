@@ -6,8 +6,8 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
-use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\UserProvider;
@@ -230,10 +230,12 @@ class AppRouter
                 \http_response_code(401);
 
                 return;
+
             case AuthGuard::DECISION_FORBIDDEN:
                 \http_response_code(403);
 
                 return;
+
             case AuthGuard::DECISION_REDIRECT:
             default:
                 $location = $exception->redirectTo;

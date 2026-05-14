@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Auth;
 
+use Polidog\Relayer\Router\Form\CsrfToken;
+
 /**
  * Minimal session store used by {@see Authenticator}.
  *
  * The default implementation ({@see NativeSession}) sits on top of PHP's
  * native session machinery, so it shares `$_SESSION` with anything else
  * in the request that already calls `session_start()` (e.g. the existing
- * {@see \Polidog\Relayer\Router\Form\CsrfToken}). Apps that want
+ * {@see CsrfToken}). Apps that want
  * Redis/database-backed sessions can register a custom service for this
  * interface without touching the rest of the auth pipeline.
  *

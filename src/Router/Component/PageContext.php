@@ -40,9 +40,9 @@ final class PageContext
     ) {}
 
     /**
-     * @internal AppRouter wires this before invoking the page factory so
+     * @internal appRouter wires this before invoking the page factory so
      *           `$ctx->requireAuth()` / `$ctx->user()` work without the
-     *           page needing to depend on Authenticator directly.
+     *           page needing to depend on Authenticator directly
      */
     public function setAuthenticator(?Authenticator $authenticator): void
     {

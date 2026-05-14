@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
-use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;

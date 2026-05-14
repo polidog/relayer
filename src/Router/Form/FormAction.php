@@ -39,17 +39,6 @@ final class FormAction
     }
 
     /**
-     * @param array<string, mixed> $payload
-     */
-    private static function encode(array $payload): string
-    {
-        $json = \json_encode($payload, \JSON_THROW_ON_ERROR);
-        $encoded = \rtrim(\strtr(\base64_encode($json), '+/', '-_'), '=');
-
-        return self::PREFIX . $encoded;
-    }
-
-    /**
      * @return null|array<string, mixed>
      */
     public static function decode(string $token): ?array
@@ -82,5 +71,16 @@ final class FormAction
     public static function isToken(string $value): bool
     {
         return \str_starts_with($value, self::PREFIX);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private static function encode(array $payload): string
+    {
+        $json = \json_encode($payload, \JSON_THROW_ON_ERROR);
+        $encoded = \rtrim(\strtr(\base64_encode($json), '+/', '-_'), '=');
+
+        return self::PREFIX . $encoded;
     }
 }

@@ -31,14 +31,6 @@ final class FunctionPageActionDispatchTest extends TestCase
         unset($_SERVER['REQUEST_METHOD']);
     }
 
-    private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage
-    {
-        $renderFn ??= static fn () => new Element('div', [], []);
-        $pageClass = FunctionPage::class;
-
-        return new $pageClass($renderFn, $context, $pageId);
-    }
-
     #[RunInSeparateProcess]
     public function testDispatchInvokesMatchingActionWithFormData(): void
     {
@@ -150,5 +142,13 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page->dispatchActionFromRequest();
 
         self::assertFalse($called);
+    }
+
+    private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage
+    {
+        $renderFn ??= static fn () => new Element('div', [], []);
+        $pageClass = FunctionPage::class;
+
+        return new $pageClass($renderFn, $context, $pageId);
     }
 }

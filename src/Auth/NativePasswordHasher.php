@@ -16,11 +16,11 @@ namespace Polidog\Relayer\Auth;
 final class NativePasswordHasher implements PasswordHasher
 {
     /**
-     * @param string|int           $algorithm one of the `PASSWORD_*` constants (defaults to `PASSWORD_DEFAULT`)
+     * @param int|string           $algorithm one of the `PASSWORD_*` constants (defaults to `PASSWORD_DEFAULT`)
      * @param array<string, mixed> $options   algorithm-specific options forwarded to `password_hash`
      */
     public function __construct(
-        private readonly string|int $algorithm = \PASSWORD_DEFAULT,
+        private readonly int|string $algorithm = \PASSWORD_DEFAULT,
         private readonly array $options = [],
     ) {}
 

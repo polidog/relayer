@@ -6,8 +6,8 @@ namespace Polidog\Relayer\Tests\Auth;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Auth\Auth;
-use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\Credentials;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\NativePasswordHasher;

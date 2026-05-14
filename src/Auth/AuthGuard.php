@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Auth;
 
+use Polidog\Relayer\Http\CachePolicy;
 use ReflectionClass;
 
 /**
  * Policy that reads {@see Auth} from a class and decides whether to allow
  * the request, redirect to a login page, or short-circuit with 401/403.
  *
- * Pure-ish: header writes happen here (mirroring {@see \Polidog\Relayer\Http\CachePolicy}),
+ * Pure-ish: header writes happen here (mirroring {@see CachePolicy}),
  * but the decision logic itself — {@see decide()} — is testable in
  * isolation. AppRouter / InjectorContainer call {@see enforce()} which
  * combines decision + side effect.
@@ -36,17 +37,21 @@ final class AuthGuard
         }
 
         $decision = self::decide($attribute, $auth);
+
         switch ($decision) {
             case self::DECISION_ALLOW:
                 return true;
+
             case self::DECISION_REDIRECT:
                 self::sendRedirect($attribute->redirectTo, $requestUri);
 
                 return false;
+
             case self::DECISION_UNAUTHORIZED:
                 self::sendStatus(401);
 
                 return false;
+
             case self::DECISION_FORBIDDEN:
                 self::sendStatus(403);
 
