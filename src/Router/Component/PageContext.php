@@ -6,8 +6,14 @@ namespace Polidog\Relayer\Router\Component;
 
 use Closure;
 use InvalidArgumentException;
+use Polidog\Relayer\Auth\Auth;
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthGuard;
+use Polidog\Relayer\Auth\AuthorizationException;
+use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Form\FormAction;
+use RuntimeException;
 
 final class PageContext
 {
@@ -18,6 +24,8 @@ final class PageContext
 
     /** @var array<string, Closure> */
     private array $actions = [];
+
+    private ?Authenticator $authenticator = null;
 
     /**
      * @param array<string, string> $params
@@ -30,6 +38,16 @@ final class PageContext
         public readonly array $params = [],
         public readonly string $pageId = '',
     ) {}
+
+    /**
+     * @internal AppRouter wires this before invoking the page factory so
+     *           `$ctx->requireAuth()` / `$ctx->user()` work without the
+     *           page needing to depend on Authenticator directly.
+     */
+    public function setAuthenticator(?Authenticator $authenticator): void
+    {
+        $this->authenticator = $authenticator;
+    }
 
     /**
      * @param array<string, string> $metadata
@@ -93,5 +111,54 @@ final class PageContext
     public function getAction(string $name): ?Closure
     {
         return $this->actions[$name] ?? null;
+    }
+
+    /**
+     * Return the currently authenticated principal, or null when no one
+     * is logged in. Use this for conditional rendering — "show a logout
+     * button when logged in, login link otherwise." For mandatory
+     * protection, use {@see requireAuth()} instead.
+     */
+    public function user(): ?Identity
+    {
+        return $this->authenticator?->user();
+    }
+
+    /**
+     * Hard authentication gate for function-style pages. Throws
+     * {@see AuthorizationException} when the request is unauthenticated
+     * or the user lacks any of the required roles — AppRouter catches it
+     * and emits a 302 / 401 / 403 response without rendering the page.
+     *
+     * Returns the {@see Identity} so the page can use it inline:
+     *
+     *   $user = $ctx->requireAuth();
+     *   echo "Welcome, {$user->displayName}";
+     *
+     * @param array<string> $roles required roles (any one matches); empty = "any authenticated user"
+     */
+    public function requireAuth(array $roles = [], string $redirectTo = '/login'): Identity
+    {
+        if (null === $this->authenticator) {
+            // Misconfiguration — Authenticator was never wired. Surface
+            // this clearly rather than silently treating the user as
+            // anonymous and producing a confusing redirect loop.
+            throw new RuntimeException(
+                'PageContext::requireAuth() requires an Authenticator. '
+                . 'Register Polidog\Relayer\Auth\UserProvider in your AppConfigurator.',
+            );
+        }
+
+        $attribute = new Auth(roles: $roles, redirectTo: $redirectTo);
+        $decision = AuthGuard::decide($attribute, $this->authenticator);
+
+        if (AuthGuard::DECISION_ALLOW !== $decision) {
+            throw new AuthorizationException($decision, $redirectTo);
+        }
+
+        $user = $this->authenticator->user();
+        \assert(null !== $user);
+
+        return $user;
     }
 }

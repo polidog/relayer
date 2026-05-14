@@ -6,6 +6,11 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
+use Polidog\Relayer\Auth\AuthGuard;
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthorizationException;
+use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
@@ -128,7 +133,11 @@ class AppRouter
                 return;
             }
 
-            $this->handleMatch($match);
+            try {
+                $this->handleMatch($match);
+            } catch (AuthorizationException $exception) {
+                $this->handleAuthorizationFailure($exception);
+            }
         } finally {
             if ($this->container instanceof InjectorContainer) {
                 $this->container->setCurrentRequest(null);
@@ -185,6 +194,57 @@ class AppRouter
         $store = $this->container->get(EtagStore::class);
 
         return $store instanceof EtagStore ? $store : null;
+    }
+
+    private function resolveAuthenticator(): ?Authenticator
+    {
+        // UserProvider is an interface — `has()` only returns true when
+        // the app explicitly bound an implementation. Used as the gate
+        // for "auth is configured" so apps without auth pay nothing.
+        if (null === $this->container || !$this->container->has(UserProvider::class)) {
+            return null;
+        }
+        if (!$this->container->has(Authenticator::class)) {
+            return null;
+        }
+
+        $auth = $this->container->get(Authenticator::class);
+
+        return $auth instanceof Authenticator ? $auth : null;
+    }
+
+    /**
+     * Convert an {@see AuthorizationException} (raised by
+     * `$ctx->requireAuth()` or by a non-nullable `Identity` parameter on
+     * an anonymous request) into the same 302 / 401 / 403 response the
+     * class-style `#[Auth]` attribute produces.
+     */
+    private function handleAuthorizationFailure(AuthorizationException $exception): void
+    {
+        if (\headers_sent()) {
+            return;
+        }
+
+        switch ($exception->decision) {
+            case AuthGuard::DECISION_UNAUTHORIZED:
+                \http_response_code(401);
+
+                return;
+            case AuthGuard::DECISION_FORBIDDEN:
+                \http_response_code(403);
+
+                return;
+            case AuthGuard::DECISION_REDIRECT:
+            default:
+                $location = $exception->redirectTo;
+                $requestUri = $this->currentRequest?->path;
+                if (null !== $requestUri && '' !== $requestUri && !\str_contains($location, '?')) {
+                    $location .= '?next=' . \rawurlencode($requestUri);
+                }
+                \header('Location: ' . $location, true, 302);
+
+                return;
+        }
     }
 
     private function handleNotFound(): void
@@ -324,6 +384,7 @@ class AppRouter
     {
         $pageId = $this->computePageId($pagePath);
         $context = new Component\PageContext($params, $pageId);
+        $context->setAuthenticator($this->resolveAuthenticator());
         $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
         $result = $factory(...$args);
 
@@ -373,6 +434,24 @@ class AppRouter
 
                 if (Request::class === $typeName && null !== $this->currentRequest) {
                     $args[] = $this->currentRequest;
+
+                    continue;
+                }
+
+                if (Identity::class === $typeName) {
+                    // Inject the current principal (or null when no one is
+                    // logged in). A non-nullable `Identity` parameter on a
+                    // page implies the page is auth-required — surface the
+                    // misuse as an AuthorizationException so the router
+                    // turns it into a redirect / 401, mirroring the
+                    // class-style #[Auth] attribute.
+                    $identity = $this->resolveAuthenticator()?->user();
+                    if (null === $identity && !$parameter->allowsNull()) {
+                        throw new AuthorizationException(
+                            AuthGuard::DECISION_REDIRECT,
+                        );
+                    }
+                    $args[] = $identity;
 
                     continue;
                 }

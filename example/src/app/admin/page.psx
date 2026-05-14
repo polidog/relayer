@@ -1,0 +1,63 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Pages\Admin;
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Auth\Auth;
+use Polidog\Relayer\Router\Component\PageComponent;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+// Role-gated class-style page. The framework redirects anonymous
+// requests to /login and returns 403 for authenticated users who lack
+// the `admin` role — try signing in as alice@example.com (no admin
+// role) vs admin@example.com to see both branches.
+#[Auth(roles: ['admin'])]
+final class AdminPage extends PageComponent
+{
+    public function __construct(private readonly UserRepository $users) {}
+
+    public function render(): Element
+    {
+        $rows = \array_map(
+            fn(array $u) => (
+                <tr className="border-t border-slate-200">
+                    <td className="px-4 py-2 font-mono text-sm text-slate-500">{(string) $u['id']}</td>
+                    <td className="px-4 py-2 text-sm text-slate-900">{$u['name']}</td>
+                    <td className="px-4 py-2 text-sm text-slate-600">{$u['bio']}</td>
+                </tr>
+            ),
+            $this->users->all(),
+        );
+
+        return (
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Admin</h1>
+                    <p className="text-slate-600">
+                        Role-gated with{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">#[Auth(roles: ['admin'])]</code>.
+                        Users without the{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">admin</code>{' '}
+                        role get a 403 response.
+                    </p>
+                </header>
+
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <table className="w-full">
+                        <thead className="bg-slate-50">
+                            <tr>
+                                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">ID</th>
+                                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Bio</th>
+                            </tr>
+                        </thead>
+                        <tbody>{$rows}</tbody>
+                    </table>
+                </div>
+            </section>
+        );
+    }
+}

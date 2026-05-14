@@ -1,0 +1,58 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Authenticator $auth): Closure {
+    // Hard gate — unauthenticated requests get redirected to /login with
+    // `?next=/dashboard` so the user lands back here after signing in.
+    $user = $ctx->requireAuth();
+
+    $ctx->metadata(['title' => 'Dashboard']);
+
+    $logout = $ctx->action('logout', function () use ($auth): void {
+        $auth->logout();
+        \header('Location: /', true, 303);
+        exit;
+    });
+
+    return function () use ($user, $logout): Element {
+        $roles = [] === $user->roles ? '(none)' : \implode(', ', $user->roles);
+
+        return (
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">
+                        Welcome, {$user->displayName}
+                    </h1>
+                    <p className="text-slate-600">
+                        Protected page reached through{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">$ctx-&gt;requireAuth()</code>.
+                    </p>
+                </header>
+
+                <dl className="grid grid-cols-3 gap-3 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <dt className="text-sm font-medium text-slate-500">User ID</dt>
+                    <dd className="col-span-2 font-mono text-sm text-slate-900">{(string) $user->id}</dd>
+                    <dt className="text-sm font-medium text-slate-500">Display name</dt>
+                    <dd className="col-span-2 text-sm text-slate-900">{$user->displayName}</dd>
+                    <dt className="text-sm font-medium text-slate-500">Roles</dt>
+                    <dd className="col-span-2 font-mono text-sm text-slate-900">{$roles}</dd>
+                </dl>
+
+                <form action={$logout}>
+                    <button
+                        type="submit"
+                        className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                    >
+                        Sign out
+                    </button>
+                </form>
+            </section>
+        );
+    };
+};

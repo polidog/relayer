@@ -1,0 +1,130 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Form\Z;
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Authenticator $auth, Request $request): Closure {
+    $ctx->metadata(['title' => 'Login']);
+
+    // Pick the post-login destination from `?next=` when present and
+    // safe, otherwise fall back to /dashboard. Only same-origin paths
+    // (`/...`) are accepted so a crafted `?next=https://attacker.example/`
+    // cannot bounce the user off the site.
+    $resolveNext = static function (Request $request, string $default = '/dashboard'): string {
+        $next = $request->query('next');
+        if (null === $next || '' === $next) {
+            return $default;
+        }
+        if (!\str_starts_with($next, '/') || \str_starts_with($next, '//')) {
+            return $default;
+        }
+
+        return $next;
+    };
+
+    // Already logged in? Send them straight to the dashboard (or wherever
+    // ?next= points). Lets the same URL act as "you're done" for users
+    // who hit /login by mistake.
+    if ($auth->check()) {
+        \header('Location: ' . $resolveNext($request), true, 303);
+        exit;
+    }
+
+    $schema = Z::object([
+        'email'    => Z::string()->trim()->email(),
+        'password' => Z::string()->min(1, 'Password is required.'),
+    ]);
+
+    $values = ['email' => ''];
+    $error = null;
+
+    $login = $ctx->action('login', function (array $form) use ($schema, $auth, $request, $resolveNext, &$values, &$error): void {
+        $values = ['email' => (string) ($form['email'] ?? '')];
+
+        $result = $schema->safeParse($form);
+        if (!$result->success) {
+            // Show a single generic message regardless of whether it was
+            // the email or password that failed validation — same as the
+            // post-attempt branch below, so an attacker can't tell which
+            // field is "the problem" from a bad request.
+            $error = 'Invalid email or password.';
+
+            return;
+        }
+
+        $identity = $auth->attempt(
+            $result->data['email'],
+            $result->data['password'],
+        );
+
+        if (null === $identity) {
+            $error = 'Invalid email or password.';
+
+            return;
+        }
+
+        \header('Location: ' . $resolveNext($request), true, 303);
+        exit;
+    });
+
+    return function () use ($login, &$values, &$error): Element {
+        $inputBase = 'block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-slate-900/10';
+        $inputClass = $inputBase . ' border-slate-300 focus:border-slate-500';
+
+        return (
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Sign in</h1>
+                    <p className="text-slate-600">
+                        Seed accounts:{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">alice@example.com / secret123</code>
+                        {' or '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">admin@example.com / admin1234</code>.
+                    </p>
+                </header>
+
+                <form action={$login} className="space-y-5 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                    {null !== $error
+                        ? <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{$error}</p>
+                        : null
+                    }
+
+                    <div className="space-y-1.5">
+                        <label htmlFor="email" className="block text-sm font-medium text-slate-700">Email</label>
+                        <input
+                            id="email"
+                            type="email"
+                            name="email"
+                            value={$values['email']}
+                            className={$inputClass}
+                            autoFocus
+                        />
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label htmlFor="password" className="block text-sm font-medium text-slate-700">Password</label>
+                        <input
+                            id="password"
+                            type="password"
+                            name="password"
+                            className={$inputClass}
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        className="inline-flex w-full items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-slate-900/20"
+                    >
+                        Sign in
+                    </button>
+                </form>
+            </section>
+        );
+    };
+};

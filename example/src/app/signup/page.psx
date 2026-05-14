@@ -2,23 +2,37 @@
 
 declare(strict_types=1);
 
+use App\Service\InMemoryUserProvider;
+use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Form\Z;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-return function (PageContext $ctx): Closure {
+return function (
+    PageContext $ctx,
+    Authenticator $auth,
+    InMemoryUserProvider $users,
+): Closure {
     $ctx->metadata(['title' => 'Signup']);
 
+    // Already logged in? Send them to /dashboard so /signup isn't a
+    // dead end for returning users.
+    if ($auth->check()) {
+        \header('Location: /dashboard', true, 303);
+        exit;
+    }
+
     $schema = Z::object([
-        'name'  => Z::string()->trim()->min(1, 'Name is required.'),
-        'email' => Z::string()->trim()->email(),
+        'name'     => Z::string()->trim()->min(1, 'Name is required.'),
+        'email'    => Z::string()->trim()->email(),
+        'password' => Z::string()->min(8, 'Password must be at least 8 characters.'),
     ]);
 
     $values = ['email' => '', 'name' => ''];
     $errors = [];
 
-    $signup = $ctx->action('signup', function (array $form) use ($schema, &$values, &$errors): void {
+    $signup = $ctx->action('signup', function (array $form) use ($schema, $auth, $users, &$values, &$errors): void {
         // Preserve the raw input verbatim so the re-render shows whatever
         // the user typed, even when validation rejects it.
         $values = [
@@ -27,41 +41,61 @@ return function (PageContext $ctx): Closure {
         ];
 
         $result = $schema->safeParse($form);
+        if (!$result->success) {
+            $errors = $result->errors;
 
-        if ($result->success) {
-            \header('Location: /signup/thanks', true, 303);
-            exit;
+            return;
         }
 
-        $errors = $result->errors;
+        $identity = $users->register(
+            email: $result->data['email'],
+            name: $result->data['name'],
+            password: $result->data['password'],
+        );
+
+        if (null === $identity) {
+            // Treat duplicate-email as a validation error on the email
+            // field rather than a global "this email is taken" banner —
+            // matches what most apps do, and keeps the error rendering
+            // logic uniform.
+            $errors = ['email' => 'An account with this email already exists.'];
+
+            return;
+        }
+
+        $auth->login($identity);
+        \header('Location: /dashboard', true, 303);
+        exit;
     });
 
     // $values / $errors are mutated by the $signup action closure, which
     // runs *after* this render closure is constructed. Capture by reference
     // so the post-dispatch state — not the empty initial state — is rendered.
     return function () use ($signup, &$values, &$errors): Element {
-        $emailError = $errors['email'] ?? null;
-        $nameError  = $errors['name']  ?? null;
+        $emailError    = $errors['email']    ?? null;
+        $nameError     = $errors['name']     ?? null;
+        $passwordError = $errors['password'] ?? null;
 
         $inputBase = 'block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm transition focus:outline-none focus:ring-2 focus:ring-slate-900/10';
         $inputOk = $inputBase . ' border-slate-300 focus:border-slate-500';
         $inputErr = $inputBase . ' border-rose-400 focus:border-rose-500 focus:ring-rose-500/10';
 
-        $nameInputClass  = null !== $nameError  ? $inputErr : $inputOk;
-        $emailInputClass = null !== $emailError ? $inputErr : $inputOk;
+        $nameInputClass     = null !== $nameError     ? $inputErr : $inputOk;
+        $emailInputClass    = null !== $emailError    ? $inputErr : $inputOk;
+        $passwordInputClass = null !== $passwordError ? $inputErr : $inputOk;
 
         return (
             <section className="space-y-6">
                 <header className="space-y-2">
-                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Signup</h1>
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Create an account</h1>
                     <p className="text-slate-600">
-                        Function-style page using{' '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">$ctx-&gt;action()</code>.
-                        The handler runs before{' '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">render()</code>{' '}
-                        on POST; validation errors flow back into the same request through
-                        shared factory scope (no redirect). CSRF + form-action hidden
-                        fields are injected automatically.
+                        Validates input with{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Z::object()</code>,
+                        registers the user through{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">InMemoryUserProvider::register()</code>,
+                        then calls{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Authenticator::login()</code>{' '}
+                        and redirects to the dashboard.
                     </p>
                 </header>
 
@@ -91,6 +125,19 @@ return function (PageContext $ctx): Closure {
                             className={$emailInputClass}
                         />
                         {null !== $emailError ? <p className="text-sm text-rose-600">{$emailError}</p> : null}
+                    </div>
+
+                    <div className="space-y-1.5">
+                        <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+                            Password
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            name="password"
+                            className={$passwordInputClass}
+                        />
+                        {null !== $passwordError ? <p className="text-sm text-rose-600">{$passwordError}</p> : null}
                     </div>
 
                     <button

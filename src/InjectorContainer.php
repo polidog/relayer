@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
+use Polidog\Relayer\Auth\AuthGuard;
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
@@ -64,10 +67,21 @@ final class InjectorContainer implements ContainerInterface
             return $this->currentRequest;
         }
 
-        // Conditional GET short-circuit: evaluate #[Cache] BEFORE we resolve
-        // the page so a 304 response never instantiates the page or its
-        // dependencies (the whole point of a fast ETag store).
         if (\is_subclass_of($id, PageComponent::class)) {
+            // Auth gate BEFORE cache: an unauthorized request should not
+            // produce a cache hit (304) that could later be served by a
+            // shared cache to an anonymous viewer. We also evaluate it
+            // before resolving the page, so a redirect never touches the
+            // page's dependencies.
+            $authenticator = $this->resolveAuthenticator();
+            if (null !== $authenticator && !AuthGuard::enforce($id, $authenticator, $this->currentRequest?->path)) {
+                exit;
+            }
+
+            // Conditional GET short-circuit: evaluate #[Cache] BEFORE we
+            // instantiate the page so a 304 response never builds the
+            // page or its dependencies (the whole point of a fast ETag
+            // store).
             $cache = CachePolicy::applyFromAttribute($id, $this->resolveEtagStore());
             if (null !== $cache && CachePolicy::isNotModified($cache)) {
                 CachePolicy::sendNotModified();
@@ -77,6 +91,19 @@ final class InjectorContainer implements ContainerInterface
         }
 
         return $this->resolve($id);
+    }
+
+    private function resolveAuthenticator(): ?Authenticator
+    {
+        // Gate on UserProvider — an unbound interface signals "auth not
+        // configured" and lets apps without auth skip the whole code path.
+        if (!$this->container->has(UserProvider::class) || !$this->container->has(Authenticator::class)) {
+            return null;
+        }
+
+        $auth = $this->container->get(Authenticator::class);
+
+        return $auth instanceof Authenticator ? $auth : null;
     }
 
     private function resolveEtagStore(): ?EtagStore

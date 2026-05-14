@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\NativePasswordHasher;
+use Polidog\Relayer\Auth\NativeSession;
+use Polidog\Relayer\Auth\PasswordHasher;
+use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
 use Polidog\Relayer\Router\AppRouter;
@@ -67,6 +73,17 @@ final class Relayer
         $configurator ??= new AppConfigurator($projectRoot);
         $configurator->configure($container);
 
+        // Conditionally register Authenticator now that the app has had
+        // a chance to bind a UserProvider. Without this gate, apps that
+        // don't use auth would fail container compilation because
+        // Authenticator's `$users` parameter is unsatisfiable.
+        if ($container->has(UserProvider::class) && !$container->has(Authenticator::class)) {
+            $container->register(Authenticator::class)
+                ->setAutowired(true)
+                ->setPublic(true)
+            ;
+        }
+
         // Autowire-by-default: any service registered without explicit
         // arguments gets autowiring + public visibility so it can be fetched
         // via PSR-11 get($id). YAML/_defaults values win because we only fill
@@ -95,6 +112,31 @@ final class Relayer
         $container->setAlias(EtagStore::class, FileEtagStore::class)
             ->setPublic(true)
         ;
+
+        // Auth defaults. The Authenticator is only useful when the app
+        // also registers a UserProvider, but we always wire the hasher
+        // and session adapter so apps can take partial dependencies
+        // (e.g. just the PasswordHasher during signup before login is
+        // wired) without extra ceremony.
+        $container->register(NativePasswordHasher::class)
+            ->setPublic(true)
+        ;
+        $container->setAlias(PasswordHasher::class, NativePasswordHasher::class)
+            ->setPublic(true)
+        ;
+
+        $container->register(NativeSession::class)
+            ->setPublic(true)
+        ;
+        $container->setAlias(SessionStorage::class, NativeSession::class)
+            ->setPublic(true)
+        ;
+
+        // Authenticator is NOT registered unconditionally — it depends on
+        // UserProvider, which the app supplies. We register it in a
+        // deferred step in buildContainer() only when UserProvider has
+        // been bound by the user's AppConfigurator. Apps without auth
+        // pay nothing.
     }
 
     /**

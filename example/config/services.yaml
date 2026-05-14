@@ -9,3 +9,9 @@ services:
 
   App\Service\Clock:
     alias: App\Service\SystemClock
+
+  # Bind the framework's UserProvider interface to the example provider.
+  # The framework auto-registers Authenticator once UserProvider is bound,
+  # so no further wiring is required.
+  Polidog\Relayer\Auth\UserProvider:
+    alias: App\Service\InMemoryUserProvider

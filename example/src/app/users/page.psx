@@ -5,12 +5,18 @@ declare(strict_types=1);
 namespace App\Pages\Users;
 
 use App\Service\UserRepository;
+use Polidog\Relayer\Auth\Auth;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
-#[Cache(maxAge: 60, public: true, etag: 'users-v1')]
+// #[Auth] runs before #[Cache] in the container, so unauthenticated
+// requests redirect to /login (with `?next=/users`) without producing
+// a cacheable 304. Switched to `private` since the response is now
+// per-user-gated and shouldn't be served by shared caches anyway.
+#[Auth]
+#[Cache(maxAge: 60, private: true, etag: 'users-v1')]
 final class UsersPage extends PageComponent
 {
     public function __construct(private readonly UserRepository $users) {}
@@ -37,14 +43,14 @@ final class UsersPage extends PageComponent
                 <header className="space-y-2">
                     <h1 className="text-3xl font-bold tracking-tight text-slate-900">Users</h1>
                     <p className="text-slate-600">
-                        Class-style page with{' '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">#[Cache]</code>{' '}
-                        — responses carry{' '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Cache-Control: public, max-age=60</code>{' '}
-                        and an{' '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">ETag</code>,
-                        so a refresh hits the conditional-GET short-circuit (304) without
-                        re-running this method.
+                        Class-style page guarded by{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">#[Auth]</code>{' '}
+                        and cached with{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">#[Cache]</code>.
+                        Anonymous requests redirect to{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">/login?next=/users</code>;
+                        authenticated refreshes hit the conditional-GET short-circuit (304)
+                        without re-running this method.
                     </p>
                 </header>
                 <ul className="space-y-2">{$items}</ul>
