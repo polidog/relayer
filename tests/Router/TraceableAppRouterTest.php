@@ -176,7 +176,7 @@ final class TraceableAppRouterTest extends TestCase
         \file_put_contents(
             $this->workDir . '/layout.psx',
             "<?php\n"
-            . 'namespace Polidog\\Relayer\\Tests\\Router\\Tmp' . \str_replace('-', '', \uniqid()) . ";\n"
+            . 'namespace Polidog\Relayer\Tests\Router\Tmp' . \str_replace('-', '', \uniqid()) . ";\n"
             . "use Polidog\\UsePhp\\Runtime\\Element;\n"
             . "use Polidog\\Relayer\\Router\\Layout\\LayoutComponent;\n"
             . "class TmpLayout extends LayoutComponent {\n"
