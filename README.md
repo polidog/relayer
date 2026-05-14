@@ -13,6 +13,8 @@ Opinionated, batteries-included framework on top of
   with the standard `.env` / `.env.local` / `.env.{APP_ENV}` cascade
 - `#[Cache]` attribute for HTTP cache headers + `If-None-Match` 304 handling
   with pluggable `EtagStore` (file-based default, Redis-ready)
+- Session-based authentication: `#[Auth]` attribute / `$ctx->requireAuth()`,
+  role checks, password hashing, pluggable `UserProvider` and `SessionStorage`
 
 Exposes a single `Relayer::boot()` entrypoint so app code stays small.
 
@@ -437,6 +439,258 @@ return function (PageContext $ctx, Request $req): Closure {
 Tests use `new Request(method: 'POST', path: '/signup', post: [...])`
 directly — no superglobal manipulation needed.
 
+## Authentication
+
+Session-based authentication ships in the box. You provide a
+`UserProvider` (your user lookup) and the framework wires the rest:
+password hashing, the session-stored principal, and a request-time
+guard that protects pages.
+
+### 1. Implement a `UserProvider`
+
+The provider takes a user-supplied identifier (typically email) and
+returns `Credentials` — the `Identity` that will live in the session,
+plus the password hash to verify against. Return `null` when the
+identifier is unknown.
+
+```php
+<?php
+declare(strict_types=1);
+
+namespace App\Auth;
+
+use Polidog\Relayer\Auth\Credentials;
+use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\Auth\UserProvider;
+
+final class PdoUserProvider implements UserProvider
+{
+    public function __construct(private readonly \PDO $pdo) {}
+
+    public function findByIdentifier(string $identifier): ?Credentials
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, name, password_hash, roles FROM users WHERE email = ?'
+        );
+        $stmt->execute([\strtolower(\trim($identifier))]);
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        if (false === $row) {
+            return null;
+        }
+
+        return new Credentials(
+            identity: new Identity(
+                id: (int) $row['id'],
+                displayName: (string) $row['name'],
+                roles: \json_decode((string) $row['roles'], true) ?: [],
+            ),
+            passwordHash: (string) $row['password_hash'],
+        );
+    }
+}
+```
+
+### 2. Bind the provider
+
+The framework registers `Authenticator`, `PasswordHasher`
+(`NativePasswordHasher` with `PASSWORD_DEFAULT`), and `SessionStorage`
+(`NativeSession`) by default. Adding the `UserProvider` binding is all
+that's required to opt in:
+
+```yaml
+# config/services.yaml
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: true
+
+  App\Auth\PdoUserProvider: ~
+
+  Polidog\Relayer\Auth\UserProvider:
+    alias: App\Auth\PdoUserProvider
+```
+
+Apps that don't bind `UserProvider` pay nothing — `Authenticator` is
+only registered when the interface is bound, so unrelated projects keep
+booting unchanged.
+
+### 3. Log users in
+
+Inject `Authenticator` into the login page and call `attempt()` with
+the submitted credentials. Successful authentication rotates the
+session id (defends against session fixation) and stores the
+`Identity` snapshot.
+
+```php
+<?php
+// src/app/login/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx, Authenticator $auth): Closure {
+    $error = null;
+
+    $login = $ctx->action('login', function (array $form) use ($auth, &$error): void {
+        $identity = $auth->attempt(
+            (string) ($form['email']    ?? ''),
+            (string) ($form['password'] ?? ''),
+        );
+
+        if (null === $identity) {
+            $error = 'Invalid email or password.';
+
+            return;
+        }
+
+        \header('Location: /dashboard', true, 303);
+        exit;
+    });
+
+    return function () use ($login, $error): Element {
+        // ... render form, surface $error as a single generic message
+    };
+};
+```
+
+`Authenticator` API:
+
+| Method                           | Returns           | Notes                                                    |
+| -------------------------------- | ----------------- | -------------------------------------------------------- |
+| `attempt($id, $password)`        | `?Identity`       | Verify via `UserProvider` + hasher; on success: log in.  |
+| `login(Identity $identity)`      | `void`            | Promote an already-resolved principal (SSO, signup).     |
+| `logout()`                       | `void`            | Drop the principal, rotate the session id.               |
+| `user()`                         | `?Identity`       | Currently-logged-in principal, or `null`.                |
+| `check()`                        | `bool`            | Shorthand for `user() !== null`.                         |
+| `hasRole($role)` / `hasAnyRole`  | `bool`            | Role probes.                                             |
+
+`attempt()` runs the password hasher even when the identifier is
+unknown so an attacker can't enumerate accounts by response time.
+A failure always returns `null`; the caller should render a single
+generic error rather than disclose which field rejected the input.
+
+### 4. Protect pages
+
+#### Class-style: `#[Auth]`
+
+Attach `Polidog\Relayer\Auth\Auth` to a `PageComponent` subclass. The
+guard runs in `InjectorContainer` **before** the page is instantiated
+— so an anonymous request never builds the page or its dependencies.
+
+```php
+<?php
+namespace App\Pages;
+
+use Polidog\Relayer\Auth\Auth;
+use Polidog\Relayer\Router\Component\PageComponent;
+
+#[Auth] // any authenticated user
+final class DashboardPage extends PageComponent { /* ... */ }
+
+#[Auth(roles: ['admin'])] // role-gated; non-admin gets 403
+final class AdminPage extends PageComponent { /* ... */ }
+
+#[Auth(redirectTo: '')] // empty redirect -> 401 instead of 302 (JSON / API)
+final class ApiEndpoint extends PageComponent { /* ... */ }
+```
+
+| Parameter      | Default     | Effect                                                 |
+| -------------- | ----------- | ------------------------------------------------------ |
+| `roles`        | `[]`        | One of these roles must be present (empty = any user). |
+| `redirectTo`   | `'/login'`  | Where anonymous requests go. Empty string → `401`.     |
+
+Anonymous requests get a `302 Location: /login?next=<requested-path>`
+(URL-encoded, same-origin only). Authenticated users lacking the
+required role get `403 Forbidden`.
+
+`#[Auth]` is evaluated before `#[Cache]`, so unauthorized requests
+never produce a cacheable `304` that could leak to anonymous viewers
+through a shared cache. Combining `#[Auth]` + `#[Cache]` is fine —
+just prefer `Cache-Control: private` for per-user gated pages.
+
+#### Function-style: `$ctx->requireAuth()` / `Identity` injection
+
+Function-style factories use a declarative guard on `PageContext`:
+
+```php
+<?php
+// src/app/dashboard/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (PageContext $ctx): Closure {
+    $user = $ctx->requireAuth(); // throws AuthorizationException on failure
+
+    return fn(): Element => <h1>Welcome, {$user->displayName}</h1>;
+};
+```
+
+`requireAuth($roles = [], $redirectTo = '/login')` returns the
+`Identity` so you can use it inline. AppRouter catches the exception
+and produces the same `302` / `401` / `403` response as `#[Auth]`.
+
+For pages that adapt to the authentication state instead of requiring
+it, declare `?Identity` on the factory and the framework injects the
+current principal (`null` when no one is logged in):
+
+```php
+return function (PageContext $ctx, ?Identity $user): Closure {
+    $ctx->metadata(['title' => $user?->displayName ?? 'Welcome']);
+
+    return fn(): Element => null !== $user
+        ? <p>Hi, {$user->displayName}</p>
+        : <a href="/login">Sign in</a>;
+};
+```
+
+A non-nullable `Identity` parameter is treated as "auth required" and
+triggers the same redirect path as `requireAuth()` when anonymous —
+equivalent to `#[Auth]` for class-style pages.
+
+### 5. Pluggable parts
+
+The defaults are sensible but swappable. Bind a different
+implementation in `services.yaml` (or `AppConfigurator`) to override:
+
+| Interface                                  | Default                  | Override when…                                     |
+| ------------------------------------------ | ------------------------ | -------------------------------------------------- |
+| `Polidog\Relayer\Auth\UserProvider`        | *(unbound, app-supplied)*| Always — this is your user lookup.                 |
+| `Polidog\Relayer\Auth\PasswordHasher`      | `NativePasswordHasher`   | You want a specific algorithm or pepper.           |
+| `Polidog\Relayer\Auth\SessionStorage`      | `NativeSession`          | You want Redis / database-backed sessions.         |
+
+`NativePasswordHasher` uses `PASSWORD_DEFAULT` so it tracks whatever
+PHP considers strongest on the current build (bcrypt today). Force
+argon2id when libargon2 is available:
+
+```php
+$container->register(NativePasswordHasher::class)
+    ->setArguments([\PASSWORD_ARGON2ID]);
+```
+
+`NativeSession` calls `session_start()` lazily on first read/write,
+so just resolving the service through DI does not eagerly emit
+`Set-Cookie`. It shares `$_SESSION` with the existing CSRF token
+machinery — no duplicate session starts.
+
+### Notes
+
+- The auth guard runs in `InjectorContainer` (class-style pages) and
+  in the factory-arg resolver (`Identity` injection / `requireAuth`).
+  Layouts are not guarded — they're resolved separately. If you need
+  layout-level auth state, inject `?Authenticator` into the layout
+  constructor and read `$auth?->user()` from `render()`.
+- `?next=<path>` on the login redirect is same-origin only — paths
+  starting with `//` or an absolute URL are dropped to prevent
+  open-redirect bouncing off the login page.
+- Sessions are rotated on **both** login and logout. A pre-login
+  session id captured by an attacker stops working the moment the
+  user authenticates.
+
 ## HTTP Cache Headers via `#[Cache]`
 
 Attach `Polidog\Relayer\Http\Cache` to a Page class to control
@@ -669,6 +923,12 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 | `Polidog\Relayer\Http\CachePolicy`             | Header emission + conditional GET evaluation.                          |
 | `Polidog\Relayer\Http\EtagStore`               | Pluggable ETag storage interface.                                      |
 | `Polidog\Relayer\Http\FileEtagStore`           | Default file-backed `EtagStore` implementation.                        |
+| `Polidog\Relayer\Auth\Auth`                    | `#[Auth]` attribute.                                                   |
+| `Polidog\Relayer\Auth\Authenticator`           | Session-based authentication orchestrator.                             |
+| `Polidog\Relayer\Auth\Identity` / `Credentials`| Principal + login-handshake value objects.                             |
+| `Polidog\Relayer\Auth\UserProvider`            | App-supplied user lookup interface.                                    |
+| `Polidog\Relayer\Auth\PasswordHasher`          | Hashing interface (default: `NativePasswordHasher`).                   |
+| `Polidog\Relayer\Auth\SessionStorage`          | Session storage interface (default: `NativeSession`).                  |
 
 The only third-party runtime dependency is `polidog/use-php` (the JSX-style
 component runtime). DI, dotenv, and Symfony YAML config are all wired by
