@@ -1,0 +1,45 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+use function Polidog\UsePhp\Runtime\useState;
+
+return function (PageContext $ctx): Closure {
+    $ctx->metadata(['title' => 'Counter']);
+
+    return function (): Element {
+        [$count, $setCount] = useState(0);
+
+        $btn = 'inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-900/10';
+
+        return (
+            <section className="space-y-6">
+                <header className="space-y-2">
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-900">Counter</h1>
+                    <p className="text-slate-600">
+                        Function-style page using{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">useState</code>.
+                        Each button POSTs a{' '}
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">setState</code>{' '}
+                        action; state is kept in the PHP session and survives reloads.
+                    </p>
+                </header>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+                    <p className="text-sm uppercase tracking-wide text-slate-500">Count</p>
+                    <p className="mt-1 font-mono text-3xl font-semibold text-slate-900">{(string) $count}</p>
+
+                    <div className="mt-4 flex gap-2">
+                        <button className={$btn} onClick={fn() => $setCount($count - 1)}>-</button>
+                        <button className={$btn} onClick={fn() => $setCount($count + 1)}>+</button>
+                        <button className={$btn} onClick={fn() => $setCount(0)}>Reset</button>
+                    </div>
+                </div>
+            </section>
+        );
+    };
+};

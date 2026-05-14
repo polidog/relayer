@@ -4,6 +4,7 @@ A tiny app that exercises the main Relayer features:
 
 - Function-style page receiving services via DI — `src/Pages/page.psx`
 - Minimal function-style page (no DI) — `src/Pages/about/page.psx`
+- Function-style page using `useState` for stateful UI — `src/Pages/counter/page.psx`
 - Class-style page with `#[Cache]` — `src/Pages/users/page.psx`
 - Dynamic route segment with constructor injection — `src/Pages/users/[id]/page.psx`
 - Function-style page using `$ctx->action()` for server-side validation —

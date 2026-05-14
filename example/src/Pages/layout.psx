@@ -31,6 +31,7 @@ final class RootLayout extends LayoutComponent
                         <div className="flex flex-1 items-center gap-5">
                             <a href="/" className={$navLink}>Home</a>
                             <a href="/about" className={$navLink}>About</a>
+                            <a href="/counter" className={$navLink}>Counter</a>
                             <a href="/users" className={$navLink}>Users</a>
                             {null !== $user && $user->hasRole('admin')
                                 ? <a href="/admin" className={$navLink}>Admin</a>
