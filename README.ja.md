@@ -14,6 +14,9 @@
 - HTTP キャッシュ用 `#[Cache]` アトリビュート + `If-None-Match` による
   304 応答、差し替え可能な `EtagStore`（デフォルトはファイル、Redis 等にも
   簡単に切り替え可能）
+- セッションベースの認証: `#[Auth]` アトリビュート / `$ctx->requireAuth()`、
+  ロール検査、パスワードハッシュ、差し替え可能な `UserProvider` /
+  `SessionStorage`
 
 `Relayer::boot()` の 1 行だけがエントリポイント。アプリ側のコードを
 最小に保てます。
