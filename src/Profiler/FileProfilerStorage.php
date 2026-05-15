@@ -14,6 +14,15 @@ namespace Polidog\Relayer\Profiler;
  */
 final class FileProfilerStorage implements ProfilerStorage
 {
+    /**
+     * Token shape accepted by {@see load()} as a filename component. Matches
+     * the safe-token guard the router already applies at the URL boundary —
+     * letters/digits/dashes/underscores only, so a corrupted profile JSON
+     * carrying e.g. `../../etc/passwd` as a parentToken cannot redirect
+     * subsequent loads outside the storage directory.
+     */
+    private const SAFE_TOKEN_PATTERN = '/^[a-zA-Z0-9_-]+$/';
+
     public function __construct(private readonly string $directory) {}
 
     public function save(Profile $profile): void
@@ -35,6 +44,15 @@ final class FileProfilerStorage implements ProfilerStorage
 
     public function load(string $token): ?Profile
     {
+        // Defense in depth: even though the router validates inbound tokens,
+        // load() is also called from the viewer with values pulled out of
+        // stored profile JSON (e.g. parentToken on the detail view). A
+        // tampered profile must not be able to redirect the read to an
+        // arbitrary path component.
+        if ('' === $token || !\preg_match(self::SAFE_TOKEN_PATTERN, $token)) {
+            return null;
+        }
+
         $path = $this->directory . '/' . $token . '.json';
         if (!\is_file($path)) {
             return null;

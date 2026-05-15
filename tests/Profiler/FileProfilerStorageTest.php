@@ -140,4 +140,18 @@ final class FileProfilerStorageTest extends TestCase
 
         self::assertSame([], $storage->childrenOf(''));
     }
+
+    public function testLoadRejectsUnsafeTokens(): void
+    {
+        // Even if a stored profile somehow carries a malicious parentToken
+        // (e.g. tampered JSON, an upstream profiler with a looser token
+        // shape), load() must refuse anything outside the safe shape so
+        // the read can't escape the storage directory.
+        $storage = new FileProfilerStorage($this->dir);
+
+        self::assertNull($storage->load('../../etc/passwd'));
+        self::assertNull($storage->load('foo/bar'));
+        self::assertNull($storage->load('foo.bar'));
+        self::assertNull($storage->load(''));
+    }
 }

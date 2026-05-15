@@ -129,8 +129,13 @@ final class Relayer
             ?? $_SERVER['USEPHP_SNAPSHOT_SECRET']
             ?? \getenv('USEPHP_SNAPSHOT_SECRET');
 
+        // Trim before return — secrets sourced from files often pick up a
+        // trailing newline. Without normalizing here, the HMAC would silently
+        // diverge from the value an operator pasted into a .env file, and
+        // every defer payload would fail signature verification with no
+        // obvious cause.
         if (\is_string($explicit) && '' !== \trim($explicit)) {
-            return $explicit;
+            return \trim($explicit);
         }
 
         if (!$isDev) {

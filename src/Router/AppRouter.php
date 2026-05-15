@@ -157,6 +157,25 @@ class AppRouter
             RenderContext::setApp($this->usephp);
         }
 
+        // Belt-and-braces cleanup for the `exit/die` paths inside dispatch
+        // (the 304 short-circuit in applyFunctionPageCache and the PRG
+        // redirect in dispatchStateAction). PHP's `finally` does not run on
+        // exit, so without this the static RenderContext + the container's
+        // currentRequest would carry the previous dispatch's state into the
+        // next request under any long-running PHP runtime. Both teardown
+        // calls are idempotent so this is safe even when `finally` runs
+        // first on the normal path.
+        $container = $this->container;
+        $hasUsephp = null !== $this->usephp;
+        \register_shutdown_function(static function () use ($container, $hasUsephp): void {
+            if ($container instanceof InjectorContainer) {
+                $container->setCurrentRequest(null);
+            }
+            if ($hasUsephp) {
+                RenderContext::clearApp();
+            }
+        });
+
         try {
             // Deferred component POST (`_usephp_defer_payload`) is dispatched
             // before route matching: the same URL is reused for the deferred
