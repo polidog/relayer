@@ -13,9 +13,11 @@ use function Polidog\UsePhp\Runtime\fc;
 //
 // `localCache: true` is SAFE here only because ExpensiveStats is not
 // user-specific and reads no session — persisting it in the browser can't
-// leak one user's data to the next on a shared terminal. Contrast
-// UserHeaderDeferred, which intentionally leaves localCache off because its
-// output is session-coupled.
+// leak one user's data to the next on a shared terminal, and it needs no
+// time bound. Contrast UserHeaderDeferred, which also opts into localCache
+// but, because its output is session-coupled, has to fence it: a
+// `localCacheTtl` (60s) plus `clearDeferCache()` at the login/logout
+// boundary. Here neither is necessary.
 //
 // No `cacheControl` is set, and that is the point worth seeing: the defer
 // endpoint actually responds with `no-store` (use-php backs component state
