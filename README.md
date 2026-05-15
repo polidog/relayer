@@ -7,6 +7,8 @@ Opinionated, batteries-included framework on top of
 
 - A Next.js App Router-style file-based router (`src/Pages/page.psx`,
   `layout.psx`, dynamic segments, error pages)
+- CSRF-protected server actions (`$ctx->action()` /
+  `PageComponent::action()` dispatch form posts to in-page handlers)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
   for service wiring (autowire, YAML/PHP config auto-load)
 - [symfony/dotenv](https://github.com/symfony/dotenv) for `.env` loading
@@ -219,7 +221,14 @@ src/Pages/
 A root `error.psx` (extending `ErrorPageComponent`) renders 404 responses
 inside the root layout. Without one, the framework emits a minimal default.
 
-### Form actions (CSRF-protected)
+## Server Actions (form / CSRF-protected)
+
+Dispatch a form submission to a server-side handler bound to the page
+(equivalent to Next.js Server Actions). The token is CSRF-protected and the
+handler runs **before** `render()`. Available in both class- and
+function-style pages.
+
+### Class-style: `PageComponent::action()`
 
 `PageComponent::action([$this, 'handler'])` returns a CSRF-bound token for a
 form's hidden field. Submitting the form invokes the matching method on the
@@ -245,6 +254,8 @@ public function save(array $form): void
 ```
 
 Invalid CSRF tokens return a `403`.
+
+### Function-style: `PageContext::action()`
 
 Function-style pages declare server actions through `PageContext::action()`.
 The factory closure runs on every request — including the POST that submits
@@ -284,6 +295,49 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 The handler receives the POST body as its first argument (with
 `_usephp_action` / `_usephp_csrf` stripped). Action names must be unique
 per page — registering the same name twice throws.
+
+### Binding arguments
+
+A third `$args` argument binds values into the handler. They are passed
+**after** the form body:
+
+```php
+// list → positional:   handler($form, 42)
+$delete = $ctx->action('delete', function (array $form, int $id) use ($repo): void {
+    $repo->delete($id);
+}, [$user->id]);
+
+// assoc → named args:   handler(formData: $form, id: 42)
+$ctx->action('delete', fn (array $formData, int $id) => $repo->delete($id), ['id' => $user->id]);
+```
+
+`$args` is embedded **verbatim** in the base64 action token (it is *not*
+signed — tamper detection is the CSRF token's job). Keep bound values to
+identifiers and always re-validate authorization/integrity inside the
+handler (e.g. verify ownership of the incoming `$id` server-side).
+
+### Re-rendering after a failed submit
+
+A function-style page's factory closure re-runs on every request and the
+action handler runs **after** the renderer is built. To re-render the same
+page on a validation error, capture state by reference (`&$errors`) and read
+the post-dispatch value in the renderer (the typical pairing with
+[Validation](#validation)'s `safeParse`; full example in
+`example/src/Pages/signup/page.psx`):
+
+```php
+return function (PageContext $ctx) use ($schema): Closure {
+    $errors = [];
+    $save = $ctx->action('save', function (array $form) use ($schema, &$errors): void {
+        $result = $schema->safeParse($form);
+        if (!$result->success) { $errors = $result->errors; return; }
+        // ... on success, PRG redirect (header('Location: ...', true, 303); exit;)
+    });
+
+    // $errors is mutated after the action runs → capture by reference
+    return function () use ($save, &$errors): Element { /* render $errors */ };
+};
+```
 
 ## Service Registration
 
