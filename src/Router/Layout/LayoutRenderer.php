@@ -19,13 +19,13 @@ final class LayoutRenderer
         ?string $formActionUrl = null,
         ?SnapshotSerializer $snapshotSerializer = null,
     ) {
-        // Renderer takes the SnapshotSerializer so snapshot-backed component
-        // state can be signed into the rendered HTML. Null is allowed for the
-        // common case of pages with no snapshot-storage components — Renderer
-        // emits unsigned snapshot JSON if a snapshot is actually produced,
-        // which is NOT tamper-protected against the client, so pages that
-        // round-trip state through `StorageType::Snapshot` must hand in a
-        // configured SnapshotSerializer.
+        // Renderer takes the SnapshotSerializer to HMAC-sign snapshot-backed
+        // component state rendered into the page. Defer placeholders use the
+        // `/_defer/{name}` GET endpoint and do NOT need it. Null is fine for
+        // the common case of pages with no `StorageType::Snapshot` component;
+        // if a snapshot is actually serialized without one, use-php 0.5.0
+        // throws a clear LogicException rather than emitting forgeable
+        // unsigned state.
         $this->renderer = new Renderer($componentId, $snapshotSerializer);
         if (null === $formActionUrl) {
             $requestUri = $_SERVER['REQUEST_URI'] ?? '/';

@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
+use LogicException;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
@@ -435,12 +436,28 @@ class AppRouter
 
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
         // Pass the configured SnapshotSerializer so the inner Renderer can
-        // sign snapshot-backed component state inline. Null when usePHP
-        // isn't wired — Renderer then emits unsigned snapshot JSON if a
-        // page renders snapshot-storage state, which is NOT tamper-protected
-        // against the client. Pages that rely on `StorageType::Snapshot`
-        // must therefore wire a UsePHP instance via `setUsePhp()`.
-        $snapshotSerializer = $this->usephp?->getSnapshotSerializer();
+        // HMAC-sign snapshot-backed component state rendered into the page.
+        // Defer placeholders (`/_defer/{name}` GET endpoint) do NOT use the
+        // serializer — only `StorageType::Snapshot` state does.
+        //
+        // use-php 0.5.0 made getSnapshotSerializer() throw a LogicException
+        // when no secret has been configured, instead of silently returning
+        // an unsigned serializer. Relayer only configures a secret when
+        // USEPHP_SNAPSHOT_SECRET is set (or in dev, via a per-project
+        // fallback), so prod-without-secret legitimately has none. Degrade
+        // to null here: pages with no Snapshot-storage component render
+        // exactly as before; a page that actually serializes a snapshot
+        // without a secret then fails loudly inside the Renderer with
+        // use-php's own actionable message — which is the correct posture,
+        // an unsigned client round-trip is forgeable.
+        $snapshotSerializer = null;
+        if (null !== $this->usephp) {
+            try {
+                $snapshotSerializer = $this->usephp->getSnapshotSerializer();
+            } catch (LogicException) {
+                $snapshotSerializer = null;
+            }
+        }
         $renderer = new LayoutRenderer(
             $componentId,
             \is_string($requestUri) ? $requestUri : '/',

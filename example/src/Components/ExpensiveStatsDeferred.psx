@@ -1,0 +1,33 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components;
+
+use Polidog\UsePhp\Component\Defer;
+
+use function Polidog\UsePhp\Runtime\fc;
+
+// Deferred wrapper around ExpensiveStats, demonstrating use-php 0.5.0's opt-in
+// client-side localStorage (L2) cache.
+//
+// `localCache: true` is SAFE here only because ExpensiveStats is not
+// user-specific and reads no session — persisting it in the browser can't
+// leak one user's data to the next on a shared terminal. Contrast
+// UserHeaderDeferred, which intentionally leaves localCache off because its
+// output is session-coupled.
+//
+// No `cacheControl` is set, and that is the point worth seeing: the defer
+// endpoint actually responds with `no-store` (use-php backs component state
+// with a PHP session, and PHP's session cache limiter forces no-store), yet
+// the fragment is STILL persisted in localStorage on reload. usephp.js's L2
+// tier is gated solely by the `localCache` flag (surfaced as a bare
+// `data-usephp-defer-cache` attribute) and never inspects the Cache-Control
+// header — server/CDN caching and the client localStorage tier are
+// deliberately separate decisions. The L2 entry has no time expiry; it lives
+// until usephp.js's DEFER_CACHE_VERSION is bumped or
+// `window.usePHP.clearDeferCache()` is called.
+return fc(
+    fn (array $props) => <ExpensiveStats />,
+    defer: new Defer(name: 'expensive-stats', localCache: true),
+);

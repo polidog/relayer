@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Components\ExpensiveStatsDeferred;
 use App\Service\Clock;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
@@ -26,6 +27,16 @@ return function (PageContext $ctx, Clock $clock): Closure {
                     <p className="text-sm uppercase tracking-wide text-slate-500">Server time</p>
                     <p className="mt-1 font-mono text-xl font-semibold text-slate-900">{$now}</p>
                 </div>
+                <ExpensiveStatsDeferred
+                    fallback={
+                        <div
+                            className="h-32 animate-pulse rounded-xl border border-slate-200 bg-slate-100"
+                            aria-busy="true"
+                        >
+                            {''}
+                        </div>
+                    }
+                />
             </section>
         );
     };

@@ -14,8 +14,15 @@ use function Polidog\UsePhp\Runtime\fc;
 // /_defer/user-header. The Defer config travels with the component, so
 // `usephp compile` writes it into the deferred-manifest sidecar and Relayer's
 // PsxComponentRegistrar auto-registers the endpoint — no separate
-// `registerDeferred()` call needed. `cacheControl: 'private, no-store'` is set
-// because UserHeader reads $_SESSION at render time.
+// `registerDeferred()` call needed.
+//
+// `cacheControl: 'private, no-store'` is set because UserHeader reads
+// $_SESSION at render time. localCache is intentionally LEFT OFF (default
+// false): the fragment is session-coupled, and usePHP's localStorage (L2)
+// cache has no time expiry and survives logout, so persisting it would leak
+// one user's header to the next person on a shared terminal. See
+// ExpensiveStatsDeferred for the localCache opt-in, which is safe there
+// because that fragment is not user-specific.
 return fc(
     fn (array $props) => <UserHeader />,
     defer: new Defer(name: 'user-header', cacheControl: 'private, no-store'),

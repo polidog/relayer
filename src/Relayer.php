@@ -94,14 +94,20 @@ final class Relayer
     /**
      * Construct a {@see UsePHP} instance for PSX components + deferred dispatch.
      *
-     * The snapshot secret signs snapshot-storage state so it can survive a
-     * round-trip through the client without tampering. Resolution order:
+     * The snapshot secret HMAC-signs `StorageType::Snapshot` component state
+     * so it survives a round-trip through the client without tampering. It is
+     * NOT used by the defer endpoint (`/_defer/{name}` is a plain GET since
+     * use-php 0.4.0). Resolution order:
      *  1. `USEPHP_SNAPSHOT_SECRET` env var (intended for prod — set a long
      *     random string).
      *  2. In dev only, fall back to a deterministic per-project secret so
      *     starters work out of the box without forcing every project to
-     *     configure secrets first. Prod gets no fallback — `UsePHP` simply
-     *     uses an unsigned serializer if the env var is missing.
+     *     configure secrets first. Prod gets no fallback: with no secret the
+     *     serializer is simply not configured, and use-php 0.5.0 fails loudly
+     *     (LogicException) the moment a page actually serializes snapshot
+     *     state — an unsigned client round-trip would be forgeable. Apps that
+     *     never use Snapshot storage (e.g. the defer-only example) boot fine
+     *     without one.
      *
      * Components in `src/Components/` (if present) are compiled into a
      * manifest at `var/cache/psx/manifest.php` (and a sibling
@@ -145,12 +151,12 @@ final class Relayer
         }
 
         if (!$isDev) {
-            // Prod: don't invent a secret. Without one, UsePHP serializes
-            // snapshot-backed state UNSIGNED — clients can tamper with it
-            // before the next round-trip. Apps that use `StorageType::Snapshot`
-            // MUST set `USEPHP_SNAPSHOT_SECRET` in production; this fallback
-            // exists so apps that never use snapshot storage can still boot
-            // without one.
+            // Prod: don't invent a secret. Without one, UsePHP leaves the
+            // snapshot serializer unconfigured; use-php 0.5.0 then throws a
+            // clear LogicException the moment a page serializes snapshot
+            // state. Apps that use `StorageType::Snapshot` MUST set
+            // USEPHP_SNAPSHOT_SECRET in production; this fallback's absence
+            // exists so defer-only / non-snapshot apps still boot without one.
             return '';
         }
 
