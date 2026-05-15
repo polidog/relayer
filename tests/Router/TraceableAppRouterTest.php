@@ -394,6 +394,87 @@ final class TraceableAppRouterTest extends TestCase
         self::assertNull($profiler->currentProfile());
     }
 
+    public function testParentTokenHeaderIsStampedOnRecordedProfile(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>linked</p>;\n",
+        );
+
+        $profiler = new RecordingProfiler();
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler));
+
+        // A defer fetch coming through usephp.js (header-forwarded by the
+        // bridge script) — TraceableAppRouter must read it and stamp the
+        // current profile so the viewer can group it under the parent.
+        $_SERVER['HTTP_X_DEBUG_PARENT_TOKEN'] = 'aaaa1111bbbb2222';
+
+        try {
+            $this->runApp($router, '/');
+
+            $profile = $profiler->currentProfile();
+            self::assertNotNull($profile);
+            self::assertSame('aaaa1111bbbb2222', $profile->parentToken);
+        } finally {
+            unset($_SERVER['HTTP_X_DEBUG_PARENT_TOKEN']);
+        }
+    }
+
+    public function testMalformedParentTokenHeaderIsIgnored(): void
+    {
+        // A bogus header (path-traversal-ish, wrong length, anything that
+        // isn't the 16-hex RecordingProfiler shape) must NOT reach the
+        // storage layer as a profile field.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>ok</p>;\n",
+        );
+
+        $profiler = new RecordingProfiler();
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler));
+
+        $_SERVER['HTTP_X_DEBUG_PARENT_TOKEN'] = '../../etc/passwd';
+
+        try {
+            $this->runApp($router, '/');
+
+            $profile = $profiler->currentProfile();
+            self::assertNotNull($profile);
+            self::assertNull($profile->parentToken);
+        } finally {
+            unset($_SERVER['HTTP_X_DEBUG_PARENT_TOKEN']);
+        }
+    }
+
+    public function testRenderedHtmlIncludesDebugBridgeScript(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            "<?php\nuse Polidog\\UsePhp\\Html\\H;\nuse Polidog\\UsePhp\\Runtime\\Element;\n"
+            . "return fn(): Element => <p>bridged</p>;\n",
+        );
+
+        $profiler = new RecordingProfiler();
+        $router = new TraceableAppRouter($this->workDir, autoCompilePsx: true);
+        $router->setContainer($this->makeContainer($profiler));
+
+        $output = $this->runApp($router, '/');
+
+        $profile = $profiler->currentProfile();
+        self::assertNotNull($profile);
+
+        // The bridge script must embed the profile token and wire up the
+        // fetch wrapper that forwards X-Debug-Parent-Token on defer fetches.
+        self::assertStringContainsString('data-relayer-debug-bridge', $output);
+        self::assertStringContainsString($profile->token, $output);
+        self::assertStringContainsString('X-Debug-Parent-Token', $output);
+        self::assertStringContainsString('X-UsePHP-Defer', $output);
+    }
+
     private function makeContainer(Profiler $profiler, ?ProfilerStorage $storage = null): ContainerInterface
     {
         return new class($profiler, $storage) implements ContainerInterface {

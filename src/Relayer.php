@@ -21,8 +21,10 @@ use Polidog\Relayer\Profiler\NullProfiler;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
+use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\TraceableAppRouter;
+use Polidog\UsePhp\UsePHP;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
@@ -79,7 +81,74 @@ final class Relayer
         }
         $router->setContainer($psr);
 
+        $usephp = self::buildUsePhp($projectRoot, $isDev);
+        $router->setUsePhp($usephp);
+
         return $router;
+    }
+
+    /**
+     * Construct a {@see UsePHP} instance for deferred component dispatch.
+     *
+     * Secret resolution order:
+     *  1. `USEPHP_SNAPSHOT_SECRET` env var (intended for prod — set a long
+     *     random string).
+     *  2. In dev only, fall back to a deterministic per-project secret so
+     *     the demo works out of the box without forcing every starter to
+     *     configure secrets first. Prod gets no fallback — `handleDeferred`
+     *     will refuse signed payloads cleanly if the env var is missing.
+     *
+     * Components in `src/Components/` (if present) are compiled into a
+     * manifest at `var/cache/psx/manifest.php`. In dev the manifest is
+     * regenerated whenever a `.psx` source is newer than the manifest;
+     * prod expects `vendor/bin/usephp compile src/Components/` to have run
+     * during deploy.
+     */
+    private static function buildUsePhp(string $projectRoot, bool $isDev): UsePHP
+    {
+        $app = new UsePHP();
+
+        $secret = self::resolveSnapshotSecret($projectRoot, $isDev);
+        if ('' !== $secret) {
+            $app->setSnapshotSecret($secret);
+        }
+
+        PsxComponentRegistrar::configure(
+            $app,
+            componentsDir: $projectRoot . '/src/Components',
+            cacheDir: $projectRoot . '/var/cache/psx',
+            autoCompile: $isDev,
+        );
+
+        return $app;
+    }
+
+    private static function resolveSnapshotSecret(string $projectRoot, bool $isDev): string
+    {
+        $explicit = $_ENV['USEPHP_SNAPSHOT_SECRET']
+            ?? $_SERVER['USEPHP_SNAPSHOT_SECRET']
+            ?? \getenv('USEPHP_SNAPSHOT_SECRET');
+
+        // Trim before return — secrets sourced from files often pick up a
+        // trailing newline. Without normalizing here, the HMAC would silently
+        // diverge from the value an operator pasted into a .env file, and
+        // every defer payload would fail signature verification with no
+        // obvious cause.
+        if (\is_string($explicit) && '' !== \trim($explicit)) {
+            return \trim($explicit);
+        }
+
+        if (!$isDev) {
+            // Prod: don't invent a secret. UsePHP::handleDeferred() will
+            // emit a clear 400 ("Defer endpoint disabled") so the operator
+            // knows what to fix.
+            return '';
+        }
+
+        // Dev fallback: stable per-project secret so deferred demos work
+        // immediately. The project root path is unique to the checkout, so
+        // two devs on the same machine don't share a key by accident.
+        return 'relayer-dev:' . \hash('sha256', $projectRoot);
     }
 
     /**

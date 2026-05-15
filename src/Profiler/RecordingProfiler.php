@@ -28,13 +28,20 @@ final class RecordingProfiler implements Profiler
 
     public function __construct(private readonly ?ProfilerStorage $storage = null) {}
 
-    public function beginProfile(string $url, string $method): Profile
+    /**
+     * @param ?string $parentToken Token of the request that triggered this
+     *                             one (e.g. a `<X defer />` fetch initiated
+     *                             by the parent page render). Null for
+     *                             top-level browser requests.
+     */
+    public function beginProfile(string $url, string $method, ?string $parentToken = null): Profile
     {
         $this->profile = new Profile(
             token: \bin2hex(\random_bytes(8)),
             url: $url,
             method: $method,
             startedAt: \microtime(true),
+            parentToken: $parentToken,
         );
 
         return $this->profile;

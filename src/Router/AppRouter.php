@@ -34,6 +34,8 @@ use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\RenderContext;
+use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
@@ -48,6 +50,7 @@ class AppRouter
     private bool $autoCompilePsx;
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
+    private ?UsePHP $usephp = null;
 
     public function __construct(
         string $appDirectory,
@@ -112,6 +115,31 @@ class AppRouter
         return $this;
     }
 
+    /**
+     * Wire a configured {@see UsePHP} instance for deferred component support.
+     *
+     * When set:
+     *  - `RenderContext::setApp()` is established before each dispatch so PSX
+     *    components compiled into pages can resolve `renderPsxComponent` calls.
+     *  - `POST` requests carrying `_usephp_defer_payload` are routed to
+     *    {@see UsePHP::handleDeferred()} before any layout/page work, letting
+     *    a cacheable shell host user-specific fragments fetched after load.
+     *
+     * Apps that don't use defer-style components can leave this unset; the
+     * router falls back to its prior behavior with no UsePHP coupling.
+     */
+    public function setUsePhp(UsePHP $usephp): self
+    {
+        $this->usephp = $usephp;
+
+        return $this;
+    }
+
+    public function getUsePhp(): ?UsePHP
+    {
+        return $this->usephp;
+    }
+
     public function run(): void
     {
         // Build a snapshot of the request once per dispatch and stash it so
@@ -122,7 +150,45 @@ class AppRouter
             $this->container->setCurrentRequest($this->currentRequest);
         }
 
+        // Establish the active UsePHP for compiled PSX page bodies that call
+        // RenderContext::getApp()->renderPsxComponent(...). Without this the
+        // deferred-component glue would have no app to dispatch through.
+        if (null !== $this->usephp) {
+            RenderContext::setApp($this->usephp);
+        }
+
+        // Belt-and-braces cleanup for the `exit/die` paths inside dispatch
+        // (the 304 short-circuit in applyFunctionPageCache and the PRG
+        // redirect in dispatchStateAction). PHP's `finally` does not run on
+        // exit, so without this the static RenderContext + the container's
+        // currentRequest would carry the previous dispatch's state into the
+        // next request under any long-running PHP runtime. Both teardown
+        // calls are idempotent so this is safe even when `finally` runs
+        // first on the normal path.
+        $container = $this->container;
+        $hasUsephp = null !== $this->usephp;
+        \register_shutdown_function(static function () use ($container, $hasUsephp): void {
+            if ($container instanceof InjectorContainer) {
+                $container->setCurrentRequest(null);
+            }
+            if ($hasUsephp) {
+                RenderContext::clearApp();
+            }
+        });
+
         try {
+            // Deferred component POST (`_usephp_defer_payload`) is dispatched
+            // before route matching: the same URL is reused for the deferred
+            // fetch and we never want layout/page rendering on that path.
+            if (null !== $this->usephp) {
+                $deferred = $this->usephp->handleDeferred();
+                if (null !== $deferred) {
+                    echo $deferred;
+
+                    return;
+                }
+            }
+
             $path = $this->getRequestPath();
 
             $match = $this->router->match($path);
@@ -143,7 +209,15 @@ class AppRouter
                 $this->container->setCurrentRequest(null);
             }
             $this->currentRequest = null;
+            if (null !== $this->usephp) {
+                RenderContext::clearApp();
+            }
         }
+    }
+
+    protected function getDocument(): DocumentInterface
+    {
+        return $this->document;
     }
 
     protected function handleMatch(RouteMatch $match): void
@@ -359,7 +433,16 @@ class AppRouter
         }
 
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
+        // Pass the configured SnapshotSerializer so the inner Renderer can
+        // sign defer payloads for `<X defer />` placeholders emitted during
+        // SSR. Null when defer isn't wired — the Renderer will refuse defer
+        // elements with a clear error if the page actually uses one.
+        $snapshotSerializer = $this->usephp?->getSnapshotSerializer();
+        $renderer = new LayoutRenderer(
+            $componentId,
+            \is_string($requestUri) ? $requestUri : '/',
+            $snapshotSerializer,
+        );
         $html = $renderer->render($pageElement, $layouts);
 
         if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {

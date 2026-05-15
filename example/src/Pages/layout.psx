@@ -4,22 +4,17 @@ declare(strict_types=1);
 
 namespace App\Layouts;
 
-use Polidog\Relayer\Auth\Authenticator;
+use App\Components\HeaderSkeleton;
+use App\Components\UserHeader;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
 final class RootLayout extends LayoutComponent
 {
-    // Optional Authenticator so the layout still renders in apps that
-    // haven't wired auth — for the example it's always bound, but the
-    // file doubles as a copy-paste starting point.
-    public function __construct(private readonly ?Authenticator $auth = null) {}
-
     public function render(): Element
     {
         $navLink = 'text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors';
-        $user = $this->auth?->user();
 
         return (
             <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -33,37 +28,9 @@ final class RootLayout extends LayoutComponent
                             <a href="/about" className={$navLink}>About</a>
                             <a href="/counter" className={$navLink}>Counter</a>
                             <a href="/users" className={$navLink}>Users</a>
-                            {null !== $user && $user->hasRole('admin')
-                                ? <a href="/admin" className={$navLink}>Admin</a>
-                                : null}
-                            {null !== $user
-                                ? <a href="/dashboard" className={$navLink}>Dashboard</a>
-                                : <a href="/signup" className={$navLink}>Signup</a>}
+                            <a href="/signup" className={$navLink}>Signup</a>
                         </div>
-                        <div className="flex items-center gap-3">
-                            {null !== $user
-                                ? (
-                                    <>
-                                        <span className="text-sm text-slate-500">
-                                            Hi, <span className="font-medium text-slate-900">{$user->displayName}</span>
-                                        </span>
-                                        <a
-                                            href="/dashboard"
-                                            className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                                        >
-                                            Dashboard
-                                        </a>
-                                    </>
-                                )
-                                : (
-                                    <a
-                                        href="/login"
-                                        className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
-                                    >
-                                        Sign in
-                                    </a>
-                                )}
-                        </div>
+                        <UserHeader defer fallback={<HeaderSkeleton />} />
                     </nav>
                 </header>
                 <main className="mx-auto max-w-3xl px-6 py-10">{$this->getChildren()}</main>
