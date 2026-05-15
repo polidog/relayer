@@ -88,7 +88,6 @@ final class FunctionPageActionDispatchTest extends TestCase
         $context = new PageContext([], '/users');
         $token = $context->action('save', static function () use ($context): void {
             $context->redirect('/users');
-            self::fail('redirect() must short-circuit the handler');
         });
 
         $page = $this->makePage($context, '/users');

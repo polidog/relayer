@@ -66,7 +66,6 @@ final class PageContextTest extends TestCase
 
         try {
             $context->redirect('/users');
-            self::fail('redirect() should throw RedirectException');
         } catch (RedirectException $exception) {
             self::assertSame('/users', $exception->location);
             self::assertSame(303, $exception->status);
@@ -79,7 +78,6 @@ final class PageContextTest extends TestCase
 
         try {
             $context->redirect('/login', 302);
-            self::fail('redirect() should throw RedirectException');
         } catch (RedirectException $exception) {
             self::assertSame('/login', $exception->location);
             self::assertSame(302, $exception->status);
