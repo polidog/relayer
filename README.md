@@ -15,6 +15,9 @@ Opinionated, batteries-included framework on top of
   with pluggable `EtagStore` (file-based default, Redis-ready)
 - Session-based authentication: `#[Auth]` attribute / `$ctx->requireAuth()`,
   role checks, password hashing, pluggable `UserProvider` and `SessionStorage`
+- [Zod](https://zod.dev/)-style schema validation (`Validator::object()`,
+  `safeParse` / `parse`, form-input coercion + per-field errors)
+- A dev-only request profiler (`/_profiler` view, no-op in production)
 
 Exposes a single `Relayer::boot()` entrypoint so app code stays small.
 
@@ -997,6 +1000,150 @@ stay traced and cached.
   you can see exactly how many round-trips memoization saved. In prod the
   profiler is a no-op, so there's no overhead.
 
+## Validation
+
+`Polidog\Relayer\Validation` is a schema validator inspired by
+[Zod](https://zod.dev/) (TypeScript). It coerces and validates input
+(form fields always arrive as strings) and returns per-field error
+messages in a single pass. No extra dependency.
+
+### Declaring a schema
+
+Build schemas through the `Validator` facade:
+
+```php
+use Polidog\Relayer\Validation\Validator;
+
+$schema = Validator::object([
+    'email' => Validator::string()->trim()->email(),
+    'name'  => Validator::string()->trim()->min(1, 'Name is required.'),
+    'age'   => Validator::int()->min(0)->optional(),
+    'role'  => Validator::enum(['admin', 'member'])->default('member'),
+]);
+```
+
+| Factory                        | Schema                                                  |
+| ------------------------------ | ------------------------------------------------------- |
+| `Validator::string()`          | String. `min/max/length/regex/email/url/trim/lower/upper` |
+| `Validator::int()`             | Integer; coerces numeric strings. `min/max/positive/nonNegative` |
+| `Validator::float()`           | Float; coerces numeric strings                          |
+| `Validator::bool()`            | Boolean                                                 |
+| `Validator::enum([...])`       | One of the allowed values; `literal()` for a single one |
+| `Validator::object([...])`     | Assoc array; unknown keys stripped by default, `passthrough()` keeps them |
+| `Validator::array($element)`   | Validates every element against `$element`              |
+| `Validator::email()` / `url()` | Shortcuts for `string()->trim()->email()` / `url()`     |
+
+Modifiers available on every schema (immutable — each returns a clone, so a
+base schema is reusable as a building block):
+
+| Modifier                     | Meaning                                              |
+| ---------------------------- | ---------------------------------------------------- |
+| `optional()`                 | Absent input becomes `null`; no further checks       |
+| `nullable()`                 | Allows `null` (the key itself is still required)     |
+| `default($value)`            | Value used when input is absent                      |
+| `required(?$message)`        | Force required + override the "absent" message       |
+| `refine($predicate, $msg)`   | Arbitrary extra validation predicate                 |
+| `transform($fn)`             | Final transform after a value validates              |
+
+For `StringSchema` / `IntSchema` / `EnumSchema` an empty string counts as
+"not provided", so `optional` / `required` / `default` behave intuitively
+with form inputs.
+
+### Parsing
+
+```php
+$result = $schema->safeParse($_POST);
+
+if ($result->success) {
+    $data = $result->data;          // coerced values
+} else {
+    $errors = $result->errors;      // ['email' => '...', 'address.zip' => '...']
+}
+```
+
+- `safeParse($input): ParseResult` — never throws on validation errors;
+  branch on `success`.
+- `parse($input): mixed` — throws `ParseError` (carrying `$errors`) on
+  failure.
+- Nested `object` errors use dot paths (`address.zip`).
+
+### With form actions
+
+The typical use is alongside `$ctx->action()`
+(`example/src/Pages/signup/page.psx`):
+
+```php
+$schema = Validator::object([
+    'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+    'email'    => Validator::string()->trim()->email(),
+    'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
+]);
+
+$signup = $ctx->action('signup', function (array $form) use ($schema, &$errors): void {
+    $result = $schema->safeParse($form);
+    if (!$result->success) {
+        $errors = $result->errors;   // hand field errors to the view
+        return;
+    }
+    // $result->data is coerced
+});
+```
+
+## Profiler
+
+A dev-only request profiler. Each request is recorded as a `Profile`
+(URL, method, status, event timeline) and inspectable through the
+`/_profiler` web view. **Zero cost in production** — user code can take a
+`Profiler` dependency without caring about the environment.
+
+### How it works
+
+`Profiler::class` is always bound in DI:
+
+- **prod** (`APP_ENV` not dev/development) → `NullProfiler`. Every method is
+  a no-op, callable without an `if profiler enabled` branch.
+- **dev** (`APP_ENV=dev`) → `RecordingProfiler`. Events accumulate on the
+  `Profile` and are persisted by `FileProfilerStorage` to
+  `<projectRoot>/var/cache/profiler` as JSON at end of request.
+
+In dev, the Traceable decorators wrap AppRouter / Database / EtagStore /
+SessionStorage / Authenticator and feed spans like `db.query`,
+`cache.etag_*`, and `session.*` into the profile automatically.
+`<X defer />` sub-requests are linked to their parent via `parentToken`.
+
+### Web view
+
+`TraceableAppRouter` intercepts `/_profiler` *before* normal dispatch (so
+the profiler never profiles itself):
+
+| URL                  | Content                                                 |
+| -------------------- | ------------------------------------------------------- |
+| `/_profiler`         | Recent requests (defer sub-requests folded into parent) |
+| `/_profiler/<token>` | One request in detail (event timeline + sub-requests)   |
+
+Pure HTML — no JS, no external CSS — so it works offline.
+
+### Instrumenting from code
+
+Take a `Profiler` in any page/service constructor:
+
+```php
+use Polidog\Relayer\Profiler\Profiler;
+
+public function __construct(private readonly Profiler $profiler) {}
+
+// one-shot event
+$this->profiler->collect('app', 'cache warmed', ['keys' => 12]);
+
+// timed span (finalized by stop())
+$span = $this->profiler->start('app', 'heavy compute');
+$result = $this->compute();
+$span->stop(['rows' => \count($result)]);
+```
+
+The same calls are no-ops under `NullProfiler`, so no environment branching
+is needed.
+
 ## Source Layout
 
 | Namespace                                              | Purpose                                                                |
@@ -1022,6 +1169,10 @@ stay traced and cached.
 | `Polidog\Relayer\Auth\UserProvider`            | App-supplied user lookup interface.                                    |
 | `Polidog\Relayer\Auth\PasswordHasher`          | Hashing interface (default: `NativePasswordHasher`).                   |
 | `Polidog\Relayer\Auth\SessionStorage`          | Session storage interface (default: `NativeSession`).                  |
+| `Polidog\Relayer\Validation\Validator`         | Zod-style schema builder facade (`safeParse` / `parse`).               |
+| `Polidog\Relayer\Validation\Schema`            | Schema base + types (string/int/float/bool/enum/array/object).         |
+| `Polidog\Relayer\Profiler\Profiler`            | Request-tracing facade (dev: recording / prod: no-op).                 |
+| `Polidog\Relayer\Profiler\ProfilerWebView`     | `/_profiler` dev view (index + detail).                                |
 
 The only third-party runtime dependency is `polidog/use-php` (the JSX-style
 component runtime). DI, dotenv, and Symfony YAML config are all wired by

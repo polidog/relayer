@@ -17,6 +17,9 @@
 - セッションベースの認証: `#[Auth]` アトリビュート / `$ctx->requireAuth()`、
   ロール検査、パスワードハッシュ、差し替え可能な `UserProvider` /
   `SessionStorage`
+- [Zod](https://zod.dev/) 風のスキーマバリデーション（`Validator::object()`
+  など、`safeParse` / `parse`、フォーム入力の coercion とフィールド別エラー）
+- dev 限定のリクエストプロファイラ（`/_profiler` ビュー、本番では no-op）
 
 `Relayer::boot()` の 1 行だけがエントリポイント。アプリ側のコードを
 最小に保てます。
@@ -992,6 +995,148 @@ $db->transactional(function (Database $tx): void {
   として残ります。本番では Profiler は no-op なのでオーバーヘッドは
   ありません。
 
+## バリデーション
+
+`Polidog\Relayer\Validation` は [Zod](https://zod.dev/)（TypeScript）に
+着想を得たスキーマバリデータです。フォーム入力（常に文字列で届く）を
+coercion しつつ検証し、フィールドごとのエラーメッセージを 1 パスでまとめて
+返します。追加の依存はありません。
+
+### スキーマの宣言
+
+`Validator` ファサードで組み立てます:
+
+```php
+use Polidog\Relayer\Validation\Validator;
+
+$schema = Validator::object([
+    'email' => Validator::string()->trim()->email(),
+    'name'  => Validator::string()->trim()->min(1, 'Name is required.'),
+    'age'   => Validator::int()->min(0)->optional(),
+    'role'  => Validator::enum(['admin', 'member'])->default('member'),
+]);
+```
+
+| ファクトリ                     | スキーマ                                                  |
+| ------------------------------ | --------------------------------------------------------- |
+| `Validator::string()`          | 文字列。`min/max/length/regex/email/url/trim/lower/upper`  |
+| `Validator::int()`             | 整数。数値文字列を coercion。`min/max/positive/nonNegative`|
+| `Validator::float()`           | 浮動小数点数。数値文字列を coercion                        |
+| `Validator::bool()`            | 真偽値                                                    |
+| `Validator::enum([...])`       | 許可値のいずれか。`literal()` は単一値                     |
+| `Validator::object([...])`     | 連想配列。未知キーは既定で除去、`passthrough()` で保持     |
+| `Validator::array($element)`   | 各要素を `$element` スキーマで検証                         |
+| `Validator::email()` / `url()` | `string()->trim()->email()` / `url()` のショートカット     |
+
+すべてのスキーマで使える修飾子（イミュータブル — 元のスキーマは変化せず
+clone を返すので部品として再利用できます）:
+
+| 修飾子                       | 意味                                            |
+| ---------------------------- | ----------------------------------------------- |
+| `optional()`                 | 未入力なら `null`。以降の検証はスキップ          |
+| `nullable()`                 | `null` を許容（キー自体は必須）                  |
+| `default($value)`            | 未入力時に使う既定値                            |
+| `required(?$message)`        | 必須に戻す＋未入力メッセージの上書き             |
+| `refine($predicate, $msg)`   | 任意の述語で追加検証                            |
+| `transform($fn)`             | 検証通過後に最終変換                            |
+
+`StringSchema` / `IntSchema` / `EnumSchema` では空文字を「未入力」として
+扱うため、`optional` / `required` / `default` がフォームで直感的に効きます。
+
+### パースする
+
+```php
+$result = $schema->safeParse($_POST);
+
+if ($result->success) {
+    $data = $result->data;          // coercion 済みの値
+} else {
+    $errors = $result->errors;      // ['email' => '...', 'address.zip' => '...']
+}
+```
+
+- `safeParse($input): ParseResult` — 検証エラーで例外を投げません。
+  `success` を見て分岐します。
+- `parse($input): mixed` — 失敗時に `ParseError`（`$errors` を保持）を送出。
+- ネストした `object` のエラーキーはドットパス（`address.zip`）になります。
+
+### フォームアクションとの組み合わせ
+
+`$ctx->action()` と一緒に使うのが典型例です
+（`example/src/Pages/signup/page.psx`）:
+
+```php
+$schema = Validator::object([
+    'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+    'email'    => Validator::string()->trim()->email(),
+    'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
+]);
+
+$signup = $ctx->action('signup', function (array $form) use ($schema, &$errors): void {
+    $result = $schema->safeParse($form);
+    if (!$result->success) {
+        $errors = $result->errors;   // フィールド別にビューへ
+        return;
+    }
+    // $result->data は coercion 済み
+});
+```
+
+## プロファイラ
+
+dev 限定のリクエストプロファイラです。各リクエストを `Profile`（URL・
+メソッド・ステータス・イベント列）として記録し、`/_profiler` の Web
+ビューで確認できます。**本番ではゼロコスト** — ユーザーコードは環境を
+気にせず `Profiler` 依存を受け取れます。
+
+### 仕組み
+
+`Profiler::class` は常に DI にバインドされます:
+
+- **prod**（`APP_ENV` が dev/development 以外）→ `NullProfiler`。全メソッド
+  no-op で、`if profiler enabled` 分岐なしに呼び出せます。
+- **dev**（`APP_ENV=dev`）→ `RecordingProfiler`。イベントは `Profile` に
+  溜まり、リクエスト終了時に `FileProfilerStorage` が
+  `<projectRoot>/var/cache/profiler` へ JSON 永続化します。
+
+dev では Traceable デコレータ群が AppRouter / Database / EtagStore /
+SessionStorage / Authenticator をラップし、`db.query`・`cache.etag_*`・
+`session.*` などのスパンを自動でプロファイルへ流します。`<X defer />`
+によるサブリクエストは `parentToken` で親リクエストに紐づきます。
+
+### Web ビュー
+
+`TraceableAppRouter` が通常ディスパッチの **前に** `/_profiler` を横取り
+します（プロファイラ自身はプロファイルされません）:
+
+| URL                  | 内容                                                |
+| -------------------- | --------------------------------------------------- |
+| `/_profiler`         | 直近のリクエスト一覧（defer は親行に折り畳み）       |
+| `/_profiler/<token>` | 1 リクエストの詳細（イベント時系列・サブリクエスト） |
+
+純粋な HTML のみ（JS も外部 CSS もなし）でオフラインでも動きます。
+
+### コードから計測する
+
+ページやサービスのコンストラクタで `Profiler` を受け取れます:
+
+```php
+use Polidog\Relayer\Profiler\Profiler;
+
+public function __construct(private readonly Profiler $profiler) {}
+
+// 一発イベント
+$this->profiler->collect('app', 'cache warmed', ['keys' => 12]);
+
+// 計時スパン（stop() で確定）
+$span = $this->profiler->start('app', 'heavy compute');
+$result = $this->compute();
+$span->stop(['rows' => \count($result)]);
+```
+
+`NullProfiler` でも同じ呼び出しがそのまま no-op になるため、環境による
+分岐は不要です。
+
 ## ソース構成
 
 | Namespace                                              | 役割                                                                |
@@ -1017,6 +1162,10 @@ $db->transactional(function (Database $tx): void {
 | `Polidog\Relayer\Auth\UserProvider`            | アプリ供給のユーザー検索インターフェース                            |
 | `Polidog\Relayer\Auth\PasswordHasher`          | パスワードハッシュ抽象（既定: `NativePasswordHasher`）              |
 | `Polidog\Relayer\Auth\SessionStorage`          | セッションストレージ抽象（既定: `NativeSession`）                   |
+| `Polidog\Relayer\Validation\Validator`         | Zod 風スキーマビルダのファサード（`safeParse` / `parse`）          |
+| `Polidog\Relayer\Validation\Schema`            | スキーマ基底＋各型（string/int/float/bool/enum/array/object）       |
+| `Polidog\Relayer\Profiler\Profiler`            | リクエストトレーシングのファサード（dev: 記録 / prod: no-op）       |
+| `Polidog\Relayer\Profiler\ProfilerWebView`     | `/_profiler` の dev ビュー（一覧＋詳細）                            |
 
 サードパーティのランタイム依存は `polidog/use-php`（JSX 風コンポーネント
 ランタイム）のみ。DI、dotenv、Symfony の YAML config はすべて
