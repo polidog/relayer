@@ -28,6 +28,16 @@ $clearDeferOnAuth = <<<'HTML'
     </script>
     HTML;
 
+// Wire the demo SQLite database. Done here (not in .env) so the path is
+// ABSOLUTE: the example must work no matter what cwd the server is
+// launched from, and SQLite resolves a relative DSN path against the
+// process cwd. Relayer reads DATABASE_DSN and, when set, auto-wires the
+// whole Db layer (PdoDatabase -> CachingDatabase -> TraceableDatabase in
+// dev). `??=` leaves a real environment override untouched. SQLite only
+// creates the db FILE, so ensure its (gitignored) parent dir exists.
+@\mkdir(__DIR__ . '/../src/var', 0o777, true);
+$_SERVER['DATABASE_DSN'] ??= 'sqlite:' . __DIR__ . '/../src/var/app.db';
+
 $document = HtmlDocument::create()
     ->disableDefaultStyles()
     ->addHeadHtml('<script src="https://cdn.tailwindcss.com"></script>')
