@@ -13,6 +13,7 @@ use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\RedirectException;
 use RuntimeException;
 
 final class PageContext
@@ -111,6 +112,26 @@ final class PageContext
     public function getAction(string $name): ?Closure
     {
         return $this->actions[$name] ?? null;
+    }
+
+    /**
+     * Redirect instead of rendering this page. Intended for form-action
+     * handlers registered via {@see action()} — do the work, then send the
+     * browser elsewhere:
+     *
+     *   $ctx->action('save', function (array $form) use ($ctx) {
+     *       $this->repo->save($form);
+     *       $ctx->redirect('/users');
+     *   });
+     *
+     * Throws {@see RedirectException}, which AppRouter catches and turns into
+     * a `Location` response — so this never returns and any code after the
+     * call in the handler is skipped. Defaults to 303 See Other (correct
+     * Post/Redirect/Get status after a POST form submission).
+     */
+    public function redirect(string $location, int $status = 303): never
+    {
+        throw new RedirectException($location, $status);
     }
 
     /**

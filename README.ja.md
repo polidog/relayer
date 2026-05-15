@@ -7,6 +7,8 @@
 
 - Next.js App Router 風のファイルベースルーター (`src/Pages/page.psx`,
   `layout.psx`, 動的セグメント, エラーページ)
+- CSRF 保護付きサーバアクション（`$ctx->action()` /
+  `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
   によるサービス配線（autowire、YAML/PHP の自動ロード）
 - [symfony/dotenv](https://github.com/symfony/dotenv) による `.env` 読み込み
@@ -223,7 +225,13 @@ src/Pages/
 ルート直下に `error.psx`（`ErrorPageComponent` を継承）を置くと、ルートレイ
 アウト内に 404 がレンダリングされます。無ければ最小限のデフォルト表示。
 
-### フォームアクション (CSRF 保護付き)
+## サーバアクション (フォーム / CSRF 保護付き)
+
+フォーム送信を、ページに紐づくサーバ側ハンドラへディスパッチする仕組みです
+（Next.js の Server Actions に相当）。トークンは CSRF 保護され、ハンドラは
+`render()` の **前** に実行されます。クラス型・関数型の両方で使えます。
+
+### クラス型: `PageComponent::action()`
 
 `PageComponent::action([$this, 'handler'])` が CSRF トークン付きのアクション
 識別子を返します。フォーム送信時に対応するメソッドが `render()` の前に呼ばれます:
@@ -248,6 +256,8 @@ public function save(array $form): void
 ```
 
 CSRF トークンが無効な場合は `403` が返ります。
+
+### 関数型: `PageContext::action()`
 
 関数スタイルのページでは `PageContext::action()` でサーバアクションを宣言します。
 ファクトリクロージャはリクエスト毎（フォーム送信時の POST も含む）に再実行され
@@ -287,6 +297,49 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 ハンドラの第1引数には POST ボディが渡されます (`_usephp_action` /
 `_usephp_csrf` は除外済み)。アクション名はページごとに一意で、同じ名前を
 2 回登録すると例外になります。
+
+### 引数のバインド
+
+第3引数 `$args` でハンドラに値をバインドできます。フォームボディの **後ろ**
+に渡されます:
+
+```php
+// リスト → 位置引数:        handler($form, 42)
+$delete = $ctx->action('delete', function (array $form, int $id) use ($repo): void {
+    $repo->delete($id);
+}, [$user->id]);
+
+// 連想配列 → 名前付き引数:  handler(formData: $form, id: 42)
+$ctx->action('delete', fn (array $formData, int $id) => $repo->delete($id), ['id' => $user->id]);
+```
+
+`$args` はアクショントークンに base64 で **そのまま埋め込まれます**（署名は
+されません — 改ざん検知は CSRF トークンが担います）。バインドする値は
+識別子程度に留め、認可・整合性はハンドラ内で必ず再検証してください
+（例: 渡ってきた `$id` の所有権をサーバ側で確認する）。
+
+### 送信失敗時の再レンダリング
+
+関数型ページのファクトリクロージャはリクエスト毎に再実行され、アクション
+ハンドラはレンダラ生成の **後** に走ります。検証エラーなどで同じページを
+出し直したいときは、状態を参照渡し (`&$errors`) でキャプチャし、ディス
+パッチ後の値をレンダラ側で読みます（[バリデーション](#バリデーション)の
+`safeParse` と組み合わせる典型パターン。完全な例は
+`example/src/Pages/signup/page.psx`）:
+
+```php
+return function (PageContext $ctx) use ($schema): Closure {
+    $errors = [];
+    $save = $ctx->action('save', function (array $form) use ($schema, &$errors): void {
+        $result = $schema->safeParse($form);
+        if (!$result->success) { $errors = $result->errors; return; }
+        // ... 成功時は PRG リダイレクト (header('Location: ...', true, 303); exit;)
+    });
+
+    // $errors はアクション実行後に書き換わる → 参照で取り込んで描画する
+    return function () use ($save, &$errors): Element { /* $errors を表示 */ };
+};
+```
 
 ## サービス登録
 

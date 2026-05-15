@@ -11,6 +11,7 @@ use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\RedirectException;
 use Polidog\UsePhp\Runtime\Element;
 
 /**
@@ -79,6 +80,30 @@ final class FunctionPageActionDispatchTest extends TestCase
 
         self::assertFalse($called);
         self::assertSame(403, \http_response_code());
+    }
+
+    #[RunInSeparateProcess]
+    public function testHandlerRedirectUnwindsAsRedirectException(): void
+    {
+        $context = new PageContext([], '/users');
+        $token = $context->action('save', static function () use ($context): void {
+            $context->redirect('/users');
+        });
+
+        $page = $this->makePage($context, '/users');
+
+        $_POST = [
+            '_usephp_action' => $token,
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        try {
+            $page->dispatchActionFromRequest();
+            self::fail('RedirectException should unwind out of the dispatcher');
+        } catch (RedirectException $exception) {
+            self::assertSame('/users', $exception->location);
+            self::assertSame(303, $exception->status);
+        }
     }
 
     public function testDispatchSkipsTokenForDifferentPage(): void

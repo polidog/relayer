@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\RedirectException;
 
 final class PageContextTest extends TestCase
 {
@@ -57,5 +58,29 @@ final class PageContextTest extends TestCase
     public function testGetActionReturnsNullForUnknownName(): void
     {
         self::assertNull((new PageContext([], '/'))->getAction('missing'));
+    }
+
+    public function testRedirectThrowsWithDefault303Status(): void
+    {
+        $context = new PageContext([], '/users');
+
+        try {
+            $context->redirect('/users');
+        } catch (RedirectException $exception) {
+            self::assertSame('/users', $exception->location);
+            self::assertSame(303, $exception->status);
+        }
+    }
+
+    public function testRedirectThrowsWithCustomStatus(): void
+    {
+        $context = new PageContext([], '/users');
+
+        try {
+            $context->redirect('/login', 302);
+        } catch (RedirectException $exception) {
+            self::assertSame('/login', $exception->location);
+            self::assertSame(302, $exception->status);
+        }
     }
 }

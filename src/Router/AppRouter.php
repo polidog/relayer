@@ -205,6 +205,8 @@ class AppRouter
                 $this->handleMatch($match);
             } catch (AuthorizationException $exception) {
                 $this->handleAuthorizationFailure($exception);
+            } catch (RedirectException $exception) {
+                $this->handleRedirect($exception);
             }
         } finally {
             if ($this->container instanceof InjectorContainer) {
@@ -306,6 +308,21 @@ class AppRouter
 
                 return;
         }
+    }
+
+    /**
+     * Emit the `Location` response for a {@see RedirectException} raised by
+     * `$ctx->redirect()` (typically from a form-action handler). Unlike the
+     * auth redirect, the target is taken verbatim — the handler chose it
+     * deliberately, so no `?next=` is appended.
+     */
+    protected function handleRedirect(RedirectException $exception): void
+    {
+        if (\headers_sent()) {
+            return;
+        }
+
+        \header('Location: ' . $exception->location, true, $exception->status);
     }
 
     protected function handleNotFound(): void
