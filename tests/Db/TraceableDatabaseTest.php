@@ -32,6 +32,32 @@ final class TraceableDatabaseTest extends TestCase
         self::assertNotNull($events[0]->durationMs);
     }
 
+    public function testSensitiveParamsAreRedactedAndLongValuesTruncated(): void
+    {
+        $inner = new FakeDatabase();
+
+        $profiler = new RecordingProfiler();
+        $profile = $profiler->beginProfile('/', 'GET');
+
+        $db = new TraceableDatabase($inner, $profiler);
+        $db->perform(
+            'UPDATE users SET password = :password, note = :note WHERE id = :id',
+            [
+                'password' => 'super-secret-hash',
+                'note' => \str_repeat('x', 500),
+                'id' => 7,
+            ],
+        );
+
+        $params = $profile->getEvents()[0]->payload['params'];
+        self::assertIsArray($params);
+        self::assertSame('***', $params['password']);
+        self::assertSame(7, $params['id']);
+        self::assertIsString($params['note']);
+        self::assertStringEndsWith('(500 bytes)', $params['note']);
+        self::assertLessThan(500, \strlen($params['note']));
+    }
+
     public function testWriteRecordsMutateEventWithAffected(): void
     {
         $inner = new FakeDatabase();

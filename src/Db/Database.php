@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Db;
 
 use Polidog\Relayer\Profiler\Profiler;
+use Throwable;
 
 /**
  * Minimal database contract: raw SQL in, plain arrays out.
@@ -78,9 +79,15 @@ interface Database
 
     /**
      * Run `$callback` inside a transaction. Commits when it returns,
-     * rolls back and rethrows when it throws. The callback receives a
-     * `Database` to issue its statements through — use that argument so
-     * the calls stay traced/cached by the surrounding decorators.
+     * rolls back when it throws. The callback receives a `Database` to
+     * issue its statements through — use that argument so the calls stay
+     * traced/cached by the surrounding decorators.
+     *
+     * Whatever the callback throws propagates after rollback: a driver
+     * failure surfaces as {@see DatabaseException}, but a domain exception
+     * the callback raised itself (e.g. a validation `RuntimeException`)
+     * propagates unchanged. So callers must be ready for any `Throwable`
+     * from the callback, not only `DatabaseException`.
      *
      * @template T
      *
@@ -88,7 +95,8 @@ interface Database
      *
      * @return T
      *
-     * @throws DatabaseException
+     * @throws DatabaseException if the transaction or a driver call fails
+     * @throws Throwable         whatever `$callback` itself throws
      */
     public function transactional(callable $callback): mixed;
 }

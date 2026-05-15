@@ -100,14 +100,38 @@ final class PdoDatabase implements Database
 
             return $result;
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
-            }
+            $this->rollBack($pdo, $e);
+
             if ($e instanceof PDOException) {
                 throw new DatabaseException('Transaction failed: ' . $e->getMessage(), 0, $e);
             }
 
             throw $e;
+        }
+    }
+
+    /**
+     * Roll back the open transaction. A rollback can itself fail (e.g. the
+     * connection dropped mid-transaction); that must not escape unwrapped
+     * and must not mask the original failure, so it surfaces as a
+     * {@see DatabaseException} that chains `$original` as the previous
+     * exception (the actionable root cause for the caller).
+     */
+    private function rollBack(PDO $pdo, Throwable $original): void
+    {
+        if (!$pdo->inTransaction()) {
+            return;
+        }
+
+        try {
+            $pdo->rollBack();
+        } catch (PDOException $rollbackError) {
+            throw new DatabaseException(
+                'Transaction rollback failed: ' . $rollbackError->getMessage()
+                    . ' (original error: ' . $original->getMessage() . ')',
+                0,
+                $original,
+            );
         }
     }
 

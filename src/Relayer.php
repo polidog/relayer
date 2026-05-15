@@ -191,8 +191,10 @@ final class Relayer
     }
 
     /**
-     * Read a single env var as a positive int, or null when unset/blank
-     * or not a non-negative integer. Used for the DB timeout knobs.
+     * Read a single env var as a non-negative int (`0` included), or null
+     * when unset/blank or not all-digits. Used for the DB timeout knobs;
+     * `0` is passed straight to PDO, where it carries the driver's own
+     * "no timeout" meaning.
      */
     private static function readEnvInt(string $name): ?int
     {
