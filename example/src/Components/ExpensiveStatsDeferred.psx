@@ -27,7 +27,16 @@ use function Polidog\UsePhp\Runtime\fc;
 // deliberately separate decisions. The L2 entry has no time expiry; it lives
 // until usephp.js's DEFER_CACHE_VERSION is bumped or
 // `window.usePHP.clearDeferCache()` is called.
+//
+// `reloadable: true` (use-php 0.6.0) is the orthogonal escape hatch: the
+// wrapper is kept in the DOM and tagged `data-usephp-defer-name`, so the
+// home page's "Refresh" button (`data-usephp-reload-defer="expensive-stats"`)
+// can bust BOTH cache tiers for this URL and re-fetch in place. Reload is
+// independent of localCache: localCache decides persistence, reloadable
+// decides whether an explicit refresh is even possible. Together they make
+// the timestamp observable both ways — frozen across reloads (L2), bumped
+// on demand (reload).
 return fc(
     fn (array $props) => <ExpensiveStats />,
-    defer: new Defer(name: 'expensive-stats', localCache: true),
+    defer: new Defer(name: 'expensive-stats', localCache: true, reloadable: true),
 );
