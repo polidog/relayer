@@ -22,9 +22,8 @@ use function Polidog\UsePhp\Runtime\fc;
 //
 // `localCache: true` is opted into DELIBERATELY even though the fragment is
 // session-coupled: the header is on every page, so persisting it across
-// reloads/tabs is a real speedup. The usePHP L2 entry has no time expiry,
-// so this is only safe if it is busted the instant identity changes — which
-// is exactly what the login and logout forms do. Each carries
+// reloads/tabs is a real speedup. Identity changes still bust it instantly —
+// that is what the login and logout forms do. Each carries
 // `data-clear-defer="user-header"`, and the small head script in
 // public/index.php calls `window.usePHP.clearDeferCache('user-header')`
 // SYNCHRONOUSLY on submit, before usePHP's async submit handler navigates,
@@ -33,12 +32,17 @@ use function Polidog\UsePhp\Runtime\fc;
 // for precisely this "cache the per-user chrome, invalidate at the auth
 // boundary" case.
 //
-// Residual, intentionally accepted for this demo: if a user closes the tab
-// WITHOUT logging out, the entry lingers until the next login/logout clears
-// it (the content is only a display name + a Dashboard link, not
-// credentials). Contrast ExpensiveStatsDeferred, which can localCache
-// freely because its fragment is not identity-bound at all.
+// `localCacheTtl: 60` (usePHP 0.7.0) additionally caps the persisted L2
+// entry at one minute: once the stored fragment is older than 60s, usephp.js
+// discards it on the next read and re-fetches (a hard discard, fallback
+// shows briefly, not stale-while-revalidate). This bounds the one residual
+// case clearDeferCache cannot cover — a user closing the tab WITHOUT logging
+// out — to a 60s window instead of "until the next login/logout". The
+// content is only a display name + a Dashboard link, not credentials, so a
+// one-minute bound is a comfortable trade for the cross-reload speedup.
+// Contrast ExpensiveStatsDeferred, which can localCache freely because its
+// fragment is not identity-bound at all.
 return fc(
     fn (array $props) => <UserHeader />,
-    defer: new Defer(name: 'user-header', cacheControl: 'private, no-store', localCache: true),
+    defer: new Defer(name: 'user-header', cacheControl: 'private, no-store', localCache: true, localCacheTtl: 60),
 );
