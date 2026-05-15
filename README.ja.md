@@ -94,8 +94,13 @@ $router->run();
 
 ```
 APP_ENV=dev
-DATABASE_URL=mysql://localhost/app
+DATABASE_DSN=mysql:host=127.0.0.1;dbname=app;charset=utf8mb4
+DATABASE_USER=app
+DATABASE_PASSWORD=secret
 ```
+
+`DATABASE_*` は任意です。DB 層は `DATABASE_DSN` が設定されているときだけ
+配線されます（[データベース](#データベース)を参照）。
 
 [`symfony/dotenv`](https://symfony.com/doc/current/configuration.html#configuring-environment-variables-in-env-files)
 で読まれ、Symfony 標準の cascade に従います:
@@ -901,6 +906,92 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 - リクエスト・ユーザー単位で動的にキャッシュ方針を変えたい場合は、
   アトリビュートではなく `render()` 内で `header()` を直接書いてください。
 
+## データベース
+
+PDO の薄いラッパーです。生 SQL を渡し、素の配列が返ります。クエリビルダ
+も SQL ファイルローダもありません。名前付き (`:id`) または位置 (`?`)
+プレースホルダ付きの SQL を直接渡してください。手で配線すると面倒な 4 点
+——Profiler 可視化・明示的なタイムアウト・単一の例外型・リクエスト内の
+読み取りメモ化——をまとめて提供することが目的です。
+
+### 有効化
+
+DB 層は **`DATABASE_DSN` が設定されているときだけ** 登録されます。DB を
+使わないアプリは何のコストも負わず、設定も不要です。
+
+```
+DATABASE_DSN=mysql:host=127.0.0.1;dbname=app;charset=utf8mb4
+DATABASE_USER=app
+DATABASE_PASSWORD=secret
+DATABASE_TIMEOUT=5            # 接続タイムアウト・秒 (PDO::ATTR_TIMEOUT)
+DATABASE_READ_TIMEOUT=10      # MySQL 読み取りタイムアウト・秒（任意）
+```
+
+`DATABASE_DSN` は標準の PDO DSN なので SQLite
+(`sqlite:/path/app.db`)、PostgreSQL (`pgsql:host=...`) なども使えます。
+`DATABASE_READ_TIMEOUT` は `mysql:` DSN のときだけ適用されます。
+
+### 使い方
+
+ページ／コンポーネントのコンストラクタで `Database` を受け取ります:
+
+```php
+use Polidog\Relayer\Db\Database;
+
+final class UserPage extends PageComponent
+{
+    public function __construct(private readonly Database $db) {}
+
+    public function render(): string
+    {
+        $user = $this->db->fetchOne(
+            'SELECT id, name FROM users WHERE id = :id',
+            ['id' => 42],
+        );
+        // ...
+    }
+}
+```
+
+| メソッド                         | 戻り値                              |
+| ------------------------------- | ----------------------------------- |
+| `fetchAll($sql, $params)`       | `list<array<string,mixed>>`         |
+| `fetchOne($sql, $params)`       | `array<string,mixed>` または `null` |
+| `fetchValue($sql, $params)`     | 先頭行の先頭カラム、なければ `null` |
+| `perform($sql, $params)`        | 影響行数 (`int`)                    |
+| `lastInsertId($name = null)`    | 直近の insert id (`string`)         |
+| `transactional($callback)`      | コールバックの戻り値                |
+
+```php
+$db->transactional(function (Database $tx): void {
+    $tx->perform('INSERT INTO orders (user_id) VALUES (?)', [$userId]);
+    $tx->perform('UPDATE users SET order_count = order_count + 1 WHERE id = ?', [$userId]);
+});
+```
+
+コールバックはトランザクション内で実行され、正常終了で commit、例外発生
+で rollback して再送出します。トレース・キャッシュを効かせるため、渡って
+くる `$tx` 引数を使ってください。
+
+### 自動で得られるもの
+
+- **エラー** — すべてのドライバ例外は単一の
+  `Polidog\Relayer\Db\DatabaseException` として送出されます。元の
+  `PDOException` は previous として保持されます。
+- **タイムアウト** — DB が詰まった場合、ワーカーをハングさせず設定した
+  タイムアウト内に `DatabaseException` として表面化します。
+- **リクエスト内キャッシュ** — 同一の読み取り（同じ SQL + パラメータの
+  `fetchAll` / `fetchOne` / `fetchValue`）はリクエストの間プロセス内
+  キャッシュにヒットします。同じ参照を必要とする複数コンポーネントで
+  構成されるページでも往復は 1 回で済みます。`perform` /
+  `transactional` でキャッシュは全フラッシュ。リクエストスコープ限定で、
+  TTL もクロスリクエスト共有もありません。
+- **Profiler**（dev）— 実際のクエリはリクエストプロファイルに
+  `db.query` / `db.mutate` / `db.transaction` の計時スパンとして SQL・
+  バインド値付きで記録され、キャッシュヒットは `db.cache_hit` マーカー
+  として残ります。本番では Profiler は no-op なのでオーバーヘッドは
+  ありません。
+
 ## ソース構成
 
 | Namespace                                              | 役割                                                                |
@@ -914,6 +1005,8 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 | `Polidog\Relayer\Router\Document\*`            | HTML ドキュメントラッパ・メタデータ                                 |
 | `Polidog\Relayer\Router\Form\*`                | CSRF トークン + フォームアクションのディスパッチ                    |
 | `Polidog\Relayer\Router\Routing\*`             | ページスキャナ / ルートテーブル / マッチャ                          |
+| `Polidog\Relayer\Db\Database`                  | 最小 SQL コントラクト（既定 `PdoDatabase`・キャッシュ・dev トレース）|
+| `Polidog\Relayer\Db\DatabaseException`         | DB 層が送出する単一の例外型                                          |
 | `Polidog\Relayer\Http\Cache`                   | `#[Cache]` アトリビュート                                           |
 | `Polidog\Relayer\Http\CachePolicy`             | ヘッダー送出 + 条件付き GET 評価                                    |
 | `Polidog\Relayer\Http\EtagStore`               | 差し替え可能な ETag ストレージインターフェース                      |

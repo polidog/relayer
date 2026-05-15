@@ -90,8 +90,13 @@ Put a `.env` in the project root:
 
 ```
 APP_ENV=dev
-DATABASE_URL=mysql://localhost/app
+DATABASE_DSN=mysql:host=127.0.0.1;dbname=app;charset=utf8mb4
+DATABASE_USER=app
+DATABASE_PASSWORD=secret
 ```
+
+`DATABASE_*` is optional — the database layer is wired only when
+`DATABASE_DSN` is set (see [Database](#database)).
 
 `.env` files are loaded through [`symfony/dotenv`](https://symfony.com/doc/current/configuration.html#configuring-environment-variables-in-env-files)
 with the standard Symfony cascade:
@@ -906,6 +911,92 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 - If you need conditional cache policy (per-request, per-user), set headers
   manually inside `render()` instead.
 
+## Database
+
+A thin PDO wrapper: raw SQL in, plain arrays out. No query builder, no
+SQL-file loader — pass SQL with named (`:id`) or positional (`?`)
+placeholders directly. It exists to give you four things you'd otherwise
+wire by hand: profiler visibility, explicit timeouts, one error type, and
+per-request read memoization.
+
+### Enable it
+
+The DB layer is registered **only when `DATABASE_DSN` is set** — apps that
+don't use a database pay nothing and don't need to configure anything.
+
+```
+DATABASE_DSN=mysql:host=127.0.0.1;dbname=app;charset=utf8mb4
+DATABASE_USER=app
+DATABASE_PASSWORD=secret
+DATABASE_TIMEOUT=5            # connect timeout, seconds (PDO::ATTR_TIMEOUT)
+DATABASE_READ_TIMEOUT=10      # MySQL read timeout, seconds (optional)
+```
+
+`DATABASE_DSN` is a standard PDO DSN, so SQLite (`sqlite:/path/app.db`),
+PostgreSQL (`pgsql:host=...`), etc. all work. `DATABASE_READ_TIMEOUT` is
+applied only for `mysql:` DSNs.
+
+### Use it
+
+Take a `Database` dependency in a page or component constructor:
+
+```php
+use Polidog\Relayer\Db\Database;
+
+final class UserPage extends PageComponent
+{
+    public function __construct(private readonly Database $db) {}
+
+    public function render(): string
+    {
+        $user = $this->db->fetchOne(
+            'SELECT id, name FROM users WHERE id = :id',
+            ['id' => 42],
+        );
+        // ...
+    }
+}
+```
+
+| Method                          | Returns                            |
+| ------------------------------- | ---------------------------------- |
+| `fetchAll($sql, $params)`       | `list<array<string,mixed>>`        |
+| `fetchOne($sql, $params)`       | `array<string,mixed>` or `null`    |
+| `fetchValue($sql, $params)`     | first column of first row, or `null` |
+| `perform($sql, $params)`        | affected row count (`int`)         |
+| `lastInsertId($name = null)`    | last insert id (`string`)          |
+| `transactional($callback)`      | callback's return value            |
+
+```php
+$db->transactional(function (Database $tx): void {
+    $tx->perform('INSERT INTO orders (user_id) VALUES (?)', [$userId]);
+    $tx->perform('UPDATE users SET order_count = order_count + 1 WHERE id = ?', [$userId]);
+});
+```
+
+The callback runs inside a transaction — commit on return, rollback +
+rethrow on any exception. Use the `$tx` argument it receives so the calls
+stay traced and cached.
+
+### What you get for free
+
+- **Errors** — every driver failure is thrown as a single
+  `Polidog\Relayer\Db\DatabaseException`; the original `PDOException` is
+  kept as the previous exception.
+- **Timeouts** — a stuck DB surfaces as a `DatabaseException` within the
+  configured timeout instead of hanging the worker.
+- **Request-scoped cache** — identical reads (`fetchAll` / `fetchOne` /
+  `fetchValue` with the same SQL + params) hit an in-process cache for the
+  rest of the request, so a page assembled from several components that
+  each need the same lookup makes one round-trip, not N. Any `perform` or
+  `transactional` flushes the cache. It is request-scoped only — no TTL,
+  no cross-request sharing.
+- **Profiler** (dev) — every real query is recorded in the request
+  profile as a timed `db.query` / `db.mutate` / `db.transaction` span with
+  the SQL and bound params; cache hits show as `db.cache_hit` markers so
+  you can see exactly how many round-trips memoization saved. In prod the
+  profiler is a no-op, so there's no overhead.
+
 ## Source Layout
 
 | Namespace                                              | Purpose                                                                |
@@ -919,6 +1010,8 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
 | `Polidog\Relayer\Router\Document\*`            | HTML document wrapper / metadata.                                      |
 | `Polidog\Relayer\Router\Form\*`                | CSRF tokens + form action dispatcher.                                  |
 | `Polidog\Relayer\Router\Routing\*`             | Page scanner, route table, matcher.                                    |
+| `Polidog\Relayer\Db\Database`                  | Minimal SQL contract (default: `PdoDatabase`, cached, dev-traced).     |
+| `Polidog\Relayer\Db\DatabaseException`         | The single error type the DB layer raises.                             |
 | `Polidog\Relayer\Http\Cache`                   | `#[Cache]` attribute.                                                  |
 | `Polidog\Relayer\Http\CachePolicy`             | Header emission + conditional GET evaluation.                          |
 | `Polidog\Relayer\Http\EtagStore`               | Pluggable ETag storage interface.                                      |
