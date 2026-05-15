@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Polidog\Relayer\Form;
+namespace Polidog\Relayer\Validation;
 
 /**
  * Static facade for declaring schemas. Modeled on the Zod (TypeScript)
  * builder API.
  *
  * ```php
- * use Polidog\Relayer\Form\Z;
+ * use Polidog\Relayer\Validation\Validator;
  *
- * $schema = Z::object([
- *     'email' => Z::string()->trim()->email(),
- *     'name'  => Z::string()->trim()->min(1),
- *     'age'   => Z::int()->min(0)->optional(),
+ * $schema = Validator::object([
+ *     'email' => Validator::string()->trim()->email(),
+ *     'name'  => Validator::string()->trim()->min(1),
+ *     'age'   => Validator::int()->min(0)->optional(),
  * ]);
  *
  * $result = $schema->safeParse($_POST);
@@ -25,7 +25,7 @@ namespace Polidog\Relayer\Form;
  * }
  * ```
  */
-final class Z
+final class Validator
 {
     public static function string(): StringSchema
     {

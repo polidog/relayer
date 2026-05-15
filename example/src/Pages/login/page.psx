@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 use Polidog\Relayer\Auth\Authenticator;
-use Polidog\Relayer\Form\Z;
+use Polidog\Relayer\Validation\Validator;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
@@ -36,9 +36,9 @@ return function (PageContext $ctx, Authenticator $auth, Request $request): Closu
         exit;
     }
 
-    $schema = Z::object([
-        'email'    => Z::string()->trim()->email(),
-        'password' => Z::string()->min(1, 'Password is required.'),
+    $schema = Validator::object([
+        'email'    => Validator::string()->trim()->email(),
+        'password' => Validator::string()->min(1, 'Password is required.'),
     ]);
 
     $values = ['email' => ''];

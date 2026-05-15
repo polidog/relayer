@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 use App\Service\InMemoryUserProvider;
 use Polidog\Relayer\Auth\Authenticator;
-use Polidog\Relayer\Form\Z;
+use Polidog\Relayer\Validation\Validator;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
@@ -23,10 +23,10 @@ return function (
         exit;
     }
 
-    $schema = Z::object([
-        'name'     => Z::string()->trim()->min(1, 'Name is required.'),
-        'email'    => Z::string()->trim()->email(),
-        'password' => Z::string()->min(8, 'Password must be at least 8 characters.'),
+    $schema = Validator::object([
+        'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+        'email'    => Validator::string()->trim()->email(),
+        'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
     ]);
 
     $values = ['email' => '', 'name' => ''];
@@ -90,7 +90,7 @@ return function (
                     <h1 className="text-3xl font-bold tracking-tight text-slate-900">Create an account</h1>
                     <p className="text-slate-600">
                         Validates input with{' '}
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Z::object()</code>,
+                        <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Validator::object()</code>,
                         registers the user through{' '}
                         <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">InMemoryUserProvider::register()</code>,
                         then calls{' '}
