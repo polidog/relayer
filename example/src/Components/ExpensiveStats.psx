@@ -12,15 +12,22 @@ use Polidog\UsePhp\Runtime\Element;
 // and only changes slowly. It reads no $_SESSION and no per-request input, so
 // the same output is correct to hand to any client.
 //
-// The render timestamp below is the demo's proof that usePHP's opt-in
-// localStorage (L2) cache is working: ExpensiveStatsDeferred sets
-// `localCache: true`, so after the first fetch the fragment is persisted in
-// the browser. On a full page reload the timestamp stays frozen at its
-// original value — usephp.js replays the stored fragment instead of hitting
-// /_defer/expensive-stats again. (UserHeaderDeferred deliberately does NOT
-// opt in, so its timestamp would move every reload.) Bump
-// DEFER_CACHE_VERSION in usephp.js or call
-// `window.usePHP.clearDeferCache('expensive-stats')` to force a refetch.
+// The render timestamp below makes two usePHP defer behaviors observable:
+//
+//   - localCache (0.5.0): ExpensiveStatsDeferred sets `localCache: true`,
+//     so after the first fetch the fragment is persisted in the browser.
+//     On a full page reload the timestamp stays FROZEN — usephp.js replays
+//     the stored fragment instead of hitting /_defer/expensive-stats again.
+//     (UserHeaderDeferred deliberately does NOT opt in, so its timestamp
+//     would move every reload.)
+//   - reloadable (0.6.0): it also sets `reloadable: true`, so the home
+//     page's "Refresh" button (`data-usephp-reload-defer="expensive-stats"`)
+//     busts both cache tiers and re-fetches in place — the timestamp BUMPS
+//     to the new server time without a full page reload.
+//
+// Equivalent low-level levers: `window.usePHP.clearDeferCache('expensive-stats')`
+// (drop the cache) or `window.usePHP.reloadDefer('expensive-stats')` (drop +
+// re-fetch); a DEFER_CACHE_VERSION bump invalidates every persisted entry.
 return function (array $props): Element {
     // Stand-in for the expensive aggregate. Deterministic and global.
     $articles = 1_284;

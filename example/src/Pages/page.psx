@@ -27,6 +27,19 @@ return function (PageContext $ctx, Clock $clock): Closure {
                     <p className="text-sm uppercase tracking-wide text-slate-500">Server time</p>
                     <p className="mt-1 font-mono text-xl font-semibold text-slate-900">{$now}</p>
                 </div>
+                <div className="flex items-center justify-between">
+                    <p className="text-sm text-slate-500">
+                        Reload the page → timestamp stays frozen (localStorage L2). Click Refresh →
+                        it bumps (use-php 0.6.0 reload busts both cache tiers).
+                    </p>
+                    <button
+                        type="button"
+                        data-usephp-reload-defer="expensive-stats"
+                        className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+                    >
+                        Refresh
+                    </button>
+                </div>
                 <ExpensiveStatsDeferred
                     fallback={
                         <div
