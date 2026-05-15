@@ -7,15 +7,22 @@ namespace Polidog\Relayer\Router\Layout;
 use Polidog\Relayer\Router\Form\FormActionTransformer;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
+use Polidog\UsePhp\Snapshot\SnapshotSerializer;
 
 final class LayoutRenderer
 {
     private Renderer $renderer;
     private string $formActionUrl;
 
-    public function __construct(string $componentId = 'page', ?string $formActionUrl = null)
-    {
-        $this->renderer = new Renderer($componentId);
+    public function __construct(
+        string $componentId = 'page',
+        ?string $formActionUrl = null,
+        ?SnapshotSerializer $snapshotSerializer = null,
+    ) {
+        // Renderer needs the SnapshotSerializer to sign defer payloads
+        // emitted during SSR. Passing null degrades to the legacy non-defer
+        // behavior — pages without `<X defer />` placeholders still render.
+        $this->renderer = new Renderer($componentId, $snapshotSerializer);
         if (null === $formActionUrl) {
             $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
             $formActionUrl = \is_string($requestUri) ? $requestUri : '/';

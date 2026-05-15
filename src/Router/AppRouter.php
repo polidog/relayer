@@ -409,7 +409,16 @@ class AppRouter
         }
 
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-        $renderer = new LayoutRenderer($componentId, \is_string($requestUri) ? $requestUri : '/');
+        // Pass the configured SnapshotSerializer so the inner Renderer can
+        // sign defer payloads for `<X defer />` placeholders emitted during
+        // SSR. Null when defer isn't wired — the Renderer will refuse defer
+        // elements with a clear error if the page actually uses one.
+        $snapshotSerializer = $this->usephp?->getSnapshotSerializer();
+        $renderer = new LayoutRenderer(
+            $componentId,
+            \is_string($requestUri) ? $requestUri : '/',
+            $snapshotSerializer,
+        );
         $html = $renderer->render($pageElement, $layouts);
 
         if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
