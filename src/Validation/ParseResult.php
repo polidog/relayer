@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Polidog\Relayer\Form;
+namespace Polidog\Relayer\Validation;
 
 /**
  * Outcome of {@see Schema::safeParse()}.

@@ -2,19 +2,19 @@
 
 declare(strict_types=1);
 
-namespace Polidog\Relayer\Tests\Form;
+namespace Polidog\Relayer\Tests\Validation;
 
 use PHPUnit\Framework\TestCase;
-use Polidog\Relayer\Form\ParseError;
-use Polidog\Relayer\Form\Z;
+use Polidog\Relayer\Validation\ParseError;
+use Polidog\Relayer\Validation\Validator;
 
 final class ObjectSchemaTest extends TestCase
 {
     public function testParseValidForm(): void
     {
-        $schema = Z::object([
-            'name' => Z::string()->trim()->min(1),
-            'email' => Z::string()->trim()->email(),
+        $schema = Validator::object([
+            'name' => Validator::string()->trim()->min(1),
+            'email' => Validator::string()->trim()->email(),
         ]);
 
         $result = $schema->safeParse([
@@ -28,9 +28,9 @@ final class ObjectSchemaTest extends TestCase
 
     public function testAccumulatesErrorsAcrossFields(): void
     {
-        $schema = Z::object([
-            'name' => Z::string()->trim()->min(1),
-            'email' => Z::string()->trim()->email(),
+        $schema = Validator::object([
+            'name' => Validator::string()->trim()->min(1),
+            'email' => Validator::string()->trim()->email(),
         ]);
 
         $result = $schema->safeParse(['name' => '', 'email' => 'nope']);
@@ -43,7 +43,7 @@ final class ObjectSchemaTest extends TestCase
 
     public function testStripsUnknownKeysByDefault(): void
     {
-        $schema = Z::object(['name' => Z::string()->trim()->min(1)]);
+        $schema = Validator::object(['name' => Validator::string()->trim()->min(1)]);
         $result = $schema->safeParse(['name' => 'Jane', 'unwanted' => 'leak']);
 
         self::assertTrue($result->success);
@@ -52,7 +52,7 @@ final class ObjectSchemaTest extends TestCase
 
     public function testPassthroughKeepsExtras(): void
     {
-        $schema = Z::object(['name' => Z::string()->trim()->min(1)])->passthrough();
+        $schema = Validator::object(['name' => Validator::string()->trim()->min(1)])->passthrough();
         $result = $schema->safeParse(['name' => 'Jane', 'extra' => 'kept']);
 
         self::assertTrue($result->success);
@@ -61,9 +61,9 @@ final class ObjectSchemaTest extends TestCase
 
     public function testNestedObjectsUseDotPaths(): void
     {
-        $schema = Z::object([
-            'user' => Z::object([
-                'email' => Z::string()->trim()->email(),
+        $schema = Validator::object([
+            'user' => Validator::object([
+                'email' => Validator::string()->trim()->email(),
             ]),
         ]);
 
@@ -74,7 +74,7 @@ final class ObjectSchemaTest extends TestCase
 
     public function testParseThrowsOnFailure(): void
     {
-        $schema = Z::object(['name' => Z::string()->min(1)]);
+        $schema = Validator::object(['name' => Validator::string()->min(1)]);
 
         $this->expectException(ParseError::class);
         $schema->parse(['name' => '']);
@@ -82,7 +82,7 @@ final class ObjectSchemaTest extends TestCase
 
     public function testArraySchema(): void
     {
-        $schema = Z::array(Z::int()->min(0));
+        $schema = Validator::array(Validator::int()->min(0));
 
         $ok = $schema->safeParse(['1', '2', '3']);
         self::assertTrue($ok->success);
@@ -95,7 +95,7 @@ final class ObjectSchemaTest extends TestCase
 
     public function testEnumSchema(): void
     {
-        $schema = Z::enum(['draft', 'published']);
+        $schema = Validator::enum(['draft', 'published']);
         self::assertTrue($schema->safeParse('draft')->success);
         self::assertFalse($schema->safeParse('archived')->success);
     }

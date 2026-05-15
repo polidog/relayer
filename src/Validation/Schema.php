@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Polidog\Relayer\Form;
+namespace Polidog\Relayer\Validation;
 
 /**
  * Base class for all schema definitions. Inspired by Zod (TypeScript):

@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Polidog\Relayer\Form;
+namespace Polidog\Relayer\Validation;
 
 final class EnumSchema extends Schema
 {

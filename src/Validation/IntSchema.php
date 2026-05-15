@@ -2,30 +2,30 @@
 
 declare(strict_types=1);
 
-namespace Polidog\Relayer\Form;
+namespace Polidog\Relayer\Validation;
 
-final class FloatSchema extends Schema
+final class IntSchema extends Schema
 {
-    public function min(float $value, ?string $message = null): static
+    public function min(int $value, ?string $message = null): static
     {
         return $this->refine(
-            static fn (mixed $v): bool => \is_float($v) && $v >= $value,
-            $message ?? \sprintf('Must be %s or greater.', $value),
+            static fn (mixed $v): bool => \is_int($v) && $v >= $value,
+            $message ?? \sprintf('Must be %d or greater.', $value),
         );
     }
 
-    public function max(float $value, ?string $message = null): static
+    public function max(int $value, ?string $message = null): static
     {
         return $this->refine(
-            static fn (mixed $v): bool => \is_float($v) && $v <= $value,
-            $message ?? \sprintf('Must be %s or less.', $value),
+            static fn (mixed $v): bool => \is_int($v) && $v <= $value,
+            $message ?? \sprintf('Must be %d or less.', $value),
         );
     }
 
     public function positive(?string $message = null): static
     {
         return $this->refine(
-            static fn (mixed $v): bool => \is_float($v) && $v > 0.0,
+            static fn (mixed $v): bool => \is_int($v) && $v > 0,
             $message ?? 'Must be greater than 0.',
         );
     }
@@ -33,7 +33,7 @@ final class FloatSchema extends Schema
     public function nonNegative(?string $message = null): static
     {
         return $this->refine(
-            static fn (mixed $v): bool => \is_float($v) && $v >= 0.0,
+            static fn (mixed $v): bool => \is_int($v) && $v >= 0,
             $message ?? 'Must be 0 or greater.',
         );
     }
@@ -53,22 +53,18 @@ final class FloatSchema extends Schema
 
     protected function parseDefined(mixed $input, string $path, array &$errors): mixed
     {
-        if (\is_float($input)) {
+        if (\is_int($input)) {
             return $input;
         }
 
-        if (\is_int($input)) {
-            return (float) $input;
-        }
-
         if (\is_string($input)) {
-            $filtered = \filter_var(\trim($input), \FILTER_VALIDATE_FLOAT);
+            $filtered = \filter_var(\trim($input), \FILTER_VALIDATE_INT);
             if (false !== $filtered) {
                 return $filtered;
             }
         }
 
-        $errors[$path] = 'Must be a number.';
+        $errors[$path] = 'Must be an integer.';
 
         return null;
     }
