@@ -27,38 +27,41 @@ final class DeferDispatchTest extends TestCase
         unset(
             $_SERVER['REQUEST_METHOD'],
             $_SERVER['REQUEST_URI'],
-            $_POST['_usephp_defer_payload'],
-            $_POST['_usephp_defer_sig'],
         );
+        $_GET = [];
         RenderContext::clearApp();
     }
 
     public function testHandleDeferredShortCircuitsBeforeRoutingWhenUsePhpIsWired(): void
     {
-        // A trivial fragment component returns plain Element HTML. We
-        // dispatch via the defer path so the router must NEVER touch the
-        // page tree (no layout, no document wrapper, no 404 from a missing
+        // A deferred wrapper component declared via `fc(..., defer: new Defer(...))`
+        // — `usephp compile` writes its name + cacheControl into the sidecar
+        // deferred-manifest, which `loadComponentManifest()` auto-registers.
+        // The defer endpoint must short-circuit normal page routing entirely
+        // (no layout, no document wrapper, no 404 from a missing
         // src/Pages/page.psx).
         \file_put_contents(
             $this->workDir . '/src/Components/Greeting.psx',
             <<<'PSX'
                 <?php
                 namespace App\Components;
+                use Polidog\UsePhp\Component\Defer;
                 use Polidog\UsePhp\Html\H;
                 use Polidog\UsePhp\Runtime\Element;
-                return fn(array $props): Element => <span data-id="greeting">hi {$props['name']}</span>;
+                use function Polidog\UsePhp\Runtime\fc;
+
+                return fc(
+                    fn(array $props): Element => <span data-id="greeting">hi {$props['name']}</span>,
+                    defer: new Defer(name: 'greeting'),
+                );
                 PSX,
         );
 
         $usephp = $this->bootUsePhp();
 
-        $payload = \json_encode(['fqcn' => 'App\Components\Greeting', 'props' => ['name' => 'Alice']], \JSON_THROW_ON_ERROR);
-        $sig = $usephp->getSnapshotSerializer()->signString($payload);
-
-        $_SERVER['REQUEST_METHOD'] = 'POST';
-        $_SERVER['REQUEST_URI'] = '/some/page'; // Same URL as the host page; defer ignores it.
-        $_POST['_usephp_defer_payload'] = $payload;
-        $_POST['_usephp_defer_sig'] = $sig;
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/_defer/greeting?name=Alice';
+        $_GET = ['name' => 'Alice'];
 
         $output = $this->runApp($usephp);
 
@@ -67,35 +70,32 @@ final class DeferDispatchTest extends TestCase
         self::assertStringContainsString('<span data-id="greeting">hi Alice</span>', $output);
     }
 
-    public function testInvalidSignatureReturns400(): void
+    public function testUnregisteredDeferNameReturns404(): void
     {
-        \file_put_contents(
-            $this->workDir . '/src/Components/Greeting.psx',
-            <<<'PSX'
-                <?php
-                namespace App\Components;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
-                return fn(array $props): Element => <span>secret</span>;
-                PSX,
-        );
-
+        // No deferred component registered: GET /_defer/<name> must come back
+        // as a 404 with `no-store`, not bleed through into normal page routing.
+        // The `no-store` matters — a CDN's default policy must not be able to
+        // pin the negative result against a later valid registration.
         $usephp = $this->bootUsePhp();
 
-        $_SERVER['REQUEST_METHOD'] = 'POST';
-        $_SERVER['REQUEST_URI'] = '/';
-        $_POST['_usephp_defer_payload'] = '{"fqcn":"App\\\Components\\\Greeting","props":[]}';
-        $_POST['_usephp_defer_sig'] = 'bogus-signature';
+        $emittedHeaders = [];
+        $usephp->withHeaderEmitter(static function (string $header) use (&$emittedHeaders): void {
+            $emittedHeaders[] = $header;
+        });
+
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/_defer/unknown';
 
         $output = $this->runApp($usephp);
 
-        self::assertSame(400, \http_response_code());
-        self::assertStringContainsString('Invalid defer signature', $output);
+        self::assertSame(404, \http_response_code());
+        self::assertStringContainsString('Deferred component not registered', $output);
+        self::assertContains('Cache-Control: no-store', $emittedHeaders);
     }
 
     public function testGetRequestPassesThroughToPageRouter(): void
     {
-        // No defer payload on a GET → handleDeferred returns null and the
+        // No defer URL on a plain GET → handleDeferred returns null and the
         // normal route table runs. Sanity check that wiring UsePHP didn't
         // break ordinary dispatch.
         \file_put_contents(
@@ -125,8 +125,9 @@ final class DeferDispatchTest extends TestCase
         $cacheDir = $this->workDir . '/var/cache/psx';
         \mkdir($cacheDir, 0o777, true);
 
-        // Compile components so the manifest is on disk for handleDeferred
-        // to resolve App\Components\... FQCNs at dispatch time.
+        // Compile components so the manifest (and deferred-manifest sidecar)
+        // is on disk for handleDeferred to resolve registered names at
+        // dispatch time.
         \ob_start();
 
         try {
