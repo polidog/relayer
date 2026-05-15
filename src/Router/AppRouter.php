@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Router;
 
 use Closure;
 use JsonException;
+use LogicException;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
@@ -121,9 +122,10 @@ class AppRouter
      * When set:
      *  - `RenderContext::setApp()` is established before each dispatch so PSX
      *    components compiled into pages can resolve `renderPsxComponent` calls.
-     *  - `POST` requests carrying `_usephp_defer_payload` are routed to
-     *    {@see UsePHP::handleDeferred()} before any layout/page work, letting
-     *    a cacheable shell host user-specific fragments fetched after load.
+     *  - `GET` requests under the defer prefix (default `/_defer/{name}`) are
+     *    routed to {@see UsePHP::handleDeferred()} before any layout/page work,
+     *    letting a cacheable shell host user-specific fragments fetched after
+     *    load.
      *
      * Apps that don't use defer-style components can leave this unset; the
      * router falls back to its prior behavior with no UsePHP coupling.
@@ -177,9 +179,9 @@ class AppRouter
         });
 
         try {
-            // Deferred component POST (`_usephp_defer_payload`) is dispatched
-            // before route matching: the same URL is reused for the deferred
-            // fetch and we never want layout/page rendering on that path.
+            // Deferred component GETs (under `/_defer/{name}`) are dispatched
+            // before route matching: usePHP owns that URL space, and we never
+            // want layout/page rendering on that path.
             if (null !== $this->usephp) {
                 $deferred = $this->usephp->handleDeferred();
                 if (null !== $deferred) {
@@ -434,10 +436,28 @@ class AppRouter
 
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
         // Pass the configured SnapshotSerializer so the inner Renderer can
-        // sign defer payloads for `<X defer />` placeholders emitted during
-        // SSR. Null when defer isn't wired — the Renderer will refuse defer
-        // elements with a clear error if the page actually uses one.
-        $snapshotSerializer = $this->usephp?->getSnapshotSerializer();
+        // HMAC-sign snapshot-backed component state rendered into the page.
+        // Defer placeholders (`/_defer/{name}` GET endpoint) do NOT use the
+        // serializer — only `StorageType::Snapshot` state does.
+        //
+        // use-php 0.5.0 made getSnapshotSerializer() throw a LogicException
+        // when no secret has been configured, instead of silently returning
+        // an unsigned serializer. Relayer only configures a secret when
+        // USEPHP_SNAPSHOT_SECRET is set (or in dev, via a per-project
+        // fallback), so prod-without-secret legitimately has none. Degrade
+        // to null here: pages with no Snapshot-storage component render
+        // exactly as before; a page that actually serializes a snapshot
+        // without a secret then fails loudly inside the Renderer with
+        // use-php's own actionable message — which is the correct posture,
+        // an unsigned client round-trip is forgeable.
+        $snapshotSerializer = null;
+        if (null !== $this->usephp) {
+            try {
+                $snapshotSerializer = $this->usephp->getSnapshotSerializer();
+            } catch (LogicException) {
+                $snapshotSerializer = null;
+            }
+        }
         $renderer = new LayoutRenderer(
             $componentId,
             \is_string($requestUri) ? $requestUri : '/',

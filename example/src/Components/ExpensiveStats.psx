@@ -1,0 +1,49 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components;
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+// A deliberately "expensive" but NOT user-specific fragment: imagine an
+// aggregate query over the whole dataset that's identical for every visitor
+// and only changes slowly. It reads no $_SESSION and no per-request input, so
+// the same output is correct to hand to any client.
+//
+// The render timestamp below is the demo's proof that usePHP's opt-in
+// localStorage (L2) cache is working: ExpensiveStatsDeferred sets
+// `localCache: true`, so after the first fetch the fragment is persisted in
+// the browser. On a full page reload the timestamp stays frozen at its
+// original value — usephp.js replays the stored fragment instead of hitting
+// /_defer/expensive-stats again. (UserHeaderDeferred deliberately does NOT
+// opt in, so its timestamp would move every reload.) Bump
+// DEFER_CACHE_VERSION in usephp.js or call
+// `window.usePHP.clearDeferCache('expensive-stats')` to force a refetch.
+return function (array $props): Element {
+    // Stand-in for the expensive aggregate. Deterministic and global.
+    $articles = 1_284;
+    $contributors = 37;
+    $renderedAt = \date('Y-m-d H:i:s');
+
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <p className="text-sm uppercase tracking-wide text-slate-500">Site stats (deferred, localStorage-cached)</p>
+            <dl className="mt-3 grid grid-cols-2 gap-4">
+                <div>
+                    <dt className="text-xs text-slate-500">Articles</dt>
+                    <dd className="font-mono text-xl font-semibold text-slate-900">{(string) $articles}</dd>
+                </div>
+                <div>
+                    <dt className="text-xs text-slate-500">Contributors</dt>
+                    <dd className="font-mono text-xl font-semibold text-slate-900">{(string) $contributors}</dd>
+                </div>
+            </dl>
+            <p className="mt-4 text-xs text-slate-400">
+                Computed at <span className="font-mono">{$renderedAt}</span> — reload the page: this
+                time stays frozen because the fragment is served from localStorage, not refetched.
+            </p>
+        </div>
+    );
+};
