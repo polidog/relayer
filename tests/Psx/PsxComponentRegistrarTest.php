@@ -109,6 +109,47 @@ final class PsxComponentRegistrarTest extends TestCase
         self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
     }
 
+    public function testNeedsCompileReturnsTrueWhenDeferSourcePresentButSidecarMissing(): void
+    {
+        // Cache produced by use-php < 0.4.0 (manifest.php newer than every
+        // source, but no deferred-manifest.php sidecar). If any .psx
+        // declares a Defer, we must recompile so the sidecar is generated
+        // and `loadComponentManifest()` can auto-register the endpoint.
+        $componentsDir = $this->workDir . '/Components';
+        $manifestPath = $this->workDir . '/manifest.php';
+        \mkdir($componentsDir, 0o777, true);
+
+        \file_put_contents(
+            $componentsDir . '/Deferred.psx',
+            <<<'PSX'
+                <?php
+                use Polidog\UsePhp\Component\Defer;
+                use function Polidog\UsePhp\Runtime\fc;
+                return fc(fn() => null, defer: new Defer(name: 'x'));
+                PSX,
+        );
+        \touch($componentsDir . '/Deferred.psx', \time() - 60);
+        \file_put_contents($manifestPath, '<?php return [];');
+
+        self::assertTrue(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
+    }
+
+    public function testNeedsCompileReturnsFalseWhenSidecarMissingButNoDeferSource(): void
+    {
+        // A project without any deferred components has manifest.php but no
+        // deferred-manifest.php — sidecar absence is the steady state, not a
+        // signal to recompile.
+        $componentsDir = $this->workDir . '/Components';
+        $manifestPath = $this->workDir . '/manifest.php';
+        \mkdir($componentsDir, 0o777, true);
+
+        \file_put_contents($componentsDir . '/Plain.psx', "<?php\nreturn fn() => null;\n");
+        \touch($componentsDir . '/Plain.psx', \time() - 60);
+        \file_put_contents($manifestPath, '<?php return [];');
+
+        self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
+    }
+
     private function rmrf(string $path): void
     {
         if (!\file_exists($path)) {
