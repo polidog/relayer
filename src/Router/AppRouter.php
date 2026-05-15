@@ -121,9 +121,10 @@ class AppRouter
      * When set:
      *  - `RenderContext::setApp()` is established before each dispatch so PSX
      *    components compiled into pages can resolve `renderPsxComponent` calls.
-     *  - `POST` requests carrying `_usephp_defer_payload` are routed to
-     *    {@see UsePHP::handleDeferred()} before any layout/page work, letting
-     *    a cacheable shell host user-specific fragments fetched after load.
+     *  - `GET` requests under the defer prefix (default `/_defer/{name}`) are
+     *    routed to {@see UsePHP::handleDeferred()} before any layout/page work,
+     *    letting a cacheable shell host user-specific fragments fetched after
+     *    load.
      *
      * Apps that don't use defer-style components can leave this unset; the
      * router falls back to its prior behavior with no UsePHP coupling.
@@ -177,9 +178,9 @@ class AppRouter
         });
 
         try {
-            // Deferred component POST (`_usephp_defer_payload`) is dispatched
-            // before route matching: the same URL is reused for the deferred
-            // fetch and we never want layout/page rendering on that path.
+            // Deferred component GETs (under `/_defer/{name}`) are dispatched
+            // before route matching: usePHP owns that URL space, and we never
+            // want layout/page rendering on that path.
             if (null !== $this->usephp) {
                 $deferred = $this->usephp->handleDeferred();
                 if (null !== $deferred) {
@@ -434,9 +435,9 @@ class AppRouter
 
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
         // Pass the configured SnapshotSerializer so the inner Renderer can
-        // sign defer payloads for `<X defer />` placeholders emitted during
-        // SSR. Null when defer isn't wired — the Renderer will refuse defer
-        // elements with a clear error if the page actually uses one.
+        // serialize snapshot-backed component state inline. Null when usePHP
+        // isn't wired — components that need snapshot storage still degrade
+        // safely (Renderer falls back to unsigned snapshot JSON).
         $snapshotSerializer = $this->usephp?->getSnapshotSerializer();
         $renderer = new LayoutRenderer(
             $componentId,

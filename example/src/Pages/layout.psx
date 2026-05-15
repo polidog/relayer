@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Layouts;
 
 use App\Components\HeaderSkeleton;
-use App\Components\UserHeader;
+use App\Components\UserHeaderDeferred;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
@@ -30,7 +30,7 @@ final class RootLayout extends LayoutComponent
                             <a href="/users" className={$navLink}>Users</a>
                             <a href="/signup" className={$navLink}>Signup</a>
                         </div>
-                        <UserHeader defer fallback={<HeaderSkeleton />} />
+                        <UserHeaderDeferred fallback={<HeaderSkeleton />} />
                     </nav>
                 </header>
                 <main className="mx-auto max-w-3xl px-6 py-10">{$this->getChildren()}</main>

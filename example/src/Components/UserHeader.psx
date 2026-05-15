@@ -8,9 +8,10 @@ use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
 // Reads the relayer Authenticator session entry at render time so its output
-// depends on the current user. Loaded via `defer` from the layout so the
-// session lookup happens in a separate POST request — the cacheable main page
-// never varies by user.
+// depends on the current user. Loaded via a deferred wrapper
+// (UserHeaderDeferred) from the layout so the session lookup happens in a
+// separate GET to `/_defer/user-header` — the cacheable main page never
+// varies by user.
 //
 // Reads $_SESSION directly (not the Authenticator service) because deferred
 // components are rendered inside UsePHP::handleDeferred() which doesn't have

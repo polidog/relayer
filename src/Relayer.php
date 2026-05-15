@@ -88,21 +88,23 @@ final class Relayer
     }
 
     /**
-     * Construct a {@see UsePHP} instance for deferred component dispatch.
+     * Construct a {@see UsePHP} instance for PSX components + deferred dispatch.
      *
-     * Secret resolution order:
+     * The snapshot secret signs snapshot-storage state so it can survive a
+     * round-trip through the client without tampering. Resolution order:
      *  1. `USEPHP_SNAPSHOT_SECRET` env var (intended for prod — set a long
      *     random string).
      *  2. In dev only, fall back to a deterministic per-project secret so
-     *     the demo works out of the box without forcing every starter to
-     *     configure secrets first. Prod gets no fallback — `handleDeferred`
-     *     will refuse signed payloads cleanly if the env var is missing.
+     *     starters work out of the box without forcing every project to
+     *     configure secrets first. Prod gets no fallback — `UsePHP` simply
+     *     uses an unsigned serializer if the env var is missing.
      *
      * Components in `src/Components/` (if present) are compiled into a
-     * manifest at `var/cache/psx/manifest.php`. In dev the manifest is
-     * regenerated whenever a `.psx` source is newer than the manifest;
-     * prod expects `vendor/bin/usephp compile src/Components/` to have run
-     * during deploy.
+     * manifest at `var/cache/psx/manifest.php` (and a sibling
+     * `deferred-manifest.php` for components carrying `#[Defer]` or
+     * `fc(..., defer: ...)`). In dev the manifest is regenerated whenever a
+     * `.psx` source is newer than the manifest; prod expects
+     * `vendor/bin/usephp compile src/Components/` to have run during deploy.
      */
     private static function buildUsePhp(string $projectRoot, bool $isDev): UsePHP
     {
@@ -132,22 +134,22 @@ final class Relayer
         // Trim before return — secrets sourced from files often pick up a
         // trailing newline. Without normalizing here, the HMAC would silently
         // diverge from the value an operator pasted into a .env file, and
-        // every defer payload would fail signature verification with no
-        // obvious cause.
+        // every snapshot signature would fail verification with no obvious
+        // cause.
         if (\is_string($explicit) && '' !== \trim($explicit)) {
             return \trim($explicit);
         }
 
         if (!$isDev) {
-            // Prod: don't invent a secret. UsePHP::handleDeferred() will
-            // emit a clear 400 ("Defer endpoint disabled") so the operator
-            // knows what to fix.
+            // Prod: don't invent a secret. UsePHP falls back to an unsigned
+            // snapshot serializer — components that rely on snapshot storage
+            // will surface their own error if invoked without a secret.
             return '';
         }
 
-        // Dev fallback: stable per-project secret so deferred demos work
-        // immediately. The project root path is unique to the checkout, so
-        // two devs on the same machine don't share a key by accident.
+        // Dev fallback: stable per-project secret so snapshot-based demos
+        // work immediately. The project root path is unique to the checkout,
+        // so two devs on the same machine don't share a key by accident.
         return 'relayer-dev:' . \hash('sha256', $projectRoot);
     }
 

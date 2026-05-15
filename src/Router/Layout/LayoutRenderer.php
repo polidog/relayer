@@ -19,9 +19,9 @@ final class LayoutRenderer
         ?string $formActionUrl = null,
         ?SnapshotSerializer $snapshotSerializer = null,
     ) {
-        // Renderer needs the SnapshotSerializer to sign defer payloads
-        // emitted during SSR. Passing null degrades to the legacy non-defer
-        // behavior — pages without `<X defer />` placeholders still render.
+        // Renderer takes the SnapshotSerializer so snapshot-backed component
+        // state can be serialized into the rendered HTML. Passing null still
+        // works — Renderer falls back to unsigned snapshot JSON.
         $this->renderer = new Renderer($componentId, $snapshotSerializer);
         if (null === $formActionUrl) {
             $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
