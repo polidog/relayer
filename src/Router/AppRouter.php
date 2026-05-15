@@ -34,6 +34,8 @@ use Polidog\UsePhp\Psx\Compiler;
 use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
+use Polidog\UsePhp\Runtime\RenderContext;
+use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
@@ -48,6 +50,7 @@ class AppRouter
     private bool $autoCompilePsx;
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
+    private ?UsePHP $usephp = null;
 
     public function __construct(
         string $appDirectory,
@@ -112,6 +115,31 @@ class AppRouter
         return $this;
     }
 
+    /**
+     * Wire a configured {@see UsePHP} instance for deferred component support.
+     *
+     * When set:
+     *  - `RenderContext::setApp()` is established before each dispatch so PSX
+     *    components compiled into pages can resolve `renderPsxComponent` calls.
+     *  - `POST` requests carrying `_usephp_defer_payload` are routed to
+     *    {@see UsePHP::handleDeferred()} before any layout/page work, letting
+     *    a cacheable shell host user-specific fragments fetched after load.
+     *
+     * Apps that don't use defer-style components can leave this unset; the
+     * router falls back to its prior behavior with no UsePHP coupling.
+     */
+    public function setUsePhp(UsePHP $usephp): self
+    {
+        $this->usephp = $usephp;
+
+        return $this;
+    }
+
+    public function getUsePhp(): ?UsePHP
+    {
+        return $this->usephp;
+    }
+
     public function run(): void
     {
         // Build a snapshot of the request once per dispatch and stash it so
@@ -122,7 +150,26 @@ class AppRouter
             $this->container->setCurrentRequest($this->currentRequest);
         }
 
+        // Establish the active UsePHP for compiled PSX page bodies that call
+        // RenderContext::getApp()->renderPsxComponent(...). Without this the
+        // deferred-component glue would have no app to dispatch through.
+        if (null !== $this->usephp) {
+            RenderContext::setApp($this->usephp);
+        }
+
         try {
+            // Deferred component POST (`_usephp_defer_payload`) is dispatched
+            // before route matching: the same URL is reused for the deferred
+            // fetch and we never want layout/page rendering on that path.
+            if (null !== $this->usephp) {
+                $deferred = $this->usephp->handleDeferred();
+                if (null !== $deferred) {
+                    echo $deferred;
+
+                    return;
+                }
+            }
+
             $path = $this->getRequestPath();
 
             $match = $this->router->match($path);
@@ -143,6 +190,9 @@ class AppRouter
                 $this->container->setCurrentRequest(null);
             }
             $this->currentRequest = null;
+            if (null !== $this->usephp) {
+                RenderContext::clearApp();
+            }
         }
     }
 

@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components;
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+// Reads the relayer Authenticator session entry at render time so its output
+// depends on the current user. Loaded via `defer` from the layout so the
+// session lookup happens in a separate POST request — the cacheable main page
+// never varies by user.
+//
+// Reads $_SESSION directly (not the Authenticator service) because deferred
+// components are rendered inside UsePHP::handleDeferred() which doesn't have
+// DI container access. The session key matches Authenticator::SESSION_KEY.
+return function (array $props): Element {
+    if (\PHP_SESSION_NONE === \session_status()) {
+        \session_start();
+    }
+
+    $raw = $_SESSION['relayer.auth.identity'] ?? null;
+    $displayName = (\is_array($raw) && isset($raw['displayName']) && \is_string($raw['displayName']))
+        ? $raw['displayName']
+        : null;
+
+    if (null === $displayName) {
+        return (
+            <a
+                href="/login"
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+            >
+                Sign in
+            </a>
+        );
+    }
+
+    return (
+        <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-500">
+                Hi, <span className="font-medium text-slate-900">{$displayName}</span>
+            </span>
+            <a
+                href="/dashboard"
+                className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+                Dashboard
+            </a>
+        </div>
+    );
+};

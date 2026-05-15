@@ -1,0 +1,19 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Components;
+
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+// Pure, side-effect-free placeholder rendered in the initial (cacheable)
+// response while UserHeader is being fetched.
+return fn(array $props): Element => (
+    <div
+        className="h-8 w-24 animate-pulse rounded-md bg-slate-200"
+        aria-busy="true"
+    >
+        {''}
+    </div>
+);
