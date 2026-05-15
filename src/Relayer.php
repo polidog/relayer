@@ -141,9 +141,12 @@ final class Relayer
         }
 
         if (!$isDev) {
-            // Prod: don't invent a secret. UsePHP falls back to an unsigned
-            // snapshot serializer — components that rely on snapshot storage
-            // will surface their own error if invoked without a secret.
+            // Prod: don't invent a secret. Without one, UsePHP serializes
+            // snapshot-backed state UNSIGNED — clients can tamper with it
+            // before the next round-trip. Apps that use `StorageType::Snapshot`
+            // MUST set `USEPHP_SNAPSHOT_SECRET` in production; this fallback
+            // exists so apps that never use snapshot storage can still boot
+            // without one.
             return '';
         }
 

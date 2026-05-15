@@ -68,17 +68,42 @@ final class PsxComponentRegistrar
             return true;
         }
 
+        // The deferred-manifest sidecar is produced as part of the same
+        // compile pass as manifest.php (use-php >= 0.4.0). A cache produced
+        // by an older use-php version would have manifest.php but no
+        // deferred-manifest.php — recompile in that case so deferred
+        // endpoints actually register. The sidecar's legitimate absence is
+        // "no .psx file declares a Defer"; detect that by scanning sources
+        // for the marker rather than guessing.
+        $deferredManifestPath = \dirname($manifestPath) . '/' . CompileCommand::DEFERRED_MANIFEST_FILENAME;
+        $hasDeferredManifest = \file_exists($deferredManifestPath);
+        $sawDeferSource = false;
+
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($componentsDir));
         foreach ($iterator as $file) {
             if (!$file instanceof SplFileInfo || !$file->isFile()) {
                 continue;
             }
-            if (!\str_ends_with($file->getPathname(), '.psx')) {
+            $path = $file->getPathname();
+            if (!\str_ends_with($path, '.psx')) {
                 continue;
             }
-            if (@\filemtime($file->getPathname()) > $manifestMtime) {
+            if (@\filemtime($path) > $manifestMtime) {
                 return true;
             }
+            if (!$hasDeferredManifest && !$sawDeferSource) {
+                $contents = @\file_get_contents($path);
+                if (false !== $contents && \str_contains($contents, 'Defer')) {
+                    $sawDeferSource = true;
+                }
+            }
+        }
+
+        // We have manifest.php newer than every .psx, but a source declares
+        // a Defer and the sidecar is missing — only possible if the cache
+        // predates use-php 0.4.0's sidecar emission. Force a recompile.
+        if (!$hasDeferredManifest && $sawDeferSource) {
+            return true;
         }
 
         return false;

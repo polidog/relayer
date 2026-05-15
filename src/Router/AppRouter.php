@@ -435,9 +435,11 @@ class AppRouter
 
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
         // Pass the configured SnapshotSerializer so the inner Renderer can
-        // serialize snapshot-backed component state inline. Null when usePHP
-        // isn't wired — components that need snapshot storage still degrade
-        // safely (Renderer falls back to unsigned snapshot JSON).
+        // sign snapshot-backed component state inline. Null when usePHP
+        // isn't wired — Renderer then emits unsigned snapshot JSON if a
+        // page renders snapshot-storage state, which is NOT tamper-protected
+        // against the client. Pages that rely on `StorageType::Snapshot`
+        // must therefore wire a UsePHP instance via `setUsePhp()`.
         $snapshotSerializer = $this->usephp?->getSnapshotSerializer();
         $renderer = new LayoutRenderer(
             $componentId,

@@ -74,7 +74,14 @@ final class DeferDispatchTest extends TestCase
     {
         // No deferred component registered: GET /_defer/<name> must come back
         // as a 404 with `no-store`, not bleed through into normal page routing.
+        // The `no-store` matters — a CDN's default policy must not be able to
+        // pin the negative result against a later valid registration.
         $usephp = $this->bootUsePhp();
+
+        $emittedHeaders = [];
+        $usephp->withHeaderEmitter(static function (string $header) use (&$emittedHeaders): void {
+            $emittedHeaders[] = $header;
+        });
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/unknown';
@@ -83,6 +90,7 @@ final class DeferDispatchTest extends TestCase
 
         self::assertSame(404, \http_response_code());
         self::assertStringContainsString('Deferred component not registered', $output);
+        self::assertContains('Cache-Control: no-store', $emittedHeaders);
     }
 
     public function testGetRequestPassesThroughToPageRouter(): void

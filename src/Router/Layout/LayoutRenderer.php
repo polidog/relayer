@@ -20,8 +20,12 @@ final class LayoutRenderer
         ?SnapshotSerializer $snapshotSerializer = null,
     ) {
         // Renderer takes the SnapshotSerializer so snapshot-backed component
-        // state can be serialized into the rendered HTML. Passing null still
-        // works — Renderer falls back to unsigned snapshot JSON.
+        // state can be signed into the rendered HTML. Null is allowed for the
+        // common case of pages with no snapshot-storage components — Renderer
+        // emits unsigned snapshot JSON if a snapshot is actually produced,
+        // which is NOT tamper-protected against the client, so pages that
+        // round-trip state through `StorageType::Snapshot` must hand in a
+        // configured SnapshotSerializer.
         $this->renderer = new Renderer($componentId, $snapshotSerializer);
         if (null === $formActionUrl) {
             $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
