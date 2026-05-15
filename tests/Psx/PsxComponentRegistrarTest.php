@@ -67,7 +67,7 @@ final class PsxComponentRegistrarTest extends TestCase
         self::assertNotNull($manifestPath);
         self::assertFileExists($manifestPath);
         // Verify the manifest got loaded into UsePHP by rendering through it.
-        $element = $app->renderPsxComponent('App\\Components\\Greeting');
+        $element = $app->renderPsxComponent('App\Components\Greeting');
         self::assertSame('span', $element->type);
     }
 

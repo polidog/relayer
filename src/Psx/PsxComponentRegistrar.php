@@ -9,6 +9,7 @@ use Polidog\UsePhp\UsePHP;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
+use SplFileInfo;
 
 /**
  * Compile reusable PSX components on demand and register the resulting
@@ -69,7 +70,7 @@ final class PsxComponentRegistrar
 
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($componentsDir));
         foreach ($iterator as $file) {
-            if (!$file instanceof \SplFileInfo || !$file->isFile()) {
+            if (!$file instanceof SplFileInfo || !$file->isFile()) {
                 continue;
             }
             if (!\str_ends_with($file->getPathname(), '.psx')) {
@@ -89,6 +90,7 @@ final class PsxComponentRegistrar
         // capture+discard that output so dev requests stay clean. Compile
         // errors still surface via the non-zero exit code we re-check below.
         \ob_start();
+
         try {
             $exitCode = (new CompileCommand())->run(
                 [$componentsDir, '--cache=' . $cacheDir],

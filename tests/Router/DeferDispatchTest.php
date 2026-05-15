@@ -52,7 +52,7 @@ final class DeferDispatchTest extends TestCase
 
         $usephp = $this->bootUsePhp();
 
-        $payload = \json_encode(['fqcn' => 'App\\Components\\Greeting', 'props' => ['name' => 'Alice']], \JSON_THROW_ON_ERROR);
+        $payload = \json_encode(['fqcn' => 'App\Components\Greeting', 'props' => ['name' => 'Alice']], \JSON_THROW_ON_ERROR);
         $sig = $usephp->getSnapshotSerializer()->signString($payload);
 
         $_SERVER['REQUEST_METHOD'] = 'POST';
@@ -84,7 +84,7 @@ final class DeferDispatchTest extends TestCase
 
         $_SERVER['REQUEST_METHOD'] = 'POST';
         $_SERVER['REQUEST_URI'] = '/';
-        $_POST['_usephp_defer_payload'] = '{"fqcn":"App\\\\Components\\\\Greeting","props":[]}';
+        $_POST['_usephp_defer_payload'] = '{"fqcn":"App\\\Components\\\Greeting","props":[]}';
         $_POST['_usephp_defer_sig'] = 'bogus-signature';
 
         $output = $this->runApp($usephp);
@@ -128,6 +128,7 @@ final class DeferDispatchTest extends TestCase
         // Compile components so the manifest is on disk for handleDeferred
         // to resolve App\Components\... FQCNs at dispatch time.
         \ob_start();
+
         try {
             $exitCode = (new CompileCommand())->run(
                 [$this->workDir . '/src/Components', '--cache=' . $cacheDir],
@@ -159,6 +160,7 @@ final class DeferDispatchTest extends TestCase
         $app->setUsePhp($usephp);
 
         \ob_start();
+
         try {
             $app->run();
         } finally {
