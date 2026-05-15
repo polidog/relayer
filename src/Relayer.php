@@ -13,6 +13,10 @@ use Polidog\Relayer\Auth\SessionStorage;
 use Polidog\Relayer\Auth\TraceableAuthenticator;
 use Polidog\Relayer\Auth\TraceableSessionStorage;
 use Polidog\Relayer\Auth\UserProvider;
+use Polidog\Relayer\Db\CachingDatabase;
+use Polidog\Relayer\Db\Database;
+use Polidog\Relayer\Db\PdoDatabase;
+use Polidog\Relayer\Db\TraceableDatabase;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
 use Polidog\Relayer\Http\TraceableEtagStore;
@@ -175,6 +179,30 @@ final class Relayer
         return $out;
     }
 
+    /**
+     * Read a single env var as a trimmed string. Returns `''` when unset
+     * or blank so callers can use `?:` to fall back to null.
+     */
+    private static function readEnv(string $name): string
+    {
+        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
+
+        return \is_string($raw) ? \trim($raw) : '';
+    }
+
+    /**
+     * Read a single env var as a non-negative int (`0` included), or null
+     * when unset/blank or not all-digits. Used for the DB timeout knobs;
+     * `0` is passed straight to PDO, where it carries the driver's own
+     * "no timeout" meaning.
+     */
+    private static function readEnvInt(string $name): ?int
+    {
+        $raw = self::readEnv($name);
+
+        return \ctype_digit($raw) ? (int) $raw : null;
+    }
+
     private static function buildContainer(string $projectRoot, ?AppConfigurator $configurator): ContainerBuilder
     {
         $container = new ContainerBuilder();
@@ -323,6 +351,51 @@ final class Relayer
                 ->setPublic(true)
             ;
             $container->setAlias(SessionStorage::class, TraceableSessionStorage::class)
+                ->setPublic(true)
+            ;
+        }
+
+        // Database. Registered only when DATABASE_DSN is set, mirroring
+        // the conditional Authenticator wiring — apps without a database
+        // pay nothing and never fail container compilation over an
+        // unsatisfiable PdoDatabase. The Database alias always resolves
+        // to CachingDatabase (request-scoped read memoization); in dev it
+        // wraps TraceableDatabase so queries land in the profiler, in
+        // prod it wraps PdoDatabase directly.
+        $dsn = self::readEnv('DATABASE_DSN');
+        if ('' !== $dsn) {
+            $container->register(PdoDatabase::class)
+                ->setArguments([
+                    $dsn,
+                    self::readEnv('DATABASE_USER') ?: null,
+                    self::readEnv('DATABASE_PASSWORD') ?: null,
+                    self::readEnvInt('DATABASE_TIMEOUT'),
+                    self::readEnvInt('DATABASE_READ_TIMEOUT'),
+                ])
+                ->setPublic(true)
+            ;
+
+            $cacheInner = new Reference(PdoDatabase::class);
+
+            if (self::isDev()) {
+                $container->register(TraceableDatabase::class)
+                    ->setArguments([
+                        new Reference(PdoDatabase::class),
+                        new Reference(Profiler::class),
+                    ])
+                    ->setPublic(true)
+                ;
+                $cacheInner = new Reference(TraceableDatabase::class);
+            }
+
+            $container->register(CachingDatabase::class)
+                ->setArguments([
+                    $cacheInner,
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(Database::class, CachingDatabase::class)
                 ->setPublic(true)
             ;
         }
