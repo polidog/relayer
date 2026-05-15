@@ -39,4 +39,20 @@ final class InMemoryProfilerStorage implements ProfilerStorage
     {
         return \array_slice(\array_reverse(\array_values($this->saved)), 0, $limit);
     }
+
+    public function childrenOf(string $parentToken): array
+    {
+        if ('' === $parentToken) {
+            return [];
+        }
+
+        $matches = \array_values(\array_filter(
+            $this->saved,
+            static fn (Profile $profile): bool => $profile->parentToken === $parentToken,
+        ));
+
+        \usort($matches, static fn (Profile $a, Profile $b): int => $a->startedAt <=> $b->startedAt);
+
+        return $matches;
+    }
 }

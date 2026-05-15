@@ -78,4 +78,23 @@ final class FileProfilerStorage implements ProfilerStorage
 
         return $out;
     }
+
+    public function childrenOf(string $parentToken): array
+    {
+        if ('' === $parentToken || !\is_dir($this->directory)) {
+            return [];
+        }
+
+        $out = [];
+        foreach (\glob($this->directory . '/*.json') ?: [] as $path) {
+            $profile = $this->load(\basename($path, '.json'));
+            if (null !== $profile && $profile->parentToken === $parentToken) {
+                $out[] = $profile;
+            }
+        }
+
+        \usort($out, static fn (Profile $a, Profile $b): int => $a->startedAt <=> $b->startedAt);
+
+        return $out;
+    }
 }

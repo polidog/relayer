@@ -12,6 +12,7 @@ use Polidog\Relayer\Profiler\ProfilerWebView;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Component\FunctionPage;
+use Polidog\Relayer\Router\Document\HtmlDocument;
 use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Routing\RouteMatch;
@@ -49,6 +50,15 @@ class TraceableAppRouter extends AppRouter
         self::PROFILER_PREFIX,
         '/.well-known',
     ];
+
+    /**
+     * Token format used by {@see RecordingProfiler::beginProfile()}: 16
+     * lowercase hex chars (`bin2hex(random_bytes(8))`). The router accepts
+     * the parent-token header only when it matches this shape — protects
+     * the file storage from a crafted value smuggling path separators or
+     * other surprises.
+     */
+    private const TOKEN_PATTERN = '/^[a-f0-9]{16}$/';
 
     private ?Profiler $profiler = null;
 
@@ -106,7 +116,28 @@ class TraceableAppRouter extends AppRouter
             return;
         }
 
-        $recording->beginProfile($this->readUrl(), $this->readMethod());
+        $profile = $recording->beginProfile(
+            $this->readUrl(),
+            $this->readMethod(),
+            $this->readParentToken(),
+        );
+
+        // Surface the profile's token so the inline fetch wrapper on the
+        // parent page can forward it back on any `<X defer />` fetch (see
+        // `buildDebugBridgeScript()`). Also useful for IDE/HTTP-inspector
+        // tooling that wants to deep-link to /_profiler/<token>.
+        if (!\headers_sent()) {
+            \header('X-Debug-Token: ' . $profile->token);
+        }
+
+        // Patch `window.fetch` so any defer fetch the page kicks off
+        // carries our token back as `X-Debug-Parent-Token`. Injected here
+        // — before parent::run() reaches renderPage — so HtmlDocument
+        // picks it up in the next `render()` call.
+        $document = $this->getDocument();
+        if ($document instanceof HtmlDocument) {
+            $document->addHeadHtml(self::buildDebugBridgeScript($profile->token));
+        }
 
         // PHP's `finally` blocks do NOT run when control leaves via
         // `exit/die` — and dispatch has several `exit` paths (304 short-
@@ -371,6 +402,76 @@ class TraceableAppRouter extends AppRouter
         }
 
         parent::dispatchStateAction($componentId, $state);
+    }
+
+    /**
+     * Read the parent-token header that the in-page fetch wrapper attaches
+     * to defer (and partial) sub-requests. Strictly validated against the
+     * RecordingProfiler token shape so a crafted header can never reach
+     * the storage layer as a filename component.
+     */
+    private function readParentToken(): ?string
+    {
+        $raw = $_SERVER['HTTP_X_DEBUG_PARENT_TOKEN'] ?? null;
+        if (!\is_string($raw) || '' === $raw) {
+            return null;
+        }
+
+        return \preg_match(self::TOKEN_PATTERN, $raw) ? $raw : null;
+    }
+
+    /**
+     * Inline JS that wraps `window.fetch` so any usePHP sub-request
+     * (defer fetch identified by `X-UsePHP-Defer`) forwards the parent
+     * profile's token. The wrapper is idempotent — if a previously
+     * recorded profile already patched fetch, the second wrap simply
+     * overrides the captured token while still chaining to the original.
+     */
+    private static function buildDebugBridgeScript(string $token): string
+    {
+        // Token is 16 hex chars per the RecordingProfiler contract, but
+        // json_encode is the right gate regardless of source — it keeps
+        // the script safe even if the contract ever loosens.
+        $jsToken = \json_encode($token, \JSON_UNESCAPED_SLASHES | \JSON_HEX_TAG | \JSON_HEX_APOS | \JSON_HEX_QUOT | \JSON_HEX_AMP);
+        if (false === $jsToken) {
+            return '';
+        }
+
+        return <<<HTML
+            <script data-relayer-debug-bridge>
+            (function (t) {
+                if (!window.fetch) return;
+                var orig = window.__relayerDebugBridgeOrigFetch || window.fetch;
+                window.__relayerDebugBridgeOrigFetch = orig;
+                window.fetch = function (input, init) {
+                    init = init || {};
+                    var h = init.headers;
+                    var isDefer = false;
+                    if (h instanceof Headers) {
+                        isDefer = !!h.get('X-UsePHP-Defer');
+                    } else if (Array.isArray(h)) {
+                        for (var i = 0; i < h.length; i++) {
+                            if (h[i][0] && h[i][0].toLowerCase() === 'x-usephp-defer') { isDefer = true; break; }
+                        }
+                    } else if (h && typeof h === 'object') {
+                        isDefer = !!(h['X-UsePHP-Defer'] || h['x-usephp-defer']);
+                    }
+                    if (isDefer) {
+                        if (h instanceof Headers) {
+                            h.set('X-Debug-Parent-Token', t);
+                        } else if (Array.isArray(h)) {
+                            h.push(['X-Debug-Parent-Token', t]);
+                        } else if (h && typeof h === 'object') {
+                            h['X-Debug-Parent-Token'] = t;
+                        } else {
+                            init.headers = { 'X-Debug-Parent-Token': t };
+                        }
+                    }
+                    return orig.call(this, input, init);
+                };
+            })({$jsToken});
+            </script>
+            HTML;
     }
 
     private function isExcluded(string $path): bool

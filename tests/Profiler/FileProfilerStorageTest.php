@@ -92,4 +92,52 @@ final class FileProfilerStorageTest extends TestCase
 
         self::assertSame([], $storage->recent());
     }
+
+    public function testParentTokenRoundtrips(): void
+    {
+        $storage = new FileProfilerStorage($this->dir);
+        $parent = new Profile('par1234567890ab', '/', 'GET', \microtime(true));
+        $parent->end(200);
+        $child = new Profile('chi1234567890ab', '/', 'POST', \microtime(true), parentToken: 'par1234567890ab');
+        $child->end(200);
+
+        $storage->save($parent);
+        $storage->save($child);
+
+        $loaded = $storage->load('chi1234567890ab');
+        self::assertNotNull($loaded);
+        self::assertSame('par1234567890ab', $loaded->parentToken);
+    }
+
+    public function testChildrenOfReturnsMatchingProfilesOldestFirst(): void
+    {
+        $storage = new FileProfilerStorage($this->dir);
+
+        $parent = new Profile('par1234567890ab', '/page', 'GET', 1000.0);
+        $parent->end(200);
+        $storage->save($parent);
+
+        // Two children plus an unrelated profile that must NOT come back.
+        $childA = new Profile('chiAAAAAAAAAAAA', '/page', 'POST', 1001.0, parentToken: 'par1234567890ab');
+        $childA->end(200);
+        $childB = new Profile('chiBBBBBBBBBBBB', '/page', 'POST', 1002.0, parentToken: 'par1234567890ab');
+        $childB->end(200);
+        $unrelated = new Profile('unrelated123456', '/other', 'GET', 1003.0);
+        $unrelated->end(200);
+        $storage->save($childB); // Save out of order to confirm sort-by-startedAt.
+        $storage->save($childA);
+        $storage->save($unrelated);
+
+        $children = $storage->childrenOf('par1234567890ab');
+        self::assertCount(2, $children);
+        self::assertSame('chiAAAAAAAAAAAA', $children[0]->token, 'oldest child first');
+        self::assertSame('chiBBBBBBBBBBBB', $children[1]->token);
+    }
+
+    public function testChildrenOfWithEmptyTokenReturnsEmpty(): void
+    {
+        $storage = new FileProfilerStorage($this->dir);
+
+        self::assertSame([], $storage->childrenOf(''));
+    }
 }

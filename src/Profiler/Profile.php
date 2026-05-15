@@ -23,11 +23,18 @@ final class Profile
 
     private ?int $statusCode = null;
 
+    /**
+     * When set, identifies the request that triggered this one — typically a
+     * `<X defer />` fetch initiated by the parent page render. The profiler
+     * viewer uses this to nest sub-requests under their parent instead of
+     * scattering them across the index as independent rows.
+     */
     public function __construct(
         public readonly string $token,
         public readonly string $url,
         public readonly string $method,
         public readonly float $startedAt,
+        public readonly ?string $parentToken = null,
     ) {}
 
     public function addEvent(Event $event): void
@@ -72,12 +79,13 @@ final class Profile
     }
 
     /**
-     * @return array{token: string, url: string, method: string, startedAt: float, endedAt: ?float, statusCode: ?int, events: list<array<string, mixed>>}
+     * @return array{token: string, parentToken: ?string, url: string, method: string, startedAt: float, endedAt: ?float, statusCode: ?int, events: list<array<string, mixed>>}
      */
     public function toArray(): array
     {
         return [
             'token' => $this->token,
+            'parentToken' => $this->parentToken,
             'url' => $this->url,
             'method' => $this->method,
             'startedAt' => $this->startedAt,
@@ -96,12 +104,14 @@ final class Profile
         $url = $data['url'] ?? '';
         $method = $data['method'] ?? '';
         $startedAt = $data['startedAt'] ?? 0.0;
+        $parentToken = $data['parentToken'] ?? null;
 
         $profile = new self(
             token: \is_string($token) ? $token : '',
             url: \is_string($url) ? $url : '',
             method: \is_string($method) ? $method : '',
             startedAt: \is_numeric($startedAt) ? (float) $startedAt : 0.0,
+            parentToken: \is_string($parentToken) && '' !== $parentToken ? $parentToken : null,
         );
 
         if (isset($data['statusCode']) && \is_int($data['statusCode'])) {

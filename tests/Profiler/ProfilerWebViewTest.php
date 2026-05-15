@@ -75,9 +75,79 @@ final class ProfilerWebViewTest extends TestCase
         self::assertStringContainsString('&lt;script&gt;', $html);
     }
 
-    private function makeProfile(string $token, string $url, string $method, int $status): Profile
+    public function testIndexFoldsChildrenUnderParentRow(): void
     {
-        $profile = new Profile($token, $url, $method, \microtime(true));
+        $storage = new InMemoryProfilerStorage();
+        $parent = $this->makeProfile('par1', '/page', 'GET', 200);
+        $childA = $this->makeProfile('cha1', '/page', 'POST', 200, parentToken: 'par1');
+        $childB = $this->makeProfile('chb2', '/page', 'POST', 200, parentToken: 'par1');
+        // Insert children before parent to verify lookup is order-independent.
+        $storage->saved[$childA->token] = $childA;
+        $storage->saved[$childB->token] = $childB;
+        $storage->saved[$parent->token] = $parent;
+
+        $html = (new ProfilerWebView($storage))->renderIndex();
+
+        // Children rows are hidden — only the parent row's URL link appears.
+        self::assertStringContainsString('href="/_profiler/par1"', $html);
+        self::assertStringNotContainsString('href="/_profiler/cha1"', $html);
+        self::assertStringNotContainsString('href="/_profiler/chb2"', $html);
+        // Badge surfaces the child count alongside the parent URL.
+        self::assertStringContainsString('+2 defer', $html);
+    }
+
+    public function testIndexSurfacesOrphanChildWhenParentMissingFromBatch(): void
+    {
+        // When the parent profile is gone (evicted, excluded, etc.) the child
+        // must still be reachable from the index — otherwise the defer fetch
+        // would be invisible despite the storage holding it.
+        $storage = new InMemoryProfilerStorage();
+        $child = $this->makeProfile('orphan1', '/page', 'POST', 200, parentToken: 'gone-parent-123');
+        $storage->saved[$child->token] = $child;
+
+        $html = (new ProfilerWebView($storage))->renderIndex();
+
+        self::assertStringContainsString('href="/_profiler/orphan1"', $html);
+    }
+
+    public function testDetailRendersParentLinkAndChildrenList(): void
+    {
+        $storage = new InMemoryProfilerStorage();
+        $parent = $this->makeProfile('par1', '/page', 'GET', 200);
+        $parent->addEvent(new Event('route', 'match', ['pattern' => '/page'], $parent->startedAt));
+        $child = $this->makeProfile('cha1', '/page', 'POST', 200, parentToken: 'par1');
+        $storage->saved[$parent->token] = $parent;
+        $storage->saved[$child->token] = $child;
+
+        // Parent's detail page lists the child under "Sub-requests".
+        $parentHtml = (new ProfilerWebView($storage))->renderDetail('par1');
+        self::assertStringContainsString('Sub-requests', $parentHtml);
+        self::assertStringContainsString('href="/_profiler/cha1"', $parentHtml);
+
+        // Child's detail page links back to the parent and labels it.
+        $childHtml = (new ProfilerWebView($storage))->renderDetail('cha1');
+        self::assertStringContainsString('Parent', $childHtml);
+        self::assertStringContainsString('href="/_profiler/par1"', $childHtml);
+    }
+
+    public function testDetailMarksParentAsUnavailableWhenMissing(): void
+    {
+        $storage = new InMemoryProfilerStorage();
+        $orphan = $this->makeProfile('orphan2', '/page', 'POST', 200, parentToken: 'gone-parent-456');
+        $storage->saved[$orphan->token] = $orphan;
+
+        $html = (new ProfilerWebView($storage))->renderDetail('orphan2');
+
+        self::assertStringContainsString('Parent', $html);
+        self::assertStringContainsString('unavailable', $html);
+        // The dangling token is still surfaced (escaped) so the developer
+        // can correlate manually if logs still hold it.
+        self::assertStringContainsString('gone-parent-456', $html);
+    }
+
+    private function makeProfile(string $token, string $url, string $method, int $status, ?string $parentToken = null): Profile
+    {
+        $profile = new Profile($token, $url, $method, \microtime(true), parentToken: $parentToken);
         $profile->end($status);
 
         return $profile;

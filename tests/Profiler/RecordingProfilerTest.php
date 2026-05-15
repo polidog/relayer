@@ -75,6 +75,11 @@ final class RecordingProfilerTest extends TestCase
             {
                 return [];
             }
+
+            public function childrenOf(string $parentToken): array
+            {
+                return [];
+            }
         };
 
         $profiler = new RecordingProfiler($storage);
@@ -112,6 +117,11 @@ final class RecordingProfilerTest extends TestCase
             {
                 return [];
             }
+
+            public function childrenOf(string $parentToken): array
+            {
+                return [];
+            }
         };
 
         $profiler = new RecordingProfiler($storage);
@@ -137,5 +147,21 @@ final class RecordingProfilerTest extends TestCase
         $span->stop(['ignored' => true]);
 
         self::assertCount(1, $profile->getEvents());
+    }
+
+    public function testBeginProfileStampsParentTokenWhenSupplied(): void
+    {
+        $profiler = new RecordingProfiler();
+        $profile = $profiler->beginProfile('/page', 'POST', 'aaaa1111bbbb2222');
+
+        self::assertSame('aaaa1111bbbb2222', $profile->parentToken);
+    }
+
+    public function testBeginProfileLeavesParentTokenNullByDefault(): void
+    {
+        $profiler = new RecordingProfiler();
+        $profile = $profiler->beginProfile('/', 'GET');
+
+        self::assertNull($profile->parentToken);
     }
 }

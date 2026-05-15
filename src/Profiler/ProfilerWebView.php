@@ -21,11 +21,39 @@ final class ProfilerWebView
 
     public function renderIndex(int $limit = 50): string
     {
-        $profiles = $this->storage->recent($limit);
+        // Look further back than the visible limit so we can fold child
+        // profiles into their parents without dropping parents off the
+        // visible list. Without this, a page that emits multiple defer
+        // fetches would push its own parent row out of the recent batch.
+        $lookupLimit = \max($limit * 4, 50);
+        $profiles = $this->storage->recent($lookupLimit);
+
+        $byToken = [];
+        foreach ($profiles as $profile) {
+            $byToken[$profile->token] = $profile;
+        }
+
+        // Group children under whichever in-batch parent they reference.
+        // Orphans (parent not in batch — e.g. evicted or excluded) fall
+        // back to top-level rendering so they remain discoverable.
+        $childrenByParent = [];
+        $topLevel = [];
+        foreach ($profiles as $profile) {
+            $parent = $profile->parentToken;
+            if (null !== $parent && isset($byToken[$parent])) {
+                $childrenByParent[$parent][] = $profile;
+
+                continue;
+            }
+            $topLevel[] = $profile;
+        }
+
+        $topLevel = \array_slice($topLevel, 0, $limit);
 
         $rows = '';
-        foreach ($profiles as $profile) {
-            $rows .= $this->renderIndexRow($profile);
+        foreach ($topLevel as $profile) {
+            $children = $childrenByParent[$profile->token] ?? [];
+            $rows .= $this->renderIndexRow($profile, \count($children));
         }
 
         if ('' === $rows) {
@@ -34,7 +62,7 @@ final class ProfilerWebView
 
         $body = <<<HTML
             <h1>Relayer Profiler</h1>
-            <p class="meta">Showing most recent {$limit} profiles. Newest first.</p>
+            <p class="meta">Showing most recent {$limit} profiles. Newest first. Defer sub-requests are folded into their parent row.</p>
             <table>
                 <thead>
                     <tr><th>Time</th><th>Method</th><th>URL</th><th>Status</th><th>Duration</th></tr>
@@ -85,12 +113,15 @@ final class ProfilerWebView
         $token = self::h($profile->token);
         $url = self::h($profile->url);
         $method = self::h($profile->method);
+        $parentRow = $this->renderParentRow($profile->parentToken);
+        $childrenSection = $this->renderChildrenSection($profile);
 
         $body = <<<HTML
             <p><a href="/_profiler">← Back to index</a></p>
             <h1>{$method} {$url}</h1>
             <dl class="summary">
                 <dt>Token</dt><dd><code>{$token}</code></dd>
+                {$parentRow}
                 <dt>Status</dt><dd>{$statusBadge}</dd>
                 <dt>Started</dt><dd>{$startedAt}</dd>
                 <dt>Duration</dt><dd>{$durationText}</dd>
@@ -102,12 +133,71 @@ final class ProfilerWebView
                 </thead>
                 <tbody>{$eventRows}</tbody>
             </table>
+            {$childrenSection}
             HTML;
 
         return $this->layout("Profile {$token}", $body);
     }
 
-    private function renderIndexRow(Profile $profile): string
+    private function renderParentRow(?string $parentToken): string
+    {
+        if (null === $parentToken) {
+            return '';
+        }
+
+        $parent = $this->storage->load($parentToken);
+        $escapedToken = self::h($parentToken);
+        if (null === $parent) {
+            return "<dt>Parent</dt><dd><code>{$escapedToken}</code> <span class=\"meta\">(unavailable)</span></dd>";
+        }
+
+        $parentUrl = self::h($parent->url);
+
+        return "<dt>Parent</dt><dd><a href=\"/_profiler/{$escapedToken}\">{$parentUrl}</a></dd>";
+    }
+
+    private function renderChildrenSection(Profile $profile): string
+    {
+        $children = $this->storage->childrenOf($profile->token);
+        if ([] === $children) {
+            return '';
+        }
+
+        $rows = '';
+        foreach ($children as $child) {
+            $offsetMs = ($child->startedAt - $profile->startedAt) * 1000;
+            $childDuration = $child->durationMs();
+            $childDurationText = null === $childDuration ? '—' : \sprintf('%.2f ms', $childDuration);
+            $childToken = self::h($child->token);
+            $childUrl = self::h($child->url);
+            $childMethod = self::h($child->method);
+            $childStatus = $this->statusBadge($child->getStatusCode());
+            $rows .= \sprintf(
+                '<tr class="child"><td class="num">%s</td><td><span class="method">%s</span></td>'
+                . '<td><a href="/_profiler/%s">%s</a></td><td>%s</td><td class="num">%s</td></tr>',
+                \sprintf('+%.2f ms', $offsetMs),
+                $childMethod,
+                $childToken,
+                $childUrl,
+                $childStatus,
+                $childDurationText,
+            );
+        }
+
+        $count = \count($children);
+
+        return <<<HTML
+            <h2>Sub-requests <span class="meta">({$count})</span></h2>
+            <table>
+                <thead>
+                    <tr><th>t+</th><th>Method</th><th>URL</th><th>Status</th><th>Duration</th></tr>
+                </thead>
+                <tbody>{$rows}</tbody>
+            </table>
+            HTML;
+    }
+
+    private function renderIndexRow(Profile $profile, int $childCount = 0): string
     {
         $duration = $profile->durationMs();
         $durationText = null === $duration ? '—' : \sprintf('%.1f ms', $duration);
@@ -116,12 +206,15 @@ final class ProfilerWebView
         $url = self::h($profile->url);
         $method = self::h($profile->method);
         $status = $this->statusBadge($profile->getStatusCode());
+        $deferBadge = $childCount > 0
+            ? \sprintf(' <span class="defer-badge" title="defer sub-requests">+%d defer</span>', $childCount)
+            : '';
 
         return <<<HTML
             <tr>
                 <td>{$startedAt}</td>
                 <td><span class="method">{$method}</span></td>
-                <td><a href="/_profiler/{$token}">{$url}</a></td>
+                <td><a href="/_profiler/{$token}">{$url}</a>{$deferBadge}</td>
                 <td>{$status}</td>
                 <td class="num">{$durationText}</td>
             </tr>
@@ -170,6 +263,8 @@ final class ProfilerWebView
                     td.empty { color: #999; text-align: center; padding: 1rem; }
                     .method { font-weight: 600; font-size: 0.85em; color: #444; }
                     .tag { display: inline-block; padding: 1px 6px; background: #eef2ff; color: #3730a3; border-radius: 3px; font-size: 0.8em; font-weight: 600; margin-right: 4px; }
+                    .defer-badge { display: inline-block; padding: 1px 6px; margin-left: 6px; background: #fff7ed; color: #9a3412; border-radius: 10px; font-size: 0.75em; font-weight: 600; }
+                    tr.child td { background: #fbfaf6; }
                     .status { display: inline-block; padding: 1px 8px; border-radius: 10px; font-weight: 600; font-size: 0.85em; }
                     .status-2xx { background: #dcfce7; color: #166534; }
                     .status-3xx { background: #dbeafe; color: #1e40af; }

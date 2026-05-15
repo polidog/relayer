@@ -196,6 +196,11 @@ class AppRouter
         }
     }
 
+    protected function getDocument(): DocumentInterface
+    {
+        return $this->document;
+    }
+
     protected function handleMatch(RouteMatch $match): void
     {
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());

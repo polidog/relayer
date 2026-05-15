@@ -24,4 +24,14 @@ interface ProfilerStorage
      * @return list<Profile>
      */
     public function recent(int $limit = 20): array;
+
+    /**
+     * Return profiles whose `parentToken` matches — i.e. the sub-requests
+     * that the given profile spawned (e.g. `<X defer />` fetches initiated
+     * from the parent page render). Oldest first so the parent's detail
+     * view can lay them out in dispatch order.
+     *
+     * @return list<Profile>
+     */
+    public function childrenOf(string $parentToken): array;
 }
