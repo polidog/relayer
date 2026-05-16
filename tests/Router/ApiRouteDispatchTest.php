@@ -34,7 +34,9 @@ final class ApiRouteDispatchTest extends TestCase
     public function testGetReturnsJsonBodyAnd200(): void
     {
         $this->writeRoute('users', <<<'PHP'
-            return ['GET' => static fn (): array => ['users' => ['a', 'b']]];
+            use Polidog\Relayer\Http\Response;
+
+            return ['GET' => static fn (): Response => Response::json(['users' => ['a', 'b']])];
             PHP);
 
         $output = $this->dispatch('/users', 'GET');
@@ -43,22 +45,25 @@ final class ApiRouteDispatchTest extends TestCase
         self::assertSame(200, \http_response_code());
     }
 
-    public function testUnsupportedMethodReturns405WithAllow(): void
+    public function testUnsupportedMethodReturns405JsonWithEffectiveAllow(): void
     {
         $this->writeRoute('users', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
             return [
-                'GET'  => static fn (): array => [],
-                'POST' => static fn (): array => [],
+                'GET'  => static fn (): Response => Response::json([]),
+                'POST' => static fn (): Response => Response::json([]),
             ];
             PHP);
 
         $output = $this->dispatch('/users', 'DELETE');
 
-        self::assertSame('', $output);
+        self::assertSame('{"error":"Method Not Allowed"}', $output);
         self::assertSame(405, \http_response_code());
 
         if (\function_exists('xdebug_get_headers')) {
-            self::assertContains('Allow: GET, POST', \xdebug_get_headers());
+            // GET present ⇒ HEAD synthesized; OPTIONS always.
+            self::assertContains('Allow: GET, HEAD, OPTIONS, POST', \xdebug_get_headers());
         }
     }
 
@@ -67,8 +72,9 @@ final class ApiRouteDispatchTest extends TestCase
         \mkdir($this->workDir . '/users/[id]', 0o777, true);
         \file_put_contents(
             $this->workDir . '/users/[id]/route.php',
-            "<?php\n\nuse Polidog\\Relayer\\Router\\Component\\PageContext;\n\n"
-            . "return ['GET' => static fn (PageContext \$ctx): array => ['id' => \$ctx->params['id']]];\n",
+            "<?php\n\nuse Polidog\\Relayer\\Http\\Response;\n"
+            . "use Polidog\\Relayer\\Router\\Component\\PageContext;\n\n"
+            . "return ['GET' => static fn (PageContext \$ctx): Response => Response::json(['id' => \$ctx->params['id']])];\n",
         );
 
         $output = $this->dispatch('/users/99', 'GET');
@@ -79,9 +85,10 @@ final class ApiRouteDispatchTest extends TestCase
     public function testContainerServiceIsAutowiredIntoHandler(): void
     {
         $this->writeRoute('svc', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
             use Polidog\Relayer\Tests\Fixtures\PlainService;
 
-            return ['GET' => static fn (PlainService $svc): array => ['class' => $svc::class]];
+            return ['GET' => static fn (PlainService $svc): Response => Response::json(['class' => $svc::class])];
             PHP);
 
         $plain = new PlainService();
@@ -115,10 +122,11 @@ final class ApiRouteDispatchTest extends TestCase
     {
         $this->writeRoute('echo', <<<'PHP'
             use Polidog\Relayer\Http\Request;
+            use Polidog\Relayer\Http\Response;
 
             return [
-                'GET'  => static fn (): array => ['method' => 'get'],
-                'POST' => static fn (Request $req): array => ['got' => $req->post('msg')],
+                'GET'  => static fn (): Response => Response::json(['method' => 'get']),
+                'POST' => static fn (Request $req): Response => Response::json(['got' => $req->post('msg')]),
             ];
             PHP);
 
@@ -128,10 +136,12 @@ final class ApiRouteDispatchTest extends TestCase
         self::assertSame('{"got":"hi"}', $output);
     }
 
-    public function testNullReturnYields204NoBody(): void
+    public function testNoContentResponseYields204NoBody(): void
     {
         $this->writeRoute('del', <<<'PHP'
-            return ['DELETE' => static fn () => null];
+            use Polidog\Relayer\Http\Response;
+
+            return ['DELETE' => static fn (): Response => Response::noContent()];
             PHP);
 
         $output = $this->dispatch('/del', 'DELETE');
@@ -143,17 +153,101 @@ final class ApiRouteDispatchTest extends TestCase
     public function testHandlerChosenStatusPassesThrough(): void
     {
         $this->writeRoute('missing', <<<'PHP'
-            return ['GET' => static function (): array {
-                \http_response_code(404);
+            use Polidog\Relayer\Http\Response;
 
-                return ['error' => 'gone'];
-            }];
+            return ['GET' => static fn (): Response => Response::json(['error' => 'gone'], 404)];
             PHP);
 
         $output = $this->dispatch('/missing', 'GET');
 
         self::assertSame('{"error":"gone"}', $output);
         self::assertSame(404, \http_response_code());
+    }
+
+    public function testRedirectResponseSendsLocation(): void
+    {
+        $this->writeRoute('go', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
+            return ['GET' => static fn (): Response => Response::redirect('/elsewhere')];
+            PHP);
+
+        $output = $this->dispatch('/go', 'GET');
+
+        self::assertSame('', $output);
+        self::assertSame(302, \http_response_code());
+
+        if (\function_exists('xdebug_get_headers')) {
+            self::assertContains('Location: /elsewhere', \xdebug_get_headers());
+        }
+    }
+
+    public function testHandlerNotReturningResponseRaisesActionableError(): void
+    {
+        $this->writeRoute('raw', <<<'PHP'
+            return ['GET' => static fn (): array => ['oops' => true]];
+            PHP);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('must return a Polidog\Relayer\Http\Response');
+        $this->dispatch('/raw', 'GET');
+    }
+
+    public function testOptionsIsSynthesizedWith204AndAllow(): void
+    {
+        $this->writeRoute('opt', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
+            return [
+                'GET'  => static fn (): Response => Response::json([]),
+                'POST' => static fn (): Response => Response::json([]),
+            ];
+            PHP);
+
+        $output = $this->dispatch('/opt', 'OPTIONS');
+
+        self::assertSame('', $output);
+        self::assertSame(204, \http_response_code());
+
+        if (\function_exists('xdebug_get_headers')) {
+            self::assertContains('Allow: GET, HEAD, OPTIONS, POST', \xdebug_get_headers());
+        }
+    }
+
+    public function testHeadIsSynthesizedFromGetWithoutBody(): void
+    {
+        $this->writeRoute('h', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
+            return ['GET' => static fn (): Response => Response::json(['x' => 1])];
+            PHP);
+
+        $output = $this->dispatch('/h', 'HEAD');
+
+        self::assertSame('', $output, 'a synthesized HEAD must not emit the GET body');
+        self::assertSame(200, \http_response_code());
+
+        if (\function_exists('xdebug_get_headers')) {
+            // Headers (incl. the GET Content-Type) are still sent.
+            self::assertContains('Content-Type: application/json; charset=utf-8', \xdebug_get_headers());
+        }
+    }
+
+    public function testExplicitOptionsHandlerOverridesSynthesis(): void
+    {
+        $this->writeRoute('custom-opt', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
+            return [
+                'GET'     => static fn (): Response => Response::json(['x' => 1]),
+                'OPTIONS' => static fn (): Response => Response::json(['custom' => true]),
+            ];
+            PHP);
+
+        $output = $this->dispatch('/custom-opt', 'OPTIONS');
+
+        self::assertSame('{"custom":true}', $output);
+        self::assertSame(200, \http_response_code());
     }
 
     public function testAnonymousAuthFailureIsJson401NotRedirect(): void
@@ -164,8 +258,9 @@ final class ApiRouteDispatchTest extends TestCase
         // page path's 302 to an HTML login form.
         $this->writeRoute('me', <<<'PHP'
             use Polidog\Relayer\Auth\Identity;
+            use Polidog\Relayer\Http\Response;
 
-            return ['GET' => static fn (Identity $user): array => ['id' => $user->id]];
+            return ['GET' => static fn (Identity $user): Response => Response::json(['id' => $user->id])];
             PHP);
 
         $output = $this->dispatch('/me', 'GET');

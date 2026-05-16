@@ -8,7 +8,9 @@ Opinionated, batteries-included framework on top of
 - A Next.js App Router-style file-based router (`src/Pages/page.psx`,
   `layout.psx`, dynamic segments, error pages)
 - File-based JSON API routes (`src/Pages/.../route.php`) — a method-keyed
-  map of autowired handlers, return value → JSON
+  map of autowired handlers, each returning a `Response`
+  (`Response::json()` / `text()` / `noContent()` / `redirect()`);
+  `OPTIONS` / `HEAD` synthesized like Next.js Route Handlers
 - Per-page / per-layout external scripts (`$ctx->js()` /
   `PageComponent::addJs()` / `LayoutComponent::addJs()`) emitted at the end
   of `<body>` after the bundle, in declaration order
@@ -273,8 +275,12 @@ inside the root layout. Without one, the framework emits a minimal default.
 A `route.php` file is a JSON endpoint instead of a rendered page. It returns
 a map keyed by HTTP method; each handler is autowired exactly like a
 function-style page factory (`PageContext`, `Request`, `Identity`, and
-container services inject by type), and the return value becomes the
-response — no layout or HTML pipeline runs.
+container services inject by type) and returns a `Response` — no layout or
+HTML pipeline runs. This mirrors Next.js Route Handlers (method-keyed
+handlers + a `Response` object), adapted to PHP: the map stays the
+declaration-free contract (a `route.php` is `require`d fresh per request, so
+top-level `function GET()` is not an option), while autowiring is kept
+because it is consistent with how pages resolve their arguments.
 
 ```php
 <?php
@@ -283,12 +289,13 @@ declare(strict_types=1);
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\Response;
 
 return [
-    'GET'  => fn (UserRepository $users): array => ['users' => $users->all()],
-    'POST' => function (Request $req, UserRepository $users): array {
+    'GET'  => fn (UserRepository $users): Response => Response::json(['users' => $users->all()]),
+    'POST' => function (Request $req, UserRepository $users): Response {
         $users->create($req->allPost());
-        return ['ok' => true];
+        return Response::json(['ok' => true], 201);
     },
 ];
 ```
@@ -296,13 +303,17 @@ return [
 - Lives in `src/Pages/` alongside pages, with the same `[param]` dynamic
   segments — read them via `$ctx->params['id']`. A directory is a page
   **or** a route, not both (the scanner errors if it finds both).
-- The return value is JSON-encoded with `Content-Type: application/json`.
-  `null` → `204 No Content`. For errors, set the status first and return a
-  body — `\http_response_code(404); return ['error' => '…'];` — the
-  handler-chosen status passes through unchanged.
-- A request method with no handler gets `405 Method Not Allowed` plus an
-  `Allow` header. `HEAD` / `OPTIONS` are not synthesized — declare them
-  explicitly if a route needs them.
+- A handler **must return a `Response`**. Build it with
+  `Response::json($data, $status, $headers)` (encodes + sets
+  `Content-Type: application/json`, slashes/unicode unescaped),
+  `Response::text()`, `Response::noContent()` (a bodyless `204` by
+  default), `Response::redirect($location, $status)`, or `Response::make()`
+  for a raw body. Status and headers are always explicit — there is no
+  raw-data return path; returning anything else is a hard server error.
+- `OPTIONS` and `HEAD` are synthesized to match Next.js: an undeclared
+  `OPTIONS` → `204` + `Allow`, an undeclared `HEAD` runs the `GET` handler
+  and drops the body. An explicit handler for either always wins. A method
+  with no handler (and not synthesizable) → `405` + `Allow` (JSON body).
 - `route.php` must only `return` the map (no class/function declarations);
   it is re-evaluated every request.
 - Auth uses the same `$ctx->requireAuth()` / `Identity` mechanism as

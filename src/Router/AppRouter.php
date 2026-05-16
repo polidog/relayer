@@ -15,8 +15,8 @@ use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\Response;
 use Polidog\Relayer\InjectorContainer;
-use Polidog\Relayer\Router\Api\ApiResponder;
 use Polidog\Relayer\Router\Api\RouteHandlers;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
@@ -286,10 +286,16 @@ class AppRouter
      * identically, and `$ctx->requireAuth()` / `$ctx->redirect()` work
      * because this runs inside `run()`'s Authorization/Redirect catch.
      *
-     * No method match → `405` with an `Allow` header. The handler's return
-     * value becomes the response via {@see ApiResponder} (data → JSON,
-     * `null` → 204). HEAD/OPTIONS are not synthesized — define them
-     * explicitly if a route needs them.
+     * The handler must return a {@see Response} (built via
+     * `Response::json()` / `text()` / `noContent()` / `redirect()`) — the
+     * one explicit output contract; returning anything else is a server bug
+     * surfaced loudly.
+     *
+     * `OPTIONS` and `HEAD` are synthesized when not declared explicitly, to
+     * match Next.js: an undeclared `OPTIONS` → `204` + `Allow`, an
+     * undeclared `HEAD` runs the `GET` handler and drops the body. An
+     * explicit handler for either always wins. No declared handler for the
+     * method → `405` + `Allow` (JSON body).
      *
      * Auth failures are translated to a JSON `401` / `403` here rather than
      * the page path's HTML-login `302`: an API client wants a status code,
@@ -304,8 +310,7 @@ class AppRouter
         if (!\file_exists($file)) {
             // Scanned but gone by dispatch (deleted mid-process). Keep the
             // API surface JSON instead of falling back to the HTML 404.
-            \http_response_code(404);
-            ApiResponder::emit(['error' => 'Not Found']);
+            Response::json(['error' => 'Not Found'], 404)->send();
 
             return;
         }
@@ -322,11 +327,30 @@ class AppRouter
 
         $handler = $handlers->handlerFor($method);
 
+        // Auto `OPTIONS`: no user code runs (Next.js parity) — just advertise
+        // what the route answers. An explicit `OPTIONS` handler skips this.
+        if (null === $handler && 'OPTIONS' === $method) {
+            Response::noContent(204)
+                ->withHeader('Allow', \implode(', ', $handlers->effectiveAllowedMethods()))
+                ->send()
+            ;
+
+            return;
+        }
+
+        // Auto `HEAD`: run the `GET` handler, then strip the body. An
+        // explicit `HEAD` handler skips this and owns its own response.
+        $omitBody = false;
+        if (null === $handler && 'HEAD' === $method) {
+            $handler = $handlers->handlerFor('GET');
+            $omitBody = true;
+        }
+
         if (null === $handler) {
-            \http_response_code(405);
-            if (!\headers_sent()) {
-                \header('Allow: ' . \implode(', ', $handlers->allowedMethods()));
-            }
+            Response::json(['error' => 'Method Not Allowed'], 405)
+                ->withHeader('Allow', \implode(', ', $handlers->effectiveAllowedMethods()))
+                ->send()
+            ;
 
             return;
         }
@@ -343,13 +367,24 @@ class AppRouter
             $result = $handler(...$args);
         } catch (AuthorizationException $exception) {
             $status = AuthGuard::DECISION_FORBIDDEN === $exception->decision ? 403 : 401;
-            \http_response_code($status);
-            ApiResponder::emit(['error' => 403 === $status ? 'Forbidden' : 'Unauthorized']);
+            $response = Response::json(['error' => 403 === $status ? 'Forbidden' : 'Unauthorized'], $status);
+            ($omitBody ? $response->withoutBody() : $response)->send();
 
             return;
         }
 
-        ApiResponder::emit($result);
+        if (!$result instanceof Response) {
+            throw new RuntimeException(\sprintf(
+                'API route %s handler for "%s" must return a %s '
+                . '(use Response::json(...) / text() / noContent() / redirect()); %s returned.',
+                $file,
+                $method,
+                Response::class,
+                \get_debug_type($result),
+            ));
+        }
+
+        ($omitBody ? $result->withoutBody() : $result)->send();
     }
 
     /**

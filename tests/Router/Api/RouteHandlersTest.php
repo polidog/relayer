@@ -48,6 +48,32 @@ final class RouteHandlersTest extends TestCase
         self::assertSame(['DELETE', 'GET', 'POST'], $handlers->allowedMethods());
     }
 
+    public function testEffectiveAllowedMethodsSynthesizesOptionsAndHeadWhenGetPresent(): void
+    {
+        $file = $this->writeRoute(
+            "return ['GET' => fn () => null, 'post' => fn () => null];",
+        );
+
+        $handlers = RouteHandlers::fromFile($file);
+
+        // Declared list stays authored-only…
+        self::assertSame(['GET', 'POST'], $handlers->allowedMethods());
+        // …effective list adds OPTIONS (always) + HEAD (GET present).
+        self::assertSame(['GET', 'HEAD', 'OPTIONS', 'POST'], $handlers->effectiveAllowedMethods());
+    }
+
+    public function testEffectiveAllowedMethodsHasNoHeadWithoutGetAndDoesNotDuplicate(): void
+    {
+        $file = $this->writeRoute(
+            "return ['POST' => fn () => null, 'options' => fn () => null];",
+        );
+
+        $handlers = RouteHandlers::fromFile($file);
+
+        // No GET ⇒ no synthesized HEAD; an explicit OPTIONS is not doubled.
+        self::assertSame(['OPTIONS', 'POST'], $handlers->effectiveAllowedMethods());
+    }
+
     public function testNonArrayReturnIsRejected(): void
     {
         $file = $this->writeRoute('return fn () => 1;');

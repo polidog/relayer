@@ -16,10 +16,10 @@ use RuntimeException;
  *
  *   // src/Pages/api/users/route.php
  *   return [
- *       'GET'  => fn (UserRepository $repo) => $repo->all(),
- *       'POST' => function (Request $req, UserRepository $repo) {
+ *       'GET'  => fn (UserRepository $repo) => Response::json($repo->all()),
+ *       'POST' => function (Request $req, UserRepository $repo): Response {
  *           $repo->create($req->allPost());
- *           return ['ok' => true];
+ *           return Response::json(['ok' => true], 201);
  *       },
  *   ];
  *
@@ -84,14 +84,36 @@ final class RouteHandlers
     }
 
     /**
-     * Methods this route serves, sorted — used for the `Allow` header on a
-     * 405 response.
+     * The methods explicitly declared in the file, sorted. This is the
+     * route's authored surface — what `relayer routes` lists — and excludes
+     * the `OPTIONS` / `HEAD` the dispatcher synthesizes.
      *
      * @return list<string>
      */
     public function allowedMethods(): array
     {
         $methods = \array_keys($this->handlers);
+        \sort($methods);
+
+        return $methods;
+    }
+
+    /**
+     * Every method this route actually answers, sorted — declared methods
+     * plus the auto-synthesized `OPTIONS` (always) and `HEAD` (whenever a
+     * `GET` handler exists). This is the set advertised in the `Allow`
+     * header on a synthesized `OPTIONS` or a `405`.
+     *
+     * @return list<string>
+     */
+    public function effectiveAllowedMethods(): array
+    {
+        $methods = \array_keys($this->handlers);
+        $methods[] = 'OPTIONS';
+        if (isset($this->handlers['GET'])) {
+            $methods[] = 'HEAD';
+        }
+        $methods = \array_values(\array_unique($methods));
         \sort($methods);
 
         return $methods;
