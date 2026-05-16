@@ -420,10 +420,14 @@ credentials は併用不可のため）。
 
 ```
 METHODS    PATH            TYPE  FILE
-GET        /               page  src/Pages/page.psx
+GET,POST   /               page  src/Pages/page.psx
 GET,POST   /api/users      api   src/Pages/api/users/route.php
-GET        /users/[id]     page  src/Pages/users/[id]/page.psx
+GET,POST   /users/[id]     page  src/Pages/users/[id]/page.psx
 ```
+
+page は `GET,POST` を表示します（POST はサーバアクション / `useState`
+がページに到達する経路）。API ルートは宣言済みメソッドを列挙します。
+読み込みに失敗した `route.php` は隠さず `?` ＋警告行で表示します。
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 

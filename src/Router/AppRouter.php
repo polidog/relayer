@@ -43,6 +43,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
 use RuntimeException;
+use Throwable;
 
 class AppRouter
 {
@@ -196,12 +197,13 @@ class AppRouter
             // The route dispatch — match + page/API handling + the
             // Auth/Redirect translation. `$next` for the middleware.
             $dispatch = function (Request $request): void {
-                // Honor the contract signature; lets a middleware swap in
-                // a request before dispatch (no-op for the usual same
-                // instance — Request is immutable, so this is forward-only).
+                // A middleware MAY pass a different Request to $next; honor
+                // it so the documented contract is real — route by its path
+                // and let the rest of dispatch see it as the current request
+                // (handleApiMatch reads currentRequest->method).
                 $this->currentRequest = $request;
 
-                $match = $this->router->match($this->getRequestPath());
+                $match = $this->router->match($request->path);
 
                 if (null === $match) {
                     $this->handleNotFound();
@@ -365,7 +367,19 @@ class AppRouter
             return null;
         }
 
-        $returned = require $file;
+        // Match RouteHandlers::fromFile's contract for declaration-free
+        // required files: a parse error / unresolvable symbol in
+        // middleware.php otherwise surfaces as a bare PHP trace on every
+        // request. Rethrow with the path so it's actionable.
+        try {
+            $returned = require $file;
+        } catch (Throwable $e) {
+            throw new RuntimeException(
+                \sprintf('Middleware %s failed to load: %s', $file, $e->getMessage()),
+                0,
+                $e,
+            );
+        }
 
         if (!$returned instanceof Closure) {
             throw new RuntimeException(\sprintf(
@@ -1116,16 +1130,5 @@ class AppRouter
         }
 
         return null;
-    }
-
-    private function getRequestPath(): string
-    {
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
-        if (!\is_string($uri)) {
-            return '/';
-        }
-        $path = \parse_url($uri, \PHP_URL_PATH);
-
-        return \is_string($path) ? $path : '/';
     }
 }

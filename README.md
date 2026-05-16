@@ -418,10 +418,14 @@ the same scanner the router uses:
 
 ```
 METHODS    PATH            TYPE  FILE
-GET        /               page  src/Pages/page.psx
+GET,POST   /               page  src/Pages/page.psx
 GET,POST   /api/users      api   src/Pages/api/users/route.php
-GET        /users/[id]     page  src/Pages/users/[id]/page.psx
+GET,POST   /users/[id]     page  src/Pages/users/[id]/page.psx
 ```
+
+Pages report `GET,POST` (POST is how server actions / `useState` reach a
+page); API routes list their declared methods. A `route.php` that fails to
+load is shown as `?` with a warning line, not silently hidden.
 
 ## Server Actions (form / CSRF-protected)
 

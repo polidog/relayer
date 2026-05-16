@@ -52,8 +52,8 @@ final class RoutesCommandTest extends TestCase
         self::assertStringContainsString('TYPE', $out);
         self::assertStringContainsString('FILE', $out);
 
-        // page: GET / page src/Pages/page.php
-        self::assertMatchesRegularExpression('#GET\s+/\s+page\s+src/Pages/page\.php#', $out);
+        // page: GET,POST / page src/Pages/page.php (pages take GET + POST)
+        self::assertMatchesRegularExpression('#GET,POST\s+/\s+page\s+src/Pages/page\.php#', $out);
         // api with declared methods
         self::assertMatchesRegularExpression('#GET,POST\s+/api/items\s+api\s+src/Pages/api/items/route\.php#', $out);
         self::assertMatchesRegularExpression('#DELETE\s+/api/items/\[id\]\s+api#', $out);

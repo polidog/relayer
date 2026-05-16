@@ -14,7 +14,7 @@ final class MiddlewareDispatchTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->workDir = \sys_get_temp_dir() . '/mw-' . \uniqid();
+        $this->workDir = \sys_get_temp_dir() . '/mw-' . \bin2hex(\random_bytes(6));
         \mkdir($this->workDir . '/ping', 0o777, true);
         \file_put_contents(
             $this->workDir . '/ping/route.php',

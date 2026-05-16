@@ -58,13 +58,27 @@ final class RoutesCommand
 
         // [methods, path, type, file] rows, sorted by path for readability.
         $rows = [];
+        $warnings = [];
         foreach ($collection as $route) {
-            $rows[] = [
-                $route->isApi ? self::apiMethods($route->pagePath) : 'GET',
-                $route->pattern,
-                $route->isApi ? 'api' : 'page',
-                self::relative($root, $route->pagePath),
-            ];
+            $file = self::relative($root, $route->pagePath);
+
+            if ($route->isApi) {
+                try {
+                    $methods = \implode(',', RouteHandlers::fromFile($route->pagePath)->allowedMethods());
+                } catch (Throwable $e) {
+                    // Don't abort the whole listing for one bad file, but
+                    // don't hide it either — a misconfigured route.php is
+                    // exactly what `relayer routes` should surface.
+                    $methods = '?';
+                    $warnings[] = 'warning: ' . $file . ': ' . $e->getMessage();
+                }
+            } else {
+                // Pages dispatch GET (render) and POST (server actions /
+                // useState), so both reach a page.
+                $methods = 'GET,POST';
+            }
+
+            $rows[] = [$methods, $route->pattern, $route->isApi ? 'api' : 'page', $file];
         }
 
         if ([] === $rows) {
@@ -80,16 +94,14 @@ final class RoutesCommand
             $write($line);
         }
 
-        return 0;
-    }
-
-    private static function apiMethods(string $routeFile): string
-    {
-        try {
-            return \implode(',', RouteHandlers::fromFile($routeFile)->allowedMethods());
-        } catch (Throwable) {
-            return '?';
+        if ([] !== $warnings) {
+            $write('');
+            foreach ($warnings as $warning) {
+                $write($warning);
+            }
         }
+
+        return 0;
     }
 
     private static function relative(string $root, string $path): string

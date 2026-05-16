@@ -26,6 +26,13 @@ use Closure;
  * `Access-Control-Request-Method`) is answered with `204` and the request
  * does NOT continue to the route; an actual request gets the
  * `Access-Control-Allow-Origin` header and then proceeds.
+ *
+ * A preflight from a disallowed origin is still answered `204`, just
+ * without an `Access-Control-Allow-Origin` header — authorization is
+ * conveyed by the presence/absence of that header (how the browser
+ * enforces CORS), not by the status code. This middleware does not turn an
+ * unauthorized preflight into a `403`; if you need that distinction in
+ * ops/logs, do it in your own composed middleware.
  */
 final class Cors
 {
@@ -66,15 +73,21 @@ final class Cors
 
             $allowOrigin = self::resolveAllowedOrigin($origin, $origins, $credentials);
 
-            if (!\headers_sent() && null !== $allowOrigin) {
-                \header('Access-Control-Allow-Origin: ' . $allowOrigin);
-                // Any value other than a literal `*` is request-specific, so
-                // the response varies by Origin and must say so for caches.
+            if (!\headers_sent()) {
+                // The response content depends on the Origin request header
+                // (an allowed origin gets ACAO, a disallowed one doesn't),
+                // so it varies by Origin for any shared cache — advertise
+                // that even when no ACAO is produced, or a URL-keyed cache
+                // could serve an allowed response to a disallowed origin.
+                // A literal `*` is the one origin-independent case.
                 if ('*' !== $allowOrigin) {
                     \header('Vary: Origin', false);
                 }
-                if ($credentials) {
-                    \header('Access-Control-Allow-Credentials: true');
+                if (null !== $allowOrigin) {
+                    \header('Access-Control-Allow-Origin: ' . $allowOrigin);
+                    if ($credentials) {
+                        \header('Access-Control-Allow-Credentials: true');
+                    }
                 }
             }
 
