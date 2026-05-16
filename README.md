@@ -11,6 +11,8 @@ Opinionated, batteries-included framework on top of
   map of autowired handlers, return value → JSON
 - React islands (`Island::mount()`) — a rich-UI escape hatch: server-rendered
   shell, client React component, props from PHP, your own bundle
+- Optional root middleware (`src/Pages/middleware.php`) wrapping every
+  dispatch, plus a ready-made `Cors` middleware
 - CSRF-protected server actions (`$ctx->action()` /
   `PageComponent::action()` dispatch form posts to in-page handlers)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -357,6 +359,73 @@ window.relayerIslands.register('Chart', (el, props) => {
   `script-src` CSP pass `loaderScript($nonce)` and it is emitted as
   `<script nonce="…">` (the `window.relayerIslands.register` contract is
   unchanged).
+
+### Middleware
+
+An optional root `src/Pages/middleware.php` wraps every page/route
+dispatch. It `return`s a single closure `fn(Request $request, Closure
+$next)`; call `$next($request)` to continue to the matched route, or
+**don't** call it to short-circuit (CORS preflight, rate-limit, maintenance
+mode, …):
+
+```php
+<?php
+// src/Pages/middleware.php
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Request;
+
+return function (Request $request, Closure $next): void {
+    if (null === $request->header('x-api-key')) {
+        \http_response_code(401);
+        echo '{"error":"missing api key"}';
+        return; // route never runs
+    }
+    $next($request);
+};
+```
+
+- One closure, no chain runner (by design). To run several things, compose
+  by hand: `fn ($r, $next) => $a($r, fn ($r) => $b($r, $next))`.
+- `require`d fresh each request (declaration-free, like `route.php`); a
+  non-closure return is a clear error. The framework defer/profiler
+  endpoints deliberately run outside it.
+
+**CORS** ships as a ready-made middleware — the one provided
+implementation, not a parallel system:
+
+```php
+<?php
+// src/Pages/middleware.php
+use Polidog\Relayer\Http\Cors;
+
+return Cors::middleware([
+    'origins' => ['https://app.example.com'], // or ['*']
+    // methods / headers / credentials / maxAge are optional
+]);
+```
+
+It answers `OPTIONS` preflights with `204` itself and adds
+`Access-Control-Allow-Origin` to actual requests. `credentials: true` with
+`origins: ['*']` reflects the request Origin (a literal `*` is invalid with
+credentials per spec).
+
+### Inspecting routes
+
+`vendor/bin/relayer routes` prints every route Relayer discovers under
+`src/Pages` — pages and `route.php` endpoints with their methods — using
+the same scanner the router uses:
+
+```
+METHODS    PATH            TYPE  FILE
+GET,POST   /               page  src/Pages/page.psx
+GET,POST   /api/users      api   src/Pages/api/users/route.php
+GET,POST   /users/[id]     page  src/Pages/users/[id]/page.psx
+```
+
+Pages report `GET,POST` (POST is how server actions / `useState` reach a
+page); API routes list their declared methods. A `route.php` that fails to
+load is shown as `?` with a warning line, not silently hidden.
 
 ## Server Actions (form / CSRF-protected)
 

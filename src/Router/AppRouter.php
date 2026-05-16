@@ -43,6 +43,7 @@ use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
 use RuntimeException;
+use Throwable;
 
 class AppRouter
 {
@@ -149,7 +150,7 @@ class AppRouter
         // Build a snapshot of the request once per dispatch and stash it so
         // page factories / page constructors can be injected with it by type
         // — pages should never read $_GET / $_POST / $_SERVER directly.
-        $this->currentRequest = Request::fromGlobals();
+        $request = $this->currentRequest = Request::fromGlobals();
         if ($this->container instanceof InjectorContainer) {
             $this->container->setCurrentRequest($this->currentRequest);
         }
@@ -193,22 +194,42 @@ class AppRouter
                 }
             }
 
-            $path = $this->getRequestPath();
+            // The route dispatch — match + page/API handling + the
+            // Auth/Redirect translation. `$next` for the middleware.
+            $dispatch = function (Request $request): void {
+                // A middleware MAY pass a different Request to $next; honor
+                // it so the documented contract is real — route by its path
+                // and let the rest of dispatch see it as the current request
+                // (handleApiMatch reads currentRequest->method).
+                $this->currentRequest = $request;
 
-            $match = $this->router->match($path);
+                $match = $this->router->match($request->path);
 
-            if (null === $match) {
-                $this->handleNotFound();
+                if (null === $match) {
+                    $this->handleNotFound();
 
-                return;
-            }
+                    return;
+                }
 
-            try {
-                $this->handleMatch($match);
-            } catch (AuthorizationException $exception) {
-                $this->handleAuthorizationFailure($exception);
-            } catch (RedirectException $exception) {
-                $this->handleRedirect($exception);
+                try {
+                    $this->handleMatch($match);
+                } catch (AuthorizationException $exception) {
+                    $this->handleAuthorizationFailure($exception);
+                } catch (RedirectException $exception) {
+                    $this->handleRedirect($exception);
+                }
+            };
+
+            // Root `src/Pages/middleware.php` (optional) wraps dispatch. It
+            // may short-circuit by not calling `$next` (CORS preflight,
+            // rate-limit, …). Framework-owned endpoints (defer above, the
+            // dev profiler) deliberately run outside it.
+            $middleware = $this->loadMiddleware();
+
+            if (null !== $middleware) {
+                $middleware($request, $dispatch);
+            } else {
+                $dispatch($request);
             }
         } finally {
             if ($this->container instanceof InjectorContainer) {
@@ -328,6 +349,47 @@ class AppRouter
         }
 
         ApiResponder::emit($result);
+    }
+
+    /**
+     * Load the optional root middleware (`<appDir>/middleware.php`). The
+     * file `return`s a single `fn(Request $request, Closure $next)` closure
+     * — `require`d fresh each request (declaration-free, like `route.php`),
+     * so it must only return the closure. Absent file → no middleware.
+     *
+     * @return null|Closure(Request, Closure): void
+     */
+    protected function loadMiddleware(): ?Closure
+    {
+        $file = $this->appDirectory . '/middleware.php';
+
+        if (!\file_exists($file)) {
+            return null;
+        }
+
+        // Match RouteHandlers::fromFile's contract for declaration-free
+        // required files: a parse error / unresolvable symbol in
+        // middleware.php otherwise surfaces as a bare PHP trace on every
+        // request. Rethrow with the path so it's actionable.
+        try {
+            $returned = require $file;
+        } catch (Throwable $e) {
+            throw new RuntimeException(
+                \sprintf('Middleware %s failed to load: %s', $file, $e->getMessage()),
+                0,
+                $e,
+            );
+        }
+
+        if (!$returned instanceof Closure) {
+            throw new RuntimeException(\sprintf(
+                'Middleware %s must return a Closure(Request $request, Closure $next), %s returned.',
+                $file,
+                \get_debug_type($returned),
+            ));
+        }
+
+        return $returned;
     }
 
     protected function applyFunctionPageCache(FunctionPage $page): void
@@ -1068,16 +1130,5 @@ class AppRouter
         }
 
         return null;
-    }
-
-    private function getRequestPath(): string
-    {
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
-        if (!\is_string($uri)) {
-            return '/';
-        }
-        $path = \parse_url($uri, \PHP_URL_PATH);
-
-        return \is_string($path) ? $path : '/';
     }
 }
