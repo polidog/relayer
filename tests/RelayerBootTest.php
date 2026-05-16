@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\AppConfigurator;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
+use ReflectionProperty;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 final class RelayerBootTest extends TestCase
@@ -37,6 +38,21 @@ final class RelayerBootTest extends TestCase
         self::assertInstanceOf(AppRouter::class, $router);
         self::assertSame('hello', $_ENV['FRAMEWORK_TEST_VALUE'] ?? null);
         self::assertSame('dev', $_ENV['APP_ENV'] ?? null);
+    }
+
+    public function testBootPinsPsxCacheToProjectRootVarCachePsx(): void
+    {
+        // Regression for #21: page PSX cache must land in
+        // <projectRoot>/var/cache/psx (beside the component manifest), not
+        // <projectRoot>/src/var/cache/psx from AppRouter's dirname() default.
+        $router = Relayer::boot($this->projectRoot);
+
+        $property = new ReflectionProperty(AppRouter::class, 'psxCacheDir');
+
+        self::assertSame(
+            $this->projectRoot . '/var/cache/psx',
+            $property->getValue($router),
+        );
     }
 
     public function testBootWithoutEnvFileDoesNotFail(): void

@@ -71,9 +71,10 @@ final class Relayer
         $isDev = self::isDev();
 
         // Pin the page-PSX cache to <projectRoot>/var/cache/psx — the same
-        // base the component manifest uses (see buildUsePhp / line ~131) and
-        // the same default `vendor/bin/usephp compile` writes to. AppRouter's
-        // own default derives this from dirname($appDir), which for the
+        // base buildUsePhp() passes to PsxComponentRegistrar::configure() for
+        // the component manifest, and the same default
+        // `vendor/bin/usephp compile` writes to. AppRouter's own default
+        // derives this from dirname($appDir), which for the
         // standard `src/Pages` layout resolves one level short
         // (<root>/src/var/cache/psx), splitting the cache and defeating
         // precompilation. Passing it explicitly keeps both caches in one
