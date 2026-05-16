@@ -20,8 +20,11 @@ use JsonException;
  *  - existing skeleton files are never overwritten (reported as skipped),
  *  - the existing `composer.json` is patched additively — user values win,
  *    only missing keys / array members are added,
- *  - `extra.relayer.structure_version` is the one key the command owns and
- *    keeps in sync, so a future `upgrade` can diff it.
+ *  - `extra.relayer.structure_version` is stamped only on the initial
+ *    scaffold (when absent) and never advanced here, so a future `upgrade`
+ *    can still tell which shape the project was generated against,
+ *  - if `App\` is already mapped somewhere other than `src/`, the command
+ *    refuses (it would otherwise emit an entrypoint Composer can't autoload).
  */
 final class InitCommand
 {
@@ -90,8 +93,22 @@ final class InitCommand
             return 1;
         }
 
-        if (!\is_array($composer)) {
+        // A JSON object decodes to an assoc array; a non-empty JSON array
+        // (e.g. `["x"]`) also passes is_array() but is not a composer.json
+        // object — reject it rather than silently mutating a malformed root.
+        // `{}` decodes to `[]`, which is a valid (empty) object, so the
+        // empty-array case is allowed through.
+        if (!\is_array($composer) || (\array_is_list($composer) && [] !== $composer)) {
             $write('composer.json does not contain a JSON object.');
+
+            return 1;
+        }
+
+        if (null !== ($conflict = self::appAutoloadConflict($composer))) {
+            $write('composer.json maps "App\" to "' . $conflict . '", not "src/".');
+            $write('The scaffold writes src/AppConfigurator.php, and public/index.php');
+            $write('expects App\AppConfigurator under src/. Point the App\ PSR-4');
+            $write('mapping at "src/" (or remove it), then re-run `relayer init`.');
 
             return 1;
         }
@@ -101,6 +118,40 @@ final class InitCommand
         }
 
         return self::patchComposer($composerPath, $composer, $write);
+    }
+
+    /**
+     * If `composer.json` already maps the `App\` PSR-4 prefix somewhere
+     * other than `src/`, return a human description of where it points;
+     * otherwise null. The scaffold hard-codes `App\` => `src/` (the
+     * generated `public/index.php` instantiates `App\AppConfigurator` from
+     * `src/`), so any other mapping would yield a project Composer can't
+     * autoload. Composer allows a prefix to map to a string or a list of
+     * paths; `src` and `src/` are both accepted.
+     *
+     * @param array<array-key, mixed> $composer
+     */
+    private static function appAutoloadConflict(array $composer): ?string
+    {
+        $autoload = \is_array($composer['autoload'] ?? null) ? $composer['autoload'] : [];
+        $psr4 = \is_array($autoload['psr-4'] ?? null) ? $autoload['psr-4'] : [];
+
+        if (!\array_key_exists('App\\', $psr4)) {
+            return null;
+        }
+
+        $mapped = $psr4['App\\'];
+        $paths = \is_array($mapped) ? \array_values($mapped) : [$mapped];
+
+        foreach ($paths as $path) {
+            if ('src' === $path || 'src/' === $path) {
+                return null;
+            }
+        }
+
+        $describe = static fn (mixed $p): string => \is_string($p) ? $p : \get_debug_type($p);
+
+        return \implode(', ', \array_map($describe, $paths));
     }
 
     /**
@@ -199,21 +250,21 @@ final class InitCommand
         }
         $composer['scripts'] = $scripts;
 
-        // extra.relayer.structure_version: the marker this command owns.
-        // Keep it exactly in sync with the installed framework's structure.
+        // extra.relayer.structure_version: stamped ONLY on the initial
+        // scaffold (when the key is absent). It records the shape the
+        // project was generated against; advancing it is a future
+        // `upgrade`'s job. Bumping it here on a re-run after a framework
+        // upgrade would make `upgrade` believe the project was already
+        // migrated and skip the migration, so init never touches an
+        // existing value.
         $extra = \is_array($composer['extra'] ?? null) ? $composer['extra'] : [];
         $relayer = \is_array($extra['relayer'] ?? null) ? $extra['relayer'] : [];
-        $current = $relayer['structure_version'] ?? null;
-        $target = $patch['extra']['relayer']['structure_version'];
-        if ($current !== $target) {
-            $relayer['structure_version'] = $target;
+        if (!\array_key_exists('structure_version', $relayer)) {
+            $version = $patch['extra']['relayer']['structure_version'];
+            $relayer['structure_version'] = $version;
             $extra['relayer'] = $relayer;
             $composer['extra'] = $extra;
-            $changes[] = \sprintf(
-                'extra.relayer.structure_version: %s -> %d',
-                null === $current ? '(unset)' : \var_export($current, true),
-                $target,
-            );
+            $changes[] = \sprintf('extra.relayer.structure_version: set to %d', $version);
         }
 
         if ([] === $changes) {
@@ -230,7 +281,20 @@ final class InitCommand
                 return 1;
             }
 
-            if (false === @\file_put_contents($composerPath, $encoded)) {
+            // Atomic write: a direct file_put_contents on the user's
+            // manifest can leave it truncated if the process dies mid-write.
+            // Write a sibling temp file (same directory ⇒ same filesystem ⇒
+            // atomic rename) and swap it in.
+            $tmp = $composerPath . '.relayer-tmp-' . \bin2hex(\random_bytes(4));
+            if (false === @\file_put_contents($tmp, $encoded)) {
+                @\unlink($tmp);
+                $write('Could not write composer.json.');
+
+                return 1;
+            }
+
+            if (!@\rename($tmp, $composerPath)) {
+                @\unlink($tmp);
                 $write('Could not write composer.json.');
 
                 return 1;
@@ -244,7 +308,10 @@ final class InitCommand
 
         $write('');
         $write('Next steps:');
-        $write('  composer dump-autoload');
+        // `composer install` (not dump-autoload) so the App\ autoload AND
+        // the just-added post-install-cmd both apply — the latter publishes
+        // public/usephp.js, which the default document references.
+        $write('  composer install');
         $write('  php -S 127.0.0.1:8000 -t public');
 
         return 0;
