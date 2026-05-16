@@ -72,6 +72,15 @@ It is idempotent and non-destructive:
 The `structure_version` marker records which skeleton shape the project was
 generated against, so structure migrations can be applied later.
 
+`init` also scaffolds **`RELAYER.md`** — concise, authoritative coding
+conventions for agents/LLMs working in the project (file conventions, the
+`route.php` / `middleware.php` / `Island` contracts, the minimal-design
+philosophy, a "do not" list) — plus a 2-line **`AGENTS.md`** that points at
+it (the filename agent tools auto-read). Both ship inside `polidog/relayer`,
+so they are **co-versioned with the framework and cannot drift**, and both
+are skip-if-exists, so a project's own `AGENTS.md` is never overwritten.
+Run `vendor/bin/relayer routes` for the project's actual route map.
+
 ## Project Layout
 
 ```

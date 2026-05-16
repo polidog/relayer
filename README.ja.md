@@ -73,6 +73,15 @@ php -S 127.0.0.1:8000 -t public
 `structure_version` マーカーはプロジェクトがどの雛形バージョンで生成されたかを
 記録します。これにより後から構造マイグレーションを適用できます。
 
+`init` は **`RELAYER.md`** も生成します — エージェント/LLM 向けの簡潔で
+権威ある実装規約（ファイル規約、`route.php` / `middleware.php` / `Island`
+の契約、最小主義、「やらない」一覧）。加えて、エージェントツールが自動で
+読むファイル名である **`AGENTS.md`**（2 行・`RELAYER.md` を指すだけ）も
+生成します。いずれも `polidog/relayer` に同梱され **フレームワークと
+co-version され陳腐化しません**。どちらも skip-if-exists なので、利用者
+自身の `AGENTS.md` を上書きしません。実ルートは
+`vendor/bin/relayer routes` で確認できます。
+
 ## プロジェクト構成
 
 ```
