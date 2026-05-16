@@ -1,0 +1,36 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\Scaffold\InitCommand;
+
+// Composer's bin proxy sets _composer_autoload_path when this is installed as
+// a dependency; fall back to the in-repo / vendored locations otherwise so
+// `bin/relayer` works both from a checkout and from vendor/bin.
+$autoload = $GLOBALS['_composer_autoload_path'] ?? null;
+
+if (null === $autoload) {
+    foreach (
+        [
+            __DIR__ . '/../vendor/autoload.php',     // running from the framework checkout
+            __DIR__ . '/../../../autoload.php',       // installed at vendor/polidog/relayer/bin
+        ] as $candidate
+    ) {
+        if (is_file($candidate)) {
+            $autoload = $candidate;
+
+            break;
+        }
+    }
+}
+
+if (null === $autoload || !is_file($autoload)) {
+    fwrite(STDERR, "Could not locate the Composer autoloader.\n");
+
+    exit(1);
+}
+
+require $autoload;
+
+exit(InitCommand::run(array_slice($argv, 1)));

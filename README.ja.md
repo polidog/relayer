@@ -41,6 +41,28 @@
 composer require polidog/relayer
 ```
 
+## 新規プロジェクトの雛形生成
+
+`relayer init` は**カレントディレクトリ**にプロジェクト構成を展開します。
+framework を require した後、プロジェクトルートで実行します:
+
+```bash
+composer require polidog/relayer
+vendor/bin/relayer init
+composer dump-autoload
+php -S 127.0.0.1:8000 -t public
+```
+
+冪等かつ非破壊です:
+
+- 既存ファイルは決して上書きしません（skip として報告）。何度でも安全に再実行できます
+- 既存の `composer.json` は**加算的に**パッチします。`App\` の PSR-4 autoload、
+  usePHP のアセット publish スクリプト、`extra.relayer.structure_version` の
+  マーカーを追加するだけで、他は一切変更しません
+
+`structure_version` マーカーはプロジェクトがどの雛形バージョンで生成されたかを
+記録します。これにより後から構造マイグレーションを適用できます。
+
 ## プロジェクト構成
 
 ```
