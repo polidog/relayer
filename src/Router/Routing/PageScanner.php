@@ -12,6 +12,10 @@ use SplFileInfo;
 final class PageScanner
 {
     private const PAGE_FILES = ['page.psx', 'page.php'];
+    // API handlers return data, never a JSX Element, so there is no `.psx`
+    // form — `route.php` only. A directory holds a page OR a route, never
+    // both (same rule the Next.js App Router enforces for page/route).
+    private const ROUTE_FILE = 'route.php';
     private const LAYOUT_FILES = ['layout.psx', 'layout.php'];
     private const ERROR_FILES = ['error.psx', 'error.php'];
     private const DYNAMIC_SEGMENT_PATTERN = '/^\[([a-zA-Z_][a-zA-Z0-9_]*)\]$/';
@@ -29,10 +33,8 @@ final class PageScanner
             throw new RuntimeException("App directory does not exist: {$appDir}");
         }
 
-        $pages = $this->findPages($appDir);
-
-        foreach ($pages as $pagePath) {
-            $collection->add($this->createRoute($appDir, $pagePath));
+        foreach ($this->findRoutables($appDir) as $routable) {
+            $collection->add($this->createRoute($appDir, $routable['path'], $routable['isApi']));
         }
 
         return $collection;
@@ -61,13 +63,22 @@ final class PageScanner
     }
 
     /**
-     * @return array<string>
+     * Discover the routable file in each directory under $appDir. A
+     * directory contributes at most one route, backed by either a page
+     * file (`page.psx` / `page.php`) or an API handler (`route.php`).
+     *
+     * Two ambiguities are rejected with an actionable error rather than
+     * picking one silently — both almost always mean a leftover file:
+     *  - `page.psx` AND `page.php` in the same directory;
+     *  - a page file AND `route.php` in the same directory (a segment is
+     *    either a rendered page or a JSON endpoint, not both).
+     *
+     * @return list<array{path: string, isApi: bool}>
      */
-    private function findPages(string $appDir): array
+    private function findRoutables(string $appDir): array
     {
-        // Discover candidate page files per directory. If both page.psx and
-        // page.php exist in the same directory we error: routing would be
-        // ambiguous and one of the two is almost certainly a leftover.
+        // Per directory: collected page-file candidates + the route.php path.
+        /** @var array<string, array{pages: array<string, string>, route: null|string}> $perDir */
         $perDir = [];
 
         $iterator = new RecursiveIteratorIterator(
@@ -81,34 +92,54 @@ final class PageScanner
                 continue;
             }
             $name = $file->getFilename();
-            if (!\in_array($name, self::PAGE_FILES, true)) {
-                continue;
+            $dir = $file->getPath();
+            $perDir[$dir] ??= ['pages' => [], 'route' => null];
+
+            if (\in_array($name, self::PAGE_FILES, true)) {
+                $perDir[$dir]['pages'][$name] = $file->getPathname();
+            } elseif (self::ROUTE_FILE === $name) {
+                $perDir[$dir]['route'] = $file->getPathname();
             }
-            $perDir[$file->getPath()][$name] = $file->getPathname();
         }
 
-        $pages = [];
-        foreach ($perDir as $dir => $candidates) {
-            if (\count($candidates) > 1) {
+        $routables = [];
+        foreach ($perDir as $dir => $found) {
+            $pages = $found['pages'];
+            $route = $found['route'];
+
+            if (\count($pages) > 1) {
                 throw new RuntimeException(
                     "Both page.psx and page.php exist in {$dir}. "
                     . 'Remove one — having both makes routing ambiguous.',
                 );
             }
-            $pages[] = \reset($candidates);
+
+            if ([] !== $pages && null !== $route) {
+                throw new RuntimeException(
+                    "Both a page file and route.php exist in {$dir}. "
+                    . 'A directory maps to a rendered page OR a JSON API route, not both.',
+                );
+            }
+
+            if ([] !== $pages) {
+                $routables[] = ['path' => \reset($pages), 'isApi' => false];
+            } elseif (null !== $route) {
+                $routables[] = ['path' => $route, 'isApi' => true];
+            }
         }
 
-        return $pages;
+        return $routables;
     }
 
-    private function createRoute(string $appDir, string $pagePath): Route
+    private function createRoute(string $appDir, string $filePath, bool $isApi): Route
     {
-        $pageDir = \dirname($pagePath);
-        $relativePath = $this->getRelativePath($appDir, $pageDir);
+        $routeDir = \dirname($filePath);
+        $relativePath = $this->getRelativePath($appDir, $routeDir);
 
         $pattern = $this->buildPattern($relativePath);
         [$regex, $paramNames] = $this->buildRegex($pattern);
-        $layoutPaths = $this->findLayouts($appDir, $pageDir);
+        // API routes render no HTML, so layouts never apply to them.
+        $layoutPaths = $isApi ? [] : $this->findLayouts($appDir, $routeDir);
 
         $segments = '/' === $pattern ? [] : \explode('/', \trim($pattern, '/'));
         $totalSegments = \count($segments);
@@ -123,11 +154,12 @@ final class PageScanner
         return new Route(
             pattern: $pattern,
             regex: $regex,
-            pagePath: $pagePath,
+            pagePath: $filePath,
             layoutPaths: $layoutPaths,
             paramNames: $paramNames,
             staticSegments: $staticSegments,
             totalSegments: $totalSegments,
+            isApi: $isApi,
         );
     }
 

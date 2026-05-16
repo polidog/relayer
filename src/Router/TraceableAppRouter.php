@@ -241,6 +241,18 @@ class TraceableAppRouter extends AppRouter
         parent::handleMatch($match);
     }
 
+    protected function handleApiMatch(RouteMatch $match): void
+    {
+        $this->profiler?->collect('route', 'api', [
+            'pattern' => $match->route->pattern,
+            'method' => $this->readMethod(),
+            'params' => $match->getParams(),
+            'routePath' => $match->getPagePath(),
+        ]);
+
+        parent::handleApiMatch($match);
+    }
+
     protected function handleNotFound(): void
     {
         $this->profiler?->collect('route', 'not_found', [

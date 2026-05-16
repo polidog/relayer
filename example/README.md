@@ -9,6 +9,10 @@ A tiny app that exercises the main Relayer features:
   `src/Pages/users/page.psx` + `src/Service/UserRepository.php`
 - Dynamic route segment with constructor injection, DB lookup by id —
   `src/Pages/users/[id]/page.psx`
+- JSON API route (method-keyed map, DI-autowired, no HTML) —
+  `src/Pages/api/users/route.php` (`GET /api/users`)
+- Dynamic JSON API route with a 404 status escape hatch —
+  `src/Pages/api/users/[id]/route.php` (`GET /api/users/1`)
 - Function-style page using `$ctx->action()` for server-side validation —
   `src/Pages/signup/page.psx`
 - Root layout — `src/Pages/layout.psx`

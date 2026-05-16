@@ -7,6 +7,8 @@
 
 - Next.js App Router 風のファイルベースルーター (`src/Pages/page.psx`,
   `layout.psx`, 動的セグメント, エラーページ)
+- ファイルベースの JSON API ルート (`src/Pages/.../route.php`) —
+  HTTP メソッド別のハンドラマップ、戻り値を JSON 化
 - CSRF 保護付きサーバアクション（`$ctx->action()` /
   `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -159,6 +161,7 @@ App Router の規約に倣っています）。
 | `page.psx`            | ルートのレンダリング本体。ディレクトリにつき 1 つ。                 |
 | `layout.psx`          | 配下のページを包む。ルートから葉まで階層的にスタックされる。        |
 | `error.psx`           | 404 / 未マッチルートのフォールバック（ルート直下のみ）。            |
+| `route.php`           | JSON API ルート（HTML なし）。メソッド別ハンドラマップ。1 ディレクトリ 1 つ。 |
 | `[param]/`            | 動的セグメント。`$this->getParam('param')` で取得できる。           |
 
 `.psx` は JSX 風ソース。実行時はそれをコンパイルした `*.psx.php` を読みます。
@@ -250,6 +253,49 @@ src/Pages/
 
 ルート直下に `error.psx`（`ErrorPageComponent` を継承）を置くと、ルートレイ
 アウト内に 404 がレンダリングされます。無ければ最小限のデフォルト表示。
+
+### API ルート
+
+`route.php` は、ページをレンダリングする代わりに JSON を返すエンドポイント
+です。HTTP メソッドをキーにしたマップを返し、各ハンドラは関数型ページの
+ファクトリと全く同じ方式でオートワイヤされます（`PageContext` / `Request` /
+`Identity` / コンテナのサービスを型で注入）。戻り値がそのままレスポンスに
+なり、レイアウトや HTML パイプラインは一切通りません。
+
+```php
+<?php
+// src/Pages/api/users/route.php
+declare(strict_types=1);
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Http\Request;
+
+return [
+    'GET'  => fn (UserRepository $users): array => ['users' => $users->all()],
+    'POST' => function (Request $req, UserRepository $users): array {
+        $users->create($req->allPost());
+        return ['ok' => true];
+    },
+];
+```
+
+- ページと同じ `src/Pages/` 配下に置き、動的セグメント `[param]` も同じ規約
+  （`$ctx->params['id']` で取得）。1 ディレクトリはページ **か** ルートの
+  どちらか一方（両方あるとスキャナがエラーにします）。
+- 戻り値は `Content-Type: application/json` で JSON 化されます。`null` は
+  `204 No Content`。エラー時は先にステータスを設定して本文を返せば
+  （`\http_response_code(404); return ['error' => '…'];`）、そのステータスが
+  そのまま使われます。
+- ハンドラの無いメソッドへのリクエストは `405 Method Not Allowed` と
+  `Allow` ヘッダになります。`HEAD` / `OPTIONS` は自動生成しません — 必要な
+  ルートには明示的に定義してください。
+- `route.php` はマップを `return` するだけにしてください（クラス／関数定義
+  を置かない）。リクエストごとに再評価されます。
+- 認証はページと同じ `$ctx->requireAuth()` / `Identity` の仕組みですが、
+  失敗時はページの HTML ログイン `302` ではなく JSON の `401`（未認証）
+  または `403`（ロール不足）になります。ハンドラ自身が
+  `$ctx->redirect()` を呼んだ場合は通常どおり `Location` を返します
+  （認証ゲートではなくハンドラの意図的な動作のため）。
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 

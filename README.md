@@ -7,6 +7,8 @@ Opinionated, batteries-included framework on top of
 
 - A Next.js App Router-style file-based router (`src/Pages/page.psx`,
   `layout.psx`, dynamic segments, error pages)
+- File-based JSON API routes (`src/Pages/.../route.php`) — a method-keyed
+  map of autowired handlers, return value → JSON
 - CSRF-protected server actions (`$ctx->action()` /
   `PageComponent::action()` dispatch form posts to in-page handlers)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -157,6 +159,7 @@ the Next.js App Router. The conventions:
 | `page.psx`           | Renders the route. One per directory.                               |
 | `layout.psx`         | Wraps every nested page; layouts stack from root to leaf.           |
 | `error.psx`          | 404 / unmatched-route fallback (root only).                         |
+| `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
 
 `.psx` is the JSX-style source. The runtime executes the compiled
@@ -248,6 +251,49 @@ src/Pages/
 
 A root `error.psx` (extending `ErrorPageComponent`) renders 404 responses
 inside the root layout. Without one, the framework emits a minimal default.
+
+### API Routes
+
+A `route.php` file is a JSON endpoint instead of a rendered page. It returns
+a map keyed by HTTP method; each handler is autowired exactly like a
+function-style page factory (`PageContext`, `Request`, `Identity`, and
+container services inject by type), and the return value becomes the
+response — no layout or HTML pipeline runs.
+
+```php
+<?php
+// src/Pages/api/users/route.php
+declare(strict_types=1);
+
+use App\Service\UserRepository;
+use Polidog\Relayer\Http\Request;
+
+return [
+    'GET'  => fn (UserRepository $users): array => ['users' => $users->all()],
+    'POST' => function (Request $req, UserRepository $users): array {
+        $users->create($req->allPost());
+        return ['ok' => true];
+    },
+];
+```
+
+- Lives in `src/Pages/` alongside pages, with the same `[param]` dynamic
+  segments — read them via `$ctx->params['id']`. A directory is a page
+  **or** a route, not both (the scanner errors if it finds both).
+- The return value is JSON-encoded with `Content-Type: application/json`.
+  `null` → `204 No Content`. For errors, set the status first and return a
+  body — `\http_response_code(404); return ['error' => '…'];` — the
+  handler-chosen status passes through unchanged.
+- A request method with no handler gets `405 Method Not Allowed` plus an
+  `Allow` header. `HEAD` / `OPTIONS` are not synthesized — declare them
+  explicitly if a route needs them.
+- `route.php` must only `return` the map (no class/function declarations);
+  it is re-evaluated every request.
+- Auth uses the same `$ctx->requireAuth()` / `Identity` mechanism as
+  pages, but a failure is a JSON `401` (anonymous) or `403` (wrong role) —
+  not the HTML-login `302` pages emit. A handler calling `$ctx->redirect()`
+  itself still produces a `Location` response (a deliberate handler
+  action, not an auth gate).
 
 ## Server Actions (form / CSRF-protected)
 

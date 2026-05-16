@@ -14,6 +14,10 @@ final class Route
      * @param array<string> $paramNames     Parameter names from dynamic segments
      * @param int           $staticSegments Number of static segments (for sorting priority)
      * @param int           $totalSegments  Total number of segments
+     * @param bool          $isApi          true when backed by `route.php` (a JSON
+     *                                      API handler) instead of a page — API
+     *                                      routes carry no layouts and skip the
+     *                                      HTML/Document render pipeline
      */
     public function __construct(
         public readonly string $pattern,
@@ -23,6 +27,7 @@ final class Route
         public readonly array $paramNames,
         public readonly int $staticSegments,
         public readonly int $totalSegments,
+        public readonly bool $isApi = false,
     ) {}
 
     public function isDynamic(): bool
