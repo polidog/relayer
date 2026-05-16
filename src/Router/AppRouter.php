@@ -16,6 +16,8 @@ use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\InjectorContainer;
+use Polidog\Relayer\Router\Api\ApiResponder;
+use Polidog\Relayer\Router\Api\RouteHandlers;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
@@ -226,6 +228,12 @@ class AppRouter
 
     protected function handleMatch(RouteMatch $match): void
     {
+        if ($match->route->isApi) {
+            $this->handleApiMatch($match);
+
+            return;
+        }
+
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());
 
         $pageComponent = $this->loadPage($match->getPagePath(), $match->getParams());
@@ -246,6 +254,58 @@ class AppRouter
         }
 
         $this->renderPage($pageComponent, $layoutStack, $match->getParams());
+    }
+
+    /**
+     * Dispatch an API route (`route.php`). The file returns a method-keyed
+     * map of handler closures; the one matching the request method is
+     * autowired with the SAME resolver function-style pages use — so
+     * `PageContext`, `Request`, `Identity`, and container services inject
+     * identically, and `$ctx->requireAuth()` / `$ctx->redirect()` work
+     * because this runs inside `run()`'s Authorization/Redirect catch.
+     *
+     * No method match → `405` with an `Allow` header. The handler's return
+     * value becomes the response via {@see ApiResponder} (data → JSON,
+     * `null` → 204). HEAD/OPTIONS are not synthesized — define them
+     * explicitly if a route needs them.
+     */
+    protected function handleApiMatch(RouteMatch $match): void
+    {
+        $file = $match->getPagePath();
+
+        if (!\file_exists($file)) {
+            $this->handleNotFound();
+
+            return;
+        }
+
+        $handlers = RouteHandlers::fromFile($file);
+
+        // run() always builds currentRequest before dispatch; its `method`
+        // is already upper-cased by Request::fromGlobals(). The $_SERVER
+        // fallback only matters if a subclass dispatches without run().
+        $request = $this->currentRequest;
+        $method = null !== $request
+            ? $request->method
+            : \strtoupper(\is_string($_SERVER['REQUEST_METHOD'] ?? null) ? $_SERVER['REQUEST_METHOD'] : 'GET');
+
+        $handler = $handlers->handlerFor($method);
+
+        if (null === $handler) {
+            \http_response_code(405);
+            if (!\headers_sent()) {
+                \header('Allow: ' . \implode(', ', $handlers->allowedMethods()));
+            }
+
+            return;
+        }
+
+        $context = new Component\PageContext($match->getParams(), $this->computePageId($file));
+        $context->setAuthenticator($this->resolveAuthenticator());
+
+        $args = $this->resolveFactoryArguments($handler, $context, $file);
+
+        ApiResponder::emit($handler(...$args));
     }
 
     protected function applyFunctionPageCache(FunctionPage $page): void
@@ -780,7 +840,7 @@ class AppRouter
     private function computePageId(string $pagePath): string
     {
         $relative = \str_replace($this->appDirectory, '', $pagePath);
-        $relative = (string) \preg_replace('#/page\.(psx\.php|psx|php)$#', '', $relative);
+        $relative = (string) \preg_replace('#/(?:page|route)\.(psx\.php|psx|php)$#', '', $relative);
 
         if ('' === $relative || '/' === $relative) {
             return '/';
