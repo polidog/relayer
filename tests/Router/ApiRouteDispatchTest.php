@@ -156,6 +156,24 @@ final class ApiRouteDispatchTest extends TestCase
         self::assertSame(404, \http_response_code());
     }
 
+    public function testAnonymousAuthFailureIsJson401NotRedirect(): void
+    {
+        // A non-nullable `Identity` parameter throws AuthorizationException
+        // (DECISION_REDIRECT) for anonymous callers during arg resolution.
+        // For an API route that must surface as a JSON 401, never the
+        // page path's 302 to an HTML login form.
+        $this->writeRoute('me', <<<'PHP'
+            use Polidog\Relayer\Auth\Identity;
+
+            return ['GET' => static fn (Identity $user): array => ['id' => $user->id]];
+            PHP);
+
+        $output = $this->dispatch('/me', 'GET');
+
+        self::assertSame(401, \http_response_code());
+        self::assertSame('{"error":"Unauthorized"}', $output);
+    }
+
     public function testInvalidRouteFileRaisesActionableError(): void
     {
         $this->writeRoute('bad', <<<'PHP'

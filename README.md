@@ -288,8 +288,12 @@ return [
   `Allow` header. `HEAD` / `OPTIONS` are not synthesized — declare them
   explicitly if a route needs them.
 - `route.php` must only `return` the map (no class/function declarations);
-  it is re-evaluated every request. Auth works through
-  `$ctx->requireAuth()` or an `Identity` parameter, exactly like pages.
+  it is re-evaluated every request.
+- Auth uses the same `$ctx->requireAuth()` / `Identity` mechanism as
+  pages, but a failure is a JSON `401` (anonymous) or `403` (wrong role) —
+  not the HTML-login `302` pages emit. A handler calling `$ctx->redirect()`
+  itself still produces a `Location` response (a deliberate handler
+  action, not an auth gate).
 
 ## Server Actions (form / CSRF-protected)
 

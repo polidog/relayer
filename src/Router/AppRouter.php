@@ -268,13 +268,22 @@ class AppRouter
      * value becomes the response via {@see ApiResponder} (data → JSON,
      * `null` → 204). HEAD/OPTIONS are not synthesized — define them
      * explicitly if a route needs them.
+     *
+     * Auth failures are translated to a JSON `401` / `403` here rather than
+     * the page path's HTML-login `302`: an API client wants a status code,
+     * not a redirect to a form. A handler that calls `$ctx->redirect()`
+     * itself still produces a `Location` response — that is a deliberate
+     * handler action, not an auth gate, so it bubbles to `run()` unchanged.
      */
     protected function handleApiMatch(RouteMatch $match): void
     {
         $file = $match->getPagePath();
 
         if (!\file_exists($file)) {
-            $this->handleNotFound();
+            // Scanned but gone by dispatch (deleted mid-process). Keep the
+            // API surface JSON instead of falling back to the HTML 404.
+            \http_response_code(404);
+            ApiResponder::emit(['error' => 'Not Found']);
 
             return;
         }
@@ -303,9 +312,22 @@ class AppRouter
         $context = new Component\PageContext($match->getParams(), $this->computePageId($file));
         $context->setAuthenticator($this->resolveAuthenticator());
 
-        $args = $this->resolveFactoryArguments($handler, $context, $file);
+        // A non-nullable `Identity` parameter throws during argument
+        // resolution; `$ctx->requireAuth()` throws inside the handler.
+        // Both land here and become a JSON 401/403 instead of run()'s
+        // HTML-login redirect.
+        try {
+            $args = $this->resolveFactoryArguments($handler, $context, $file);
+            $result = $handler(...$args);
+        } catch (AuthorizationException $exception) {
+            $status = AuthGuard::DECISION_FORBIDDEN === $exception->decision ? 403 : 401;
+            \http_response_code($status);
+            ApiResponder::emit(['error' => 403 === $status ? 'Forbidden' : 'Unauthorized']);
 
-        ApiResponder::emit($handler(...$args));
+            return;
+        }
+
+        ApiResponder::emit($result);
     }
 
     protected function applyFunctionPageCache(FunctionPage $page): void

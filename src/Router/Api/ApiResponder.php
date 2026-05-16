@@ -38,10 +38,13 @@ final class ApiResponder
     public static function emit(mixed $result): void
     {
         if (null === $result) {
-            // Only downgrade to 204 when the handler didn't choose its own
+            // Downgrade to 204 only when the handler didn't choose its own
             // status — a handler that set, say, 202 and returned null still
-            // means "no body", but its status intent wins.
-            if (200 === \http_response_code()) {
+            // means "no body", but its status intent wins. `false` covers
+            // the SAPI default before any code is set (e.g. plain CLI), so
+            // the rule holds regardless of SAPI rather than only when the
+            // web default of 200 happens to be in effect.
+            if (\in_array(\http_response_code(), [200, false], true)) {
                 \http_response_code(204);
             }
 
