@@ -1442,6 +1442,14 @@ $span->stop(['rows' => \count($result)]);
 `NullProfiler` でも同じ呼び出しがそのまま no-op になるため、環境による
 分岐は不要です。
 
+### 保存済みプロファイルの削除
+
+`vendor/bin/relayer profiler:clear` は `var/cache/profiler` 配下の JSON
+プロファイルを削除し、`/_profiler` をまっさらな状態に戻します。削除する
+のはストレージが書き出す `*.json` のみで（ディレクトリは次の dev リクエスト
+で再生成されます）、キャッシュが無い場合はその旨を表示して成功扱いとする
+ため、何度実行しても安全です。
+
 ## ソース構成
 
 | Namespace                                              | 役割                                                                |

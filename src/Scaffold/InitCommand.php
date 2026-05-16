@@ -12,7 +12,7 @@ use JsonException;
  * project (one that has already `composer require`d the framework).
  *
  * Deliberately not built on symfony/console: the framework doesn't depend on
- * it and a two-verb tool doesn't justify pulling it in. All output goes
+ * it and a small verb set doesn't justify pulling it in. All output goes
  * through an injected line writer and the working directory is injectable, so
  * the command is testable without touching STDOUT or chdir().
  *
@@ -32,8 +32,9 @@ final class InitCommand
         Relayer scaffolder
 
         Usage:
-          relayer init       scaffold the project structure in the current directory
-          relayer routes     list the routes discovered under src/Pages
+          relayer init             scaffold the project structure in the current directory
+          relayer routes           list the routes discovered under src/Pages
+          relayer profiler:clear   delete cached dev profiler data (var/cache/profiler)
 
         Run inside a project that has already required the framework
         (`composer require polidog/relayer`). Existing files are left
@@ -63,6 +64,10 @@ final class InitCommand
 
         if ('routes' === $command) {
             return RoutesCommand::run(\array_slice($args, 1), $write, $cwd);
+        }
+
+        if ('profiler:clear' === $command) {
+            return ProfilerClearCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('init' !== $command) {
