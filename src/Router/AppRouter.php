@@ -596,12 +596,6 @@ class AppRouter
             $this->document->setMetadata($page->getMetadata());
         }
 
-        if ($this->document instanceof HtmlDocument) {
-            foreach ($this->collectScripts($page, $layouts) as $script) {
-                $this->document->addScript($script);
-            }
-        }
-
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
         // Pass the configured SnapshotSerializer so the inner Renderer can
         // HMAC-sign snapshot-backed component state rendered into the page.
@@ -637,6 +631,17 @@ class AppRouter
             echo $html;
 
             return;
+        }
+
+        // Collected here, not right after $page->render(): a layout's
+        // render() only runs inside $renderer->render() above, so a layout
+        // declaring scripts via addJs() inside render() would otherwise be
+        // missed. Past the partial early-return too — partial responses
+        // bypass the document, so they must not mutate its script queue.
+        if ($this->document instanceof HtmlDocument) {
+            foreach ($this->collectScripts($page, $layouts) as $script) {
+                $this->document->addScript($script);
+            }
         }
 
         $wrappedHtml = \sprintf(
