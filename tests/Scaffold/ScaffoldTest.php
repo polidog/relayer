@@ -17,6 +17,8 @@ final class ScaffoldTest extends TestCase
             '.env',
             '.gitignore',
             'README.md',
+            'RELAYER.md',
+            'AGENTS.md',
             'public/index.php',
             'config/services.yaml',
             'src/AppConfigurator.php',
@@ -63,6 +65,29 @@ final class ScaffoldTest extends TestCase
     public function testStructureVersionIsAPositiveInt(): void
     {
         self::assertGreaterThanOrEqual(1, Scaffold::STRUCTURE_VERSION);
+    }
+
+    public function testScaffoldsCoVersionedAgentConventions(): void
+    {
+        $files = Scaffold::files();
+
+        // AGENTS.md is the filename agent tools auto-read; it must point at
+        // the substantive doc so the conventions actually reach the agent.
+        self::assertStringContainsString('RELAYER.md', $files['AGENTS.md']);
+
+        // RELAYER.md must actually carry the contracts an LLM needs, not
+        // just a stub — spot-check the load-bearing ones.
+        $relayer = $files['RELAYER.md'];
+        foreach ([
+            'route.php',
+            'middleware.php',
+            'Island::mount',
+            'PageContext',
+            'vendor/bin/relayer routes',
+            'Do NOT',
+        ] as $needle) {
+            self::assertStringContainsString($needle, $relayer);
+        }
     }
 
     public function testComposerPatchIsAdditiveAndCarriesTheStructureMarker(): void
