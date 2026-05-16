@@ -3,6 +3,9 @@
     "description": "Relayer — file-based router + Symfony DependencyInjection + dotenv on top of polidog/use-php.",
     "type": "library",
     "license": "MIT",
+    "bin": [
+        "bin/relayer"
+    ],
     "autoload": {
         "psr-4": {
             "Polidog\\Relayer\\": "src/"

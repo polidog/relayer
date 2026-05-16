@@ -38,6 +38,30 @@ Exposes a single `Relayer::boot()` entrypoint so app code stays small.
 composer require polidog/relayer
 ```
 
+## Scaffold a new project
+
+`relayer init` lays the project structure into the **current directory**. Run
+it from your project root after requiring the framework:
+
+```bash
+composer require polidog/relayer
+vendor/bin/relayer init
+composer dump-autoload
+php -S 127.0.0.1:8000 -t public
+```
+
+It is idempotent and non-destructive:
+
+- existing files are never overwritten (they are reported as skipped), so it
+  is safe to re-run;
+- your existing `composer.json` is patched **additively** — it adds the `App\`
+  PSR-4 autoload, the usePHP asset-publish scripts, and an
+  `extra.relayer.structure_version` marker, and leaves everything else
+  untouched.
+
+The `structure_version` marker records which skeleton shape the project was
+generated against, so structure migrations can be applied later.
+
 ## Project Layout
 
 ```
