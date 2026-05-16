@@ -1,0 +1,34 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Relayer\React\Island;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Html\H;
+use Polidog\UsePhp\Runtime\Element;
+
+// Server-rendered page (PSX). One section is handed to a client React
+// component via Island::mount(): the server passes initial props, the
+// island then talks to the server through the JSON API route at
+// /api/users (the one in src/Pages/api/users/route.php) — no separate
+// island↔server channel.
+return function (PageContext $ctx): Closure {
+    $ctx->metadata(['title' => 'React island']);
+
+    return fn (): Element => (
+        <section className="space-y-6">
+            <header className="space-y-2">
+                <h1 className="text-3xl font-bold tracking-tight text-slate-900">React island</h1>
+                <p className="text-slate-600">
+                    The shell is server-rendered PSX. The card below is a real
+                    client React component mounted by{' '}
+                    <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">Island::mount()</code>{' '}
+                    — it fetches{' '}
+                    <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-sm text-slate-800">/api/users</code>{' '}
+                    itself and re-renders on the client.
+                </p>
+            </header>
+            {Island::mount('UsersBrowser', ['initialTitle' => 'Users (live, client-rendered)'])}
+        </section>
+    );
+};

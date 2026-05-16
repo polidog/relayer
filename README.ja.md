@@ -9,6 +9,8 @@
   `layout.psx`, 動的セグメント, エラーページ)
 - ファイルベースの JSON API ルート (`src/Pages/.../route.php`) —
   HTTP メソッド別のハンドラマップ、戻り値を JSON 化
+- React アイランド (`Island::mount()`) — リッチ UI 用の脱出ハッチ。
+  サーバ描画シェル＋クライアント React、props は PHP から、バンドルは自前
 - CSRF 保護付きサーバアクション（`$ctx->action()` /
   `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -296,6 +298,66 @@ return [
   または `403`（ロール不足）になります。ハンドラ自身が
   `$ctx->redirect()` を呼んだ場合は通常どおり `Location` を返します
   （認証ゲートではなくハンドラの意図的な動作のため）。
+
+### React アイランド（リッチ UI 用の脱出ハッチ）
+
+サーバ描画の defer/partial モデルでは表現しきれない、本当にリッチな
+クライアント UI が必要な箇所だけ、実 React コンポーネントを *アイランド*
+としてマウントします。ページの主導権はサーバが握ったまま、1 ノードだけを
+PHP からの初期 props 付きで React に渡します。
+
+```php
+<?php
+// src/Pages/dashboard/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\React\Island;
+use Polidog\Relayer\Router\Component\PageContext;
+
+return fn (PageContext $ctx) => (
+    <section>
+        <h1>Dashboard</h1>
+        {Island::mount('Chart', ['points' => $ctx->params])}
+    </section>
+);
+```
+
+`Island::mount()` は
+`<div data-react-island="Chart" data-react-props='…'></div>` を描画します。
+フレームワークの小さな React 非依存ローダをドキュメントに 1 度追加し、
+続けて自前バンドルを読み込みます。
+
+```php
+$document->addHeadHtml(Island::loaderScript());
+$document->addHeadHtml('<script type="module" src="/islands.js"></script>');
+```
+
+`islands.js` はあなたの所有物 — 自前のツールチェーン (vite / esbuild) で
+React を同梱してビルドします。契約は 1 回の呼び出しだけ:
+
+```js
+import { createRoot } from 'react-dom/client';
+import Chart from './islands/Chart';
+
+window.relayerIslands.register('Chart', (el, props) => {
+    createRoot(el).render(<Chart {...props} />);
+});
+```
+
+- フレームワークが提供するのは PHP プリミティブとローダ **だけ** で、
+  Node 非依存のままです。React・JSX・バンドルはあなたの担当。ローダは
+  アイランド（usePHP の defer/partial で後から差し込まれたものも
+  `MutationObserver` で）を発見し、props を解析し、登録済みのマウント関数を
+  呼びます。register と DOM の順序はどちらが先でも構いません。
+- props は **一方向**（PHP → 初期 props）。以降サーバから必要なものは
+  JSON API ルート（`route.php`）を `fetch` してください — 別途
+  アイランド↔サーバのチャネルはありません。
+- 名前は素の識別子のみ。JSON 化できない props は明確なエラーになります。
+- 意図的な残課題が 2 つ: **SSR はなし**（クライアント描画のみ。マウント
+  ノードはハイドレートまで空なので、ローディング表示はコンポーネント内で
+  描画）、`loaderScript()` は **インライン** `<script>`（厳格な
+  `script-src` CSP 下では nonce を付けるかファイルから配信。
+  `window.relayerIslands.register` の契約はどちらでも同一）。
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 
