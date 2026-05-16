@@ -1451,6 +1451,14 @@ $span->stop(['rows' => \count($result)]);
 The same calls are no-ops under `NullProfiler`, so no environment branching
 is needed.
 
+### Clearing stored profiles
+
+`vendor/bin/relayer profiler:clear` deletes the JSON profiles under
+`var/cache/profiler` so `/_profiler` starts fresh. It only removes the
+`*.json` the storage writes (the directory is recreated on the next dev
+request); a missing cache is reported and treated as success, so re-running
+is always safe.
+
 ## Source Layout
 
 | Namespace                                              | Purpose                                                                |

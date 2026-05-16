@@ -53,6 +53,16 @@ use Symfony\Component\Dotenv\Dotenv;
 final class Relayer
 {
     /**
+     * Project-root-relative directory the dev profiler persists profiles
+     * into (one `{token}.json` per request, via {@see FileProfilerStorage}).
+     * The single source of truth for that location: the dev wiring below
+     * binds `FileProfilerStorage` to `<projectRoot>/` . this, and
+     * `relayer profiler:clear` clears the same path off this constant so
+     * the two cannot drift.
+     */
+    public const PROFILER_CACHE_DIR = 'var/cache/profiler';
+
+    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
@@ -336,7 +346,7 @@ final class Relayer
 
         if (self::isDev()) {
             $container->register(FileProfilerStorage::class)
-                ->setArguments([$projectRoot . '/var/cache/profiler'])
+                ->setArguments([$projectRoot . '/' . self::PROFILER_CACHE_DIR])
                 ->setPublic(true)
             ;
             $container->setAlias(ProfilerStorage::class, FileProfilerStorage::class)
