@@ -12,6 +12,7 @@ use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Http\Cache;
+use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\Relayer\Router\RedirectException;
 use RuntimeException;
@@ -20,6 +21,9 @@ final class PageContext
 {
     /** @var array<string, string> */
     private array $metadata = [];
+
+    /** @var array<int, Script> */
+    private array $scripts = [];
 
     private ?Cache $cache = null;
 
@@ -64,6 +68,30 @@ final class PageContext
     public function getMetadata(): array
     {
         return $this->metadata;
+    }
+
+    /**
+     * Declare an external script for this page. Emitted at the end of
+     * `<body>`, after the main usePHP bundle, in call order. src-only by
+     * design — for inline JS use the document's `addHeadHtml()`.
+     */
+    public function js(
+        string $src,
+        bool $defer = false,
+        bool $async = false,
+        bool $module = false,
+    ): void {
+        $this->scripts[] = new Script($src, defer: $defer, async: $async, module: $module);
+    }
+
+    /**
+     * @return array<int, Script>
+     *
+     * @internal collected by the router into the document after render
+     */
+    public function getScripts(): array
+    {
+        return $this->scripts;
     }
 
     /**

@@ -9,6 +9,9 @@
   `layout.psx`, 動的セグメント, エラーページ)
 - ファイルベースの JSON API ルート (`src/Pages/.../route.php`) —
   HTTP メソッド別のハンドラマップ、戻り値を JSON 化
+- ページ／レイアウト単位の外部スクリプト (`$ctx->js()` /
+  `PageComponent::addJs()` / `LayoutComponent::addJs()`) — バンドルの後、
+  宣言順に `<body>` 末尾へ出力
 - React アイランド (`Island::mount()`) — リッチ UI 用の脱出ハッチ。
   サーバ描画シェル＋クライアント React、props は PHP から、バンドルは自前
 - 任意のルートミドルウェア (`src/Pages/middleware.php`) が全ディスパッチを
@@ -309,6 +312,42 @@ return [
   または `403`（ロール不足）になります。ハンドラ自身が
   `$ctx->redirect()` を呼んだ場合は通常どおり `Location` を返します
   （認証ゲートではなくハンドラの意図的な動作のため）。
+
+### ページ単位のスクリプト（`$ctx->js()` / `addJs()`）
+
+ページ（やその上のレイアウト）は、すべてを 1 本のグローバルバンドルに
+乗せる代わりに、自前の外部スクリプトを宣言できます。関数スタイル:
+
+```php
+return function (PageContext $ctx): Closure {
+    $ctx->js('/assets/chart.js', defer: true);
+
+    return fn (): Element => <canvas id="chart"></canvas>;
+};
+```
+
+クラススタイルのページ・レイアウトは `$this->addJs(...)` で同じことが
+できます:
+
+```php
+final class Dashboard extends LayoutComponent
+{
+    public function render(): Element
+    {
+        $this->addJs('/assets/dashboard.js', module: true);
+        return <div>{...$this->getChildren()}</div>;
+    }
+}
+```
+
+- 出力位置は **`<body>` 末尾、メインの usePHP バンドルの後**、宣言順。
+  レイアウトのスクリプトがページより先、外側（ルート）レイアウトが
+  内側より先。
+- **src 指定のみ。** フラグは `defer` / `async` / `module`
+  (`type="module"`)。インライン JS は `$document->addHeadHtml()` を使う
+  ── アイランドのローダ（後述）が乗っているのと同じフック。
+- **重複排除なし** ── レイアウトとページが同じ src を宣言すれば 2 つの
+  タグになる。調整せず宣言するだけ（`metadata()` と同じ方針）。
 
 ### React アイランド（リッチ UI 用の脱出ハッチ）
 

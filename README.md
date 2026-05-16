@@ -9,6 +9,9 @@ Opinionated, batteries-included framework on top of
   `layout.psx`, dynamic segments, error pages)
 - File-based JSON API routes (`src/Pages/.../route.php`) — a method-keyed
   map of autowired handlers, return value → JSON
+- Per-page / per-layout external scripts (`$ctx->js()` /
+  `PageComponent::addJs()` / `LayoutComponent::addJs()`) emitted at the end
+  of `<body>` after the bundle, in declaration order
 - React islands (`Island::mount()`) — a rich-UI escape hatch: server-rendered
   shell, client React component, props from PHP, your own bundle
 - Optional root middleware (`src/Pages/middleware.php`) wrapping every
@@ -307,6 +310,41 @@ return [
   not the HTML-login `302` pages emit. A handler calling `$ctx->redirect()`
   itself still produces a `Location` response (a deliberate handler
   action, not an auth gate).
+
+### Per-page scripts (`$ctx->js()` / `addJs()`)
+
+A page (or any layout above it) can declare its own external scripts
+instead of everything riding the one global bundle. Function-style:
+
+```php
+return function (PageContext $ctx): Closure {
+    $ctx->js('/assets/chart.js', defer: true);
+
+    return fn (): Element => <canvas id="chart"></canvas>;
+};
+```
+
+Class-style pages and layouts get the same via `$this->addJs(...)`:
+
+```php
+final class Dashboard extends LayoutComponent
+{
+    public function render(): Element
+    {
+        $this->addJs('/assets/dashboard.js', module: true);
+        return <div>{...$this->getChildren()}</div>;
+    }
+}
+```
+
+- Emitted at the **end of `<body>`, after** the main usePHP bundle, in
+  declaration order. Layout scripts come before the page's; an outer
+  (root) layout before an inner one.
+- **src-only by design.** Flags: `defer`, `async`, `module`
+  (`type="module"`). For inline JS use `$document->addHeadHtml()` — the
+  same hook the Island loader rides on (below).
+- **No deduplication** — a layout and a page both declaring the same src
+  produce two tags. Declared, not reconciled (mirrors `metadata()`).
 
 ### React Islands (rich-UI escape hatch)
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Component;
 
 use InvalidArgumentException;
+use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\UsePhp\Component\BaseComponent;
@@ -19,6 +20,9 @@ abstract class PageComponent extends BaseComponent
 
     /** @var array<string, string> */
     private array $metadata = [];
+
+    /** @var array<int, Script> */
+    private array $scripts = [];
 
     /**
      * @param array<string, string> $params
@@ -36,6 +40,16 @@ abstract class PageComponent extends BaseComponent
     public function getMetadata(): array
     {
         return $this->metadata;
+    }
+
+    /**
+     * @return array<int, Script>
+     *
+     * @internal collected by the router into the document after render
+     */
+    public function getScripts(): array
+    {
+        return $this->scripts;
     }
 
     public function dispatchActionFromRequest(): void
@@ -114,6 +128,20 @@ abstract class PageComponent extends BaseComponent
     protected function setMetadata(array $metadata): void
     {
         $this->metadata = $metadata;
+    }
+
+    /**
+     * Declare an external script for this page. Emitted at the end of
+     * `<body>`, after the main usePHP bundle, in call order. src-only by
+     * design — for inline JS use the document's `addHeadHtml()`.
+     */
+    protected function addJs(
+        string $src,
+        bool $defer = false,
+        bool $async = false,
+        bool $module = false,
+    ): void {
+        $this->scripts[] = new Script($src, defer: $defer, async: $async, module: $module);
     }
 
     protected function getQuery(string $name): ?string
