@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Router\Component;
 
 use Closure;
 use Polidog\Relayer\Http\Cache;
+use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\UsePhp\Runtime\Element;
@@ -96,6 +97,14 @@ final class FunctionPage
     public function getMetadata(): array
     {
         return $this->context->getMetadata();
+    }
+
+    /**
+     * @return array<int, Script>
+     */
+    public function getScripts(): array
+    {
+        return $this->context->getScripts();
     }
 
     public function getComponentId(): string

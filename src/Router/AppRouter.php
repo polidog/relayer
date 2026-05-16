@@ -23,6 +23,7 @@ use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
+use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
@@ -595,6 +596,12 @@ class AppRouter
             $this->document->setMetadata($page->getMetadata());
         }
 
+        if ($this->document instanceof HtmlDocument) {
+            foreach ($this->collectScripts($page, $layouts) as $script) {
+                $this->document->addScript($script);
+            }
+        }
+
         $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
         // Pass the configured SnapshotSerializer so the inner Renderer can
         // HMAC-sign snapshot-backed component state rendered into the page.
@@ -641,6 +648,37 @@ class AppRouter
         $output = $this->document->render($wrappedHtml);
 
         echo $output;
+    }
+
+    /**
+     * Gather declared scripts in emission order: outer (root) layout first,
+     * inner layouts next, page last. Only LayoutComponent / PageComponent /
+     * FunctionPage carry scripts — the same instanceof asymmetry setParams()
+     * and metadata already have for raw LayoutInterface implementers. No
+     * deduplication: a layout and a page both declaring the same src is two
+     * tags by design.
+     *
+     * @return array<int, Script>
+     */
+    protected function collectScripts(ComponentInterface|FunctionPage $page, LayoutStack $layouts): array
+    {
+        $scripts = [];
+
+        foreach ($layouts->all() as $layout) {
+            if ($layout instanceof LayoutComponent) {
+                foreach ($layout->getScripts() as $script) {
+                    $scripts[] = $script;
+                }
+            }
+        }
+
+        if ($page instanceof FunctionPage || $page instanceof PageComponent) {
+            foreach ($page->getScripts() as $script) {
+                $scripts[] = $script;
+            }
+        }
+
+        return $scripts;
     }
 
     /**

@@ -17,6 +17,9 @@ final class HtmlDocument implements DocumentInterface
     /** @var array<int, string> */
     private array $headHtml = [];
 
+    /** @var array<int, Script> */
+    private array $scripts = [];
+
     /** @var array<string, string> */
     private array $metadata = [];
 
@@ -70,6 +73,19 @@ final class HtmlDocument implements DocumentInterface
         return $this;
     }
 
+    /**
+     * Queue an external script to emit at the end of `<body>`, after the
+     * main usePHP bundle. Scripts are emitted in the order added; no
+     * deduplication — a layout and a page both adding the same src produce
+     * two tags by design (mirrors metadata: declare, don't reconcile).
+     */
+    public function addScript(Script $script): self
+    {
+        $this->scripts[] = $script;
+
+        return $this;
+    }
+
     public function disableDefaultStyles(): self
     {
         $this->includeDefaultStyles = false;
@@ -87,6 +103,7 @@ final class HtmlDocument implements DocumentInterface
         $escapedLang = \htmlspecialchars($this->lang, \ENT_QUOTES, 'UTF-8');
         $escapedJsPath = \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8');
         $metaTags = $this->getMetaTags();
+        $scriptTags = $this->getScriptTags();
 
         return <<<HTML
 <!DOCTYPE html>
@@ -103,6 +120,7 @@ final class HtmlDocument implements DocumentInterface
 <body>
     {$content}
     <script src="{$escapedJsPath}"></script>
+    {$scriptTags}
 </body>
 </html>
 HTML;
@@ -154,6 +172,21 @@ HTML;
         }
 
         return \implode("\n    ", $links);
+    }
+
+    private function getScriptTags(): string
+    {
+        if ([] === $this->scripts) {
+            return '';
+        }
+
+        $tags = [];
+
+        foreach ($this->scripts as $script) {
+            $tags[] = $script->toHtmlTag();
+        }
+
+        return \implode("\n    ", $tags);
     }
 
     private function getHeadHtml(): string

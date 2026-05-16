@@ -60,6 +60,24 @@ final class PageContextTest extends TestCase
         self::assertNull((new PageContext([], '/'))->getAction('missing'));
     }
 
+    public function testGetScriptsDefaultsToEmpty(): void
+    {
+        self::assertSame([], (new PageContext())->getScripts());
+    }
+
+    public function testJsRegistersScriptsInCallOrderWithFlags(): void
+    {
+        $context = new PageContext();
+        $context->js('/a.js');
+        $context->js('/b.js', defer: true, module: true);
+
+        $scripts = $context->getScripts();
+
+        self::assertCount(2, $scripts);
+        self::assertSame('<script src="/a.js"></script>', $scripts[0]->toHtmlTag());
+        self::assertSame('<script src="/b.js" type="module" defer></script>', $scripts[1]->toHtmlTag());
+    }
+
     public function testRedirectThrowsWithDefault303Status(): void
     {
         $context = new PageContext([], '/users');

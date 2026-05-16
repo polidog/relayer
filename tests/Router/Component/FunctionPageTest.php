@@ -38,6 +38,20 @@ final class FunctionPageTest extends TestCase
         self::assertSame($cache, $page->getCache());
     }
 
+    public function testGetScriptsPassesThroughContext(): void
+    {
+        $context = new PageContext();
+        $context->js('/chart.js', defer: true);
+
+        $page = new FunctionPage(
+            static fn () => self::fail('render should not run'),
+            $context,
+            '/test',
+        );
+
+        self::assertSame($context->getScripts(), $page->getScripts());
+    }
+
     public function testRenderInvokesFactoryClosure(): void
     {
         $element = new Element('p', [], ['hello']);
