@@ -8,7 +8,9 @@
 - Next.js App Router 風のファイルベースルーター (`src/Pages/page.psx`,
   `layout.psx`, 動的セグメント, エラーページ)
 - ファイルベースの JSON API ルート (`src/Pages/.../route.php`) —
-  HTTP メソッド別のハンドラマップ、戻り値を JSON 化
+  HTTP メソッド別のハンドラマップ、各ハンドラは `Response` を返す
+  (`Response::json()` / `text()` / `noContent()` / `redirect()`)。
+  `OPTIONS` / `HEAD` は Next.js Route Handlers と同じく自動合成
 - ページ／レイアウト単位の外部スクリプト (`$ctx->js()` /
   `PageComponent::addJs()` / `LayoutComponent::addJs()`) — バンドルの後、
   宣言順に `<body>` 末尾へ出力
@@ -274,9 +276,13 @@ src/Pages/
 
 `route.php` は、ページをレンダリングする代わりに JSON を返すエンドポイント
 です。HTTP メソッドをキーにしたマップを返し、各ハンドラは関数型ページの
-ファクトリと全く同じ方式でオートワイヤされます（`PageContext` / `Request` /
-`Identity` / コンテナのサービスを型で注入）。戻り値がそのままレスポンスに
-なり、レイアウトや HTML パイプラインは一切通りません。
+ファクトリと全く同じ方式でオートワイヤされ（`PageContext` / `Request` /
+`Identity` / コンテナのサービスを型で注入）、`Response` を返します。
+レイアウトや HTML パイプラインは一切通りません。これは Next.js の Route
+Handlers（メソッド別ハンドラ＋`Response` オブジェクト）を PHP に合わせた
+ものです。`route.php` は毎リクエスト `require` され宣言フリー契約のため
+トップレベルの `function GET()` は採れず、マップ形式を維持します。一方
+オートワイヤはページの引数解決と一貫するため踏襲します。
 
 ```php
 <?php
@@ -285,12 +291,13 @@ declare(strict_types=1);
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\Response;
 
 return [
-    'GET'  => fn (UserRepository $users): array => ['users' => $users->all()],
-    'POST' => function (Request $req, UserRepository $users): array {
+    'GET'  => fn (UserRepository $users): Response => Response::json(['users' => $users->all()]),
+    'POST' => function (Request $req, UserRepository $users): Response {
         $users->create($req->allPost());
-        return ['ok' => true];
+        return Response::json(['ok' => true], 201);
     },
 ];
 ```
@@ -298,13 +305,16 @@ return [
 - ページと同じ `src/Pages/` 配下に置き、動的セグメント `[param]` も同じ規約
   （`$ctx->params['id']` で取得）。1 ディレクトリはページ **か** ルートの
   どちらか一方（両方あるとスキャナがエラーにします）。
-- 戻り値は `Content-Type: application/json` で JSON 化されます。`null` は
-  `204 No Content`。エラー時は先にステータスを設定して本文を返せば
-  （`\http_response_code(404); return ['error' => '…'];`）、そのステータスが
-  そのまま使われます。
-- ハンドラの無いメソッドへのリクエストは `405 Method Not Allowed` と
-  `Allow` ヘッダになります。`HEAD` / `OPTIONS` は自動生成しません — 必要な
-  ルートには明示的に定義してください。
+- ハンドラは **必ず `Response` を返します**。`Response::json($data,
+  $status, $headers)`（JSON 化＋`Content-Type: application/json`、スラッシュ
+  ／ユニコードは非エスケープ）、`Response::text()`、`Response::noContent()`
+  （既定は本文なしの `204`）、`Response::redirect($location, $status)`、
+  生ボディ用の `Response::make()` で生成します。ステータスとヘッダは常に
+  明示 — 生データを返す経路はなく、それ以外を返すと即サーバエラーです。
+- `OPTIONS` / `HEAD` は Next.js に合わせて自動合成します。未定義の
+  `OPTIONS` は `204` ＋ `Allow`、未定義の `HEAD` は `GET` ハンドラを実行し
+  本文を落とします。どちらも明示的に定義すればそちらが優先。ハンドラの無い
+  （かつ合成対象でもない）メソッドは `405` ＋ `Allow`（JSON 本文）。
 - `route.php` はマップを `return` するだけにしてください（クラス／関数定義
   を置かない）。リクエストごとに再評価されます。
 - 認証はページと同じ `$ctx->requireAuth()` / `Identity` の仕組みですが、

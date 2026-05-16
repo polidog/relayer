@@ -211,19 +211,26 @@ final class Scaffold
             ## API routes — `route.php`
 
             ```php
+            use Polidog\Relayer\Http\Response;
+
             return [
-                'GET'  => fn (MyRepo $r) => $r->all(),          // -> JSON
-                'POST' => fn (Request $req) => ['ok' => true],
+                'GET'  => fn (MyRepo $r) => Response::json($r->all()),
+                'POST' => fn (Request $req) => Response::json(['ok' => true], 201),
             ];
             ```
 
             Keys are HTTP methods (case-insensitive), values are autowired
-            closures (same resolver as pages). Return value -> JSON; `null`
-            -> `204`; a handler may set `\http_response_code()` first and it
-            passes through; unknown method -> `405` + `Allow`; an auth
-            failure -> JSON `401`/`403`. The file must **only return the
-            map** (no class/function declarations — re-evaluated per
-            request).
+            closures (same resolver as pages). A handler **must return a
+            `Response`**: `Response::json($data, $status)` /
+            `Response::text()` / `Response::noContent()` /
+            `Response::redirect()` — status and headers are always explicit
+            (there is no raw-data return path). `OPTIONS` and `HEAD` are
+            synthesized when not declared (undeclared `OPTIONS` -> `204` +
+            `Allow`; undeclared `HEAD` runs `GET` without the body); an
+            explicit handler for either wins. Unknown method -> `405` +
+            `Allow` (JSON). An auth failure -> JSON `401`/`403`. The file
+            must **only return the map** (no class/function declarations —
+            re-evaluated per request).
 
             ## Middleware — `src/Pages/middleware.php` (optional)
 
@@ -270,8 +277,9 @@ final class Scaffold
             - Put both a page and `route.php` in one directory.
             - Read superglobals in pages/handlers — take the `Request`.
             - Declare classes/functions in `route.php` / `middleware.php`.
-            - Hand-roll CORS, or invent a Response object for API routes
-              (return data; the framework encodes it).
+            - Return raw data from a `route.php` handler — return a
+              `Response` (`Response::json(...)`); raw data is a hard error.
+            - Hand-roll CORS — use the provided `Cors` middleware.
             - Hand-edit `extra.relayer.structure_version` in composer.json.
 
             MD;

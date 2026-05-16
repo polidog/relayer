@@ -6,7 +6,7 @@ namespace Polidog\Relayer\React;
 
 use InvalidArgumentException;
 use JsonException;
-use Polidog\Relayer\Router\Api\ApiResponder;
+use Polidog\Relayer\Http\Response;
 use Polidog\UsePhp\Runtime\Element;
 use RuntimeException;
 use stdClass;
@@ -47,9 +47,10 @@ use stdClass;
 final class Island
 {
     /**
-     * Slashes and unicode are left unescaped to match {@see ApiResponder}
-     * — the framework's other JSON surface — so payloads read the same
-     * everywhere. The value lands in a `data-*` attribute, which usePHP's
+     * Slashes and unicode are left unescaped to match
+     * {@see Response} — the framework's other JSON
+     * surface — so payloads read the same everywhere. The value lands in a
+     * `data-*` attribute, which usePHP's
      * renderer escapes with `htmlspecialchars(ENT_QUOTES)`; the browser
      * reverses that before `JSON.parse`, so the round-trip is exact and
      * the attribute can't break out of its context.

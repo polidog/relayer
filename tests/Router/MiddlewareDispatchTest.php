@@ -18,7 +18,8 @@ final class MiddlewareDispatchTest extends TestCase
         \mkdir($this->workDir . '/ping', 0o777, true);
         \file_put_contents(
             $this->workDir . '/ping/route.php',
-            "<?php\n\nreturn ['GET' => static fn (): array => ['pong' => true]];\n",
+            "<?php\n\nuse Polidog\\Relayer\\Http\\Response;\n\n"
+            . "return ['GET' => static fn (): Response => Response::json(['pong' => true])];\n",
         );
         \http_response_code(200);
         $_POST = [];
