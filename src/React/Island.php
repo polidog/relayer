@@ -117,15 +117,17 @@ final class Island
      * function your bundle registered for that name. Registration and DOM
      * order are interchangeable: whichever happens second mounts the rest.
      *
-     * Note: this is an inline script. Under a strict `script-src` CSP add a
-     * nonce or write the returned markup to a file and serve it instead —
-     * the contract (`window.relayerIslands.register`) is identical either
-     * way.
+     * It is an inline script. Under a strict `script-src` CSP pass the
+     * request's `$nonce` and it is emitted as `<script nonce="…">`; the
+     * contract (`window.relayerIslands.register`) is unchanged.
      */
-    public static function loaderScript(): string
+    public static function loaderScript(?string $nonce = null): string
     {
-        return <<<'HTML'
-            <script>
+        $open = null === $nonce
+            ? '<script>'
+            : \sprintf('<script nonce="%s">', \htmlspecialchars($nonce, \ENT_QUOTES, 'UTF-8'));
+
+        $js = <<<'JS'
             (function () {
               if (window.relayerIslands) return;
               var registry = {};
@@ -186,7 +188,8 @@ final class Island
                 }
               }).observe(document.documentElement, { childList: true, subtree: true });
             })();
-            </script>
-            HTML;
+            JS;
+
+        return $open . "\n" . $js . "\n</script>";
     }
 }

@@ -98,4 +98,25 @@ final class IslandTest extends TestCase
             self::assertStringContainsString($needle, $script);
         }
     }
+
+    public function testLoaderScriptEmitsNonceWhenProvided(): void
+    {
+        $script = Island::loaderScript('r4nd0m-Nonce_=');
+
+        self::assertStringStartsWith('<script nonce="r4nd0m-Nonce_=">', $script);
+        self::assertStringEndsWith('</script>', \trim($script));
+        // Same JS body either way — only the opening tag changes.
+        self::assertStringContainsString('window.relayerIslands', $script);
+    }
+
+    public function testLoaderScriptNonceIsAttributeEscaped(): void
+    {
+        $script = Island::loaderScript('a"><script>alert(1)</script>');
+
+        self::assertStringContainsString(
+            '<script nonce="a&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;">',
+            $script,
+        );
+        self::assertStringNotContainsString('nonce="a"><script>alert(1)', $script);
+    }
 }

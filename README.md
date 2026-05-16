@@ -351,11 +351,12 @@ window.relayerIslands.register('Chart', (el, props) => {
   needs from the server afterwards, `fetch` your JSON API routes
   (`route.php`) — there is no separate island↔server channel.
 - Names must be plain identifiers; non-encodable props raise a clear error.
-- Two intentional residuals: there is **no SSR** (client render only — the
+- One intentional residual: there is **no SSR** (client render only — the
   mount node is empty until hydration; render a loading state inside your
-  component), and `loaderScript()` is an **inline** `<script>` (under a
-  strict `script-src` CSP add a nonce or serve it from a file — the
-  `window.relayerIslands.register` contract is identical either way).
+  component). `loaderScript()` is an inline `<script>`; under a strict
+  `script-src` CSP pass `loaderScript($nonce)` and it is emitted as
+  `<script nonce="…">` (the `window.relayerIslands.register` contract is
+  unchanged).
 
 ## Server Actions (form / CSRF-protected)
 

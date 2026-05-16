@@ -353,11 +353,12 @@ window.relayerIslands.register('Chart', (el, props) => {
   JSON API ルート（`route.php`）を `fetch` してください — 別途
   アイランド↔サーバのチャネルはありません。
 - 名前は素の識別子のみ。JSON 化できない props は明確なエラーになります。
-- 意図的な残課題が 2 つ: **SSR はなし**（クライアント描画のみ。マウント
+- 意図的な残課題は 1 つ: **SSR はなし**（クライアント描画のみ。マウント
   ノードはハイドレートまで空なので、ローディング表示はコンポーネント内で
-  描画）、`loaderScript()` は **インライン** `<script>`（厳格な
-  `script-src` CSP 下では nonce を付けるかファイルから配信。
-  `window.relayerIslands.register` の契約はどちらでも同一）。
+  描画）。`loaderScript()` は インライン `<script>` で、厳格な
+  `script-src` CSP 下では `loaderScript($nonce)` を渡せば
+  `<script nonce="…">` で出力されます（`window.relayerIslands.register`
+  の契約は不変）。
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 
