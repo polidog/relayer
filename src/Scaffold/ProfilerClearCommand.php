@@ -12,15 +12,17 @@ use Polidog\Relayer\Relayer;
  * `relayer profiler:clear` — delete the dev profiler's stored profiles.
  *
  * The profiler persists one JSON document per request as
- * `var/cache/profiler/{token}.json` (see {@see FileProfilerStorage}
- * and the dev wiring in {@see Relayer}). This command wipes
- * those so `/_profiler` starts from a clean slate.
+ * `{token}.json` under {@see Relayer::PROFILER_CACHE_DIR} (the dev wiring
+ * in {@see Relayer} binds {@see FileProfilerStorage} to that same path).
+ * This command clears off the very same constant so the written and the
+ * cleared directory cannot drift. It wipes those files so `/_profiler`
+ * starts from a clean slate.
  *
  * Same testable shape as {@see InitCommand} / {@see RoutesCommand} — injected
  * line writer and cwd, no STDOUT/chdir coupling.
  *
  * Idempotent and conservative by contract:
- *  - a missing `var/cache/profiler` is success (nothing to clear), not an
+ *  - a missing cache directory is success (nothing to clear), not an
  *    error — re-running is always safe,
  *  - only `*.json` files are removed (exactly the shape the storage writes);
  *    the directory itself and any other files a user dropped in are left
@@ -44,10 +46,15 @@ final class ProfilerClearCommand
         };
 
         $root = \rtrim('' !== (string) $cwd ? (string) $cwd : (\getcwd() ?: '.'), '/');
-        $dir = $root . '/var/cache/profiler';
+        // Same path the dev wiring binds FileProfilerStorage to — off the
+        // one constant so the cleared dir and the written dir cannot drift.
+        $dir = $root . '/' . Relayer::PROFILER_CACHE_DIR;
 
         if (!\is_dir($dir)) {
-            $write('Profiler cache is already empty (var/cache/profiler not present).');
+            $write(\sprintf(
+                'Profiler cache is already empty (%s not present).',
+                Relayer::PROFILER_CACHE_DIR,
+            ));
 
             return 0;
         }
@@ -82,7 +89,7 @@ final class ProfilerClearCommand
             return 1;
         }
 
-        $write(\sprintf('Removed %d profile(s) from var/cache/profiler.', $removed));
+        $write(\sprintf('Removed %d profile(s) from %s.', $removed, Relayer::PROFILER_CACHE_DIR));
 
         return 0;
     }
