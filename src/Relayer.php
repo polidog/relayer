@@ -70,18 +70,29 @@ final class Relayer
         $appDir = $projectRoot . '/src/Pages';
         $isDev = self::isDev();
 
+        // Pin the page-PSX cache to <projectRoot>/var/cache/psx — the same
+        // base buildUsePhp() passes to PsxComponentRegistrar::configure() for
+        // the component manifest, and the same default
+        // `vendor/bin/usephp compile` writes to. AppRouter's own default
+        // derives this from dirname($appDir), which for the
+        // standard `src/Pages` layout resolves one level short
+        // (<root>/src/var/cache/psx), splitting the cache and defeating
+        // precompilation. Passing it explicitly keeps both caches in one
+        // place. See https://github.com/polidog/relayer/issues/21
+        $psxCacheDir = $projectRoot . '/var/cache/psx';
+
         // Dev: swap in TraceableAppRouter so dispatch lifecycle events
         // land in the container-bound Profiler. Prod stays on the plain
         // AppRouter and the Traceable* class is never autoloaded.
         if ($isDev) {
-            $traceable = new TraceableAppRouter($appDir, autoCompilePsx: true);
+            $traceable = new TraceableAppRouter($appDir, autoCompilePsx: true, psxCacheDir: $psxCacheDir);
             $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
             if ([] !== $extraExcludes) {
                 $traceable->setExcludedPrefixes($extraExcludes);
             }
             $router = $traceable;
         } else {
-            $router = AppRouter::create($appDir);
+            $router = AppRouter::create($appDir, psxCacheDir: $psxCacheDir);
         }
         $router->setContainer($psr);
 
