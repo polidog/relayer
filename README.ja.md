@@ -49,9 +49,13 @@ framework を require した後、プロジェクトルートで実行します:
 ```bash
 composer require polidog/relayer
 vendor/bin/relayer init
-composer dump-autoload
+composer install
 php -S 127.0.0.1:8000 -t public
 ```
+
+`dump-autoload` ではなく `composer install` を使うのは、`App\` の autoload と
+`init` が追加した publish スクリプトの両方を効かせるためです（後者が
+`public/usephp.js` を生成し、既定ドキュメントがこれを参照します）。
 
 冪等かつ非破壊です:
 

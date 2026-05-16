@@ -92,8 +92,13 @@ final class Scaffold
             # value) is treated as production.
             APP_ENV=dev
 
-            # Set DATABASE_DSN to auto-wire the Db layer, e.g.:
-            # DATABASE_DSN=sqlite:%kernel.project_dir%/var/app.db
+            # Set DATABASE_DSN to auto-wire the Db layer. It is passed
+            # straight to PDO (no %placeholder% expansion), e.g.:
+            # DATABASE_DSN=mysql:host=127.0.0.1;dbname=app
+            # DATABASE_USER=app
+            # DATABASE_PASSWORD=secret
+            # SQLite needs an ABSOLUTE path — PDO resolves a relative DSN
+            # path against the process cwd: DATABASE_DSN=sqlite:/srv/app/var/app.db
             # Set USEPHP_SNAPSHOT_SECRET in production if any page serializes
             # snapshot state (a long random string).
 

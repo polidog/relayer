@@ -46,9 +46,13 @@ it from your project root after requiring the framework:
 ```bash
 composer require polidog/relayer
 vendor/bin/relayer init
-composer dump-autoload
+composer install
 php -S 127.0.0.1:8000 -t public
 ```
+
+`composer install` (rather than `dump-autoload`) so the `App\` autoload
+*and* the publish scripts `init` just added both apply — the latter emits
+`public/usephp.js`, which the default document references.
 
 It is idempotent and non-destructive:
 

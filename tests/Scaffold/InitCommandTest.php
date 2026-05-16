@@ -115,6 +115,92 @@ final class InitCommandTest extends TestCase
             ['structure_version' => Scaffold::STRUCTURE_VERSION],
             $extra['relayer'],
         );
+
+        // The atomic write must not leave its sibling temp file behind.
+        $leftovers = \glob($this->project . '/composer.json.relayer-tmp-*');
+        self::assertSame([], false === $leftovers ? [] : $leftovers);
+
+        self::assertStringContainsString('composer install', $this->captured());
+    }
+
+    public function testRefusesWhenAppIsMappedOutsideSrc(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'autoload' => ['psr-4' => ['App\\' => 'lib/']],
+        ]);
+        $before = (string) \file_get_contents($this->project . '/composer.json');
+
+        $status = InitCommand::run(['init'], $this->capture(), $this->project);
+
+        self::assertSame(1, $status);
+        self::assertStringContainsString('maps "App\" to "lib/", not "src/"', $this->captured());
+        // Non-destructive: nothing written, composer.json untouched.
+        self::assertFileDoesNotExist($this->project . '/public/index.php');
+        self::assertSame($before, (string) \file_get_contents($this->project . '/composer.json'));
+    }
+
+    public function testAcceptsAnExistingAppMappingThatAlreadyPointsAtSrc(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'autoload' => ['psr-4' => ['App\\' => 'src/']],
+        ]);
+
+        $status = InitCommand::run(['init'], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+
+        $composer = $this->readComposer();
+        $autoload = $composer['autoload'];
+        self::assertIsArray($autoload);
+        self::assertSame(['App\\' => 'src/'], $autoload['psr-4']);
+    }
+
+    public function testDoesNotAdvanceAnExistingStructureVersionMarker(): void
+    {
+        // A project scaffolded against an older layout records its own
+        // version; a later `init` (after upgrading the framework) must
+        // leave that marker alone so `upgrade` still sees the real shape.
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'extra' => ['relayer' => ['structure_version' => 0]],
+        ]);
+
+        $status = InitCommand::run(['init'], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+
+        $composer = $this->readComposer();
+        $extra = $composer['extra'];
+        self::assertIsArray($extra);
+        self::assertSame(
+            ['structure_version' => 0],
+            $extra['relayer'],
+            'init must never advance an existing structure_version',
+        );
+        self::assertStringNotContainsString('structure_version', $this->captured());
+    }
+
+    public function testRejectsAJsonArrayComposerFile(): void
+    {
+        \file_put_contents($this->project . '/composer.json', '["x"]');
+
+        $status = InitCommand::run(['init'], $this->capture(), $this->project);
+
+        self::assertSame(1, $status);
+        self::assertStringContainsString('does not contain a JSON object', $this->captured());
+        self::assertFileDoesNotExist($this->project . '/public/index.php');
+    }
+
+    public function testAcceptsAnEmptyJsonObject(): void
+    {
+        \file_put_contents($this->project . '/composer.json', '{}');
+
+        $status = InitCommand::run(['init'], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        self::assertFileExists($this->project . '/public/index.php');
     }
 
     public function testIsIdempotentOnReRun(): void
@@ -151,23 +237,6 @@ final class InitCommandTest extends TestCase
             \file_get_contents($this->project . '/src/Pages/page.psx'),
         );
         self::assertStringContainsString('= src/Pages/page.psx', $this->captured());
-    }
-
-    public function testKeepsAnExistingAppAutoloadMapping(): void
-    {
-        $this->writeComposer([
-            'name' => 'acme/app',
-            'autoload' => ['psr-4' => ['App\\' => 'lib/']],
-        ]);
-
-        $status = InitCommand::run(['init'], $this->capture(), $this->project);
-
-        self::assertSame(0, $status);
-
-        $composer = $this->readComposer();
-        $autoload = $composer['autoload'];
-        self::assertIsArray($autoload);
-        self::assertSame(['App\\' => 'lib/'], $autoload['psr-4'], 'a user App\ mapping must be left intact');
     }
 
     public function testAppendsPublisherWithoutClobberingExistingScripts(): void
