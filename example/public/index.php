@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Polidog\Relayer\React\Island;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Document\HtmlDocument;
 
@@ -42,7 +43,14 @@ $document = HtmlDocument::create()
     ->disableDefaultStyles()
     ->addHeadHtml('<script src="https://cdn.tailwindcss.com"></script>')
     ->addHeadHtml('<style>body{font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}</style>')
-    ->addHeadHtml($clearDeferOnAuth);
+    ->addHeadHtml($clearDeferOnAuth)
+    // React islands: the framework's tiny React-agnostic loader, then the
+    // bundle. In a real Option-B app `islands.js` is your vite/esbuild
+    // output with React bundled in; here it is a hand-written, no-build
+    // stand-in (it pulls React from a CDN only so the example needs no npm)
+    // so the example stays Node-free while showing the real contract.
+    ->addHeadHtml(Island::loaderScript())
+    ->addHeadHtml('<script type="module" src="/islands.js"></script>');
 
 Relayer::boot(__DIR__ . '/..')
     ->setDocument($document)

@@ -9,6 +9,8 @@ Opinionated, batteries-included framework on top of
   `layout.psx`, dynamic segments, error pages)
 - File-based JSON API routes (`src/Pages/.../route.php`) — a method-keyed
   map of autowired handlers, return value → JSON
+- React islands (`Island::mount()`) — a rich-UI escape hatch: server-rendered
+  shell, client React component, props from PHP, your own bundle
 - CSRF-protected server actions (`$ctx->action()` /
   `PageComponent::action()` dispatch form posts to in-page handlers)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -294,6 +296,67 @@ return [
   not the HTML-login `302` pages emit. A handler calling `$ctx->redirect()`
   itself still produces a `Location` response (a deliberate handler
   action, not an auth gate).
+
+### React Islands (rich-UI escape hatch)
+
+When a page genuinely needs a rich client UI the server-rendered
+defer/partial model can't express, mount a real React component as an
+*island*: the server still owns the page, one node is handed to React with
+initial props from PHP.
+
+```php
+<?php
+// src/Pages/dashboard/page.psx
+declare(strict_types=1);
+
+use Polidog\Relayer\React\Island;
+use Polidog\Relayer\Router\Component\PageContext;
+
+return fn (PageContext $ctx) => (
+    <section>
+        <h1>Dashboard</h1>
+        {Island::mount('Chart', ['points' => $ctx->params])}
+    </section>
+);
+```
+
+`Island::mount()` renders
+`<div data-react-island="Chart" data-react-props='…'></div>`. Add the
+framework's tiny, React-agnostic loader once via the document, then your
+bundle:
+
+```php
+$document->addHeadHtml(Island::loaderScript());
+$document->addHeadHtml('<script type="module" src="/islands.js"></script>');
+```
+
+You own `islands.js` — build it with your own toolchain (vite / esbuild),
+with React bundled in. The contract is one call:
+
+```js
+import { createRoot } from 'react-dom/client';
+import Chart from './islands/Chart';
+
+window.relayerIslands.register('Chart', (el, props) => {
+    createRoot(el).render(<Chart {...props} />);
+});
+```
+
+- The framework provides **only** the PHP primitive and the loader — it
+  stays Node-free. React, JSX, and bundling are yours. The loader finds
+  islands (including ones swapped in by usePHP defer/partial, via a
+  `MutationObserver`), parses props, and calls your registered mount fn;
+  registration and DOM order are interchangeable.
+- Props flow **one way** (PHP → initial props). For anything the island
+  needs from the server afterwards, `fetch` your JSON API routes
+  (`route.php`) — there is no separate island↔server channel.
+- Names must be plain identifiers; non-encodable props raise a clear error.
+- One intentional residual: there is **no SSR** (client render only — the
+  mount node is empty until hydration; render a loading state inside your
+  component). `loaderScript()` is an inline `<script>`; under a strict
+  `script-src` CSP pass `loaderScript($nonce)` and it is emitted as
+  `<script nonce="…">` (the `window.relayerIslands.register` contract is
+  unchanged).
 
 ## Server Actions (form / CSRF-protected)
 
