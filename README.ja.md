@@ -11,6 +11,8 @@
   HTTP メソッド別のハンドラマップ、戻り値を JSON 化
 - React アイランド (`Island::mount()`) — リッチ UI 用の脱出ハッチ。
   サーバ描画シェル＋クライアント React、props は PHP から、バンドルは自前
+- 任意のルートミドルウェア (`src/Pages/middleware.php`) が全ディスパッチを
+  ラップ。同梱の `Cors` ミドルウェアも提供
 - CSRF 保護付きサーバアクション（`$ctx->action()` /
   `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -359,6 +361,69 @@ window.relayerIslands.register('Chart', (el, props) => {
   `script-src` CSP 下では `loaderScript($nonce)` を渡せば
   `<script nonce="…">` で出力されます（`window.relayerIslands.register`
   の契約は不変）。
+
+### ミドルウェア
+
+任意のルート直下 `src/Pages/middleware.php` が、すべての page/route
+ディスパッチをラップします。`fn(Request $request, Closure $next)`
+クロージャを 1 つ `return` し、`$next($request)` を呼べばマッチした
+ルートへ進み、**呼ばなければ**短絡します（CORS プリフライト・レート制限・
+メンテナンスモード等）:
+
+```php
+<?php
+// src/Pages/middleware.php
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Request;
+
+return function (Request $request, Closure $next): void {
+    if (null === $request->header('x-api-key')) {
+        \http_response_code(401);
+        echo '{"error":"missing api key"}';
+        return; // ルートは実行されない
+    }
+    $next($request);
+};
+```
+
+- クロージャ 1 本。チェーンランナーは持ちません（設計）。複数走らせたい
+  ときは手で合成: `fn ($r, $next) => $a($r, fn ($r) => $b($r, $next))`。
+- リクエストごとに `require`（`route.php` 同様、宣言を置かない契約）。
+  クロージャ以外を返すと明確なエラー。フレームワークの defer/profiler
+  エンドポイントは意図的にこの外で動きます。
+
+**CORS** は同梱ミドルウェアとして提供 — 提供実装は 1 個で、別系統では
+ありません:
+
+```php
+<?php
+// src/Pages/middleware.php
+use Polidog\Relayer\Http\Cors;
+
+return Cors::middleware([
+    'origins' => ['https://app.example.com'], // または ['*']
+    // methods / headers / credentials / maxAge は任意
+]);
+```
+
+`OPTIONS` プリフライトには自身が `204` で応答し、実リクエストには
+`Access-Control-Allow-Origin` を付与します。`credentials: true` と
+`origins: ['*']` の併用時はリクエスト Origin を反映します（仕様上 `*` と
+credentials は併用不可のため）。
+
+### ルート確認
+
+`vendor/bin/relayer routes` は、ルーターと同じスキャナで `src/Pages`
+配下に検出される全ルート（page と `route.php` をメソッド付きで）を表示
+します:
+
+```
+METHODS    PATH            TYPE  FILE
+GET        /               page  src/Pages/page.psx
+GET,POST   /api/users      api   src/Pages/api/users/route.php
+GET        /users/[id]     page  src/Pages/users/[id]/page.psx
+```
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 

@@ -32,7 +32,8 @@ final class InitCommand
         Relayer scaffolder
 
         Usage:
-          relayer init     scaffold the project structure in the current directory
+          relayer init       scaffold the project structure in the current directory
+          relayer routes     list the routes discovered under src/Pages
 
         Run inside a project that has already required the framework
         (`composer require polidog/relayer`). Existing files are left
@@ -58,6 +59,10 @@ final class InitCommand
             $write(self::USAGE);
 
             return null === $command ? 2 : 0;
+        }
+
+        if ('routes' === $command) {
+            return RoutesCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('init' !== $command) {

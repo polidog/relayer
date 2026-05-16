@@ -149,7 +149,7 @@ class AppRouter
         // Build a snapshot of the request once per dispatch and stash it so
         // page factories / page constructors can be injected with it by type
         // — pages should never read $_GET / $_POST / $_SERVER directly.
-        $this->currentRequest = Request::fromGlobals();
+        $request = $this->currentRequest = Request::fromGlobals();
         if ($this->container instanceof InjectorContainer) {
             $this->container->setCurrentRequest($this->currentRequest);
         }
@@ -193,22 +193,41 @@ class AppRouter
                 }
             }
 
-            $path = $this->getRequestPath();
+            // The route dispatch — match + page/API handling + the
+            // Auth/Redirect translation. `$next` for the middleware.
+            $dispatch = function (Request $request): void {
+                // Honor the contract signature; lets a middleware swap in
+                // a request before dispatch (no-op for the usual same
+                // instance — Request is immutable, so this is forward-only).
+                $this->currentRequest = $request;
 
-            $match = $this->router->match($path);
+                $match = $this->router->match($this->getRequestPath());
 
-            if (null === $match) {
-                $this->handleNotFound();
+                if (null === $match) {
+                    $this->handleNotFound();
 
-                return;
-            }
+                    return;
+                }
 
-            try {
-                $this->handleMatch($match);
-            } catch (AuthorizationException $exception) {
-                $this->handleAuthorizationFailure($exception);
-            } catch (RedirectException $exception) {
-                $this->handleRedirect($exception);
+                try {
+                    $this->handleMatch($match);
+                } catch (AuthorizationException $exception) {
+                    $this->handleAuthorizationFailure($exception);
+                } catch (RedirectException $exception) {
+                    $this->handleRedirect($exception);
+                }
+            };
+
+            // Root `src/Pages/middleware.php` (optional) wraps dispatch. It
+            // may short-circuit by not calling `$next` (CORS preflight,
+            // rate-limit, …). Framework-owned endpoints (defer above, the
+            // dev profiler) deliberately run outside it.
+            $middleware = $this->loadMiddleware();
+
+            if (null !== $middleware) {
+                $middleware($request, $dispatch);
+            } else {
+                $dispatch($request);
             }
         } finally {
             if ($this->container instanceof InjectorContainer) {
@@ -328,6 +347,35 @@ class AppRouter
         }
 
         ApiResponder::emit($result);
+    }
+
+    /**
+     * Load the optional root middleware (`<appDir>/middleware.php`). The
+     * file `return`s a single `fn(Request $request, Closure $next)` closure
+     * — `require`d fresh each request (declaration-free, like `route.php`),
+     * so it must only return the closure. Absent file → no middleware.
+     *
+     * @return null|Closure(Request, Closure): void
+     */
+    protected function loadMiddleware(): ?Closure
+    {
+        $file = $this->appDirectory . '/middleware.php';
+
+        if (!\file_exists($file)) {
+            return null;
+        }
+
+        $returned = require $file;
+
+        if (!$returned instanceof Closure) {
+            throw new RuntimeException(\sprintf(
+                'Middleware %s must return a Closure(Request $request, Closure $next), %s returned.',
+                $file,
+                \get_debug_type($returned),
+            ));
+        }
+
+        return $returned;
     }
 
     protected function applyFunctionPageCache(FunctionPage $page): void

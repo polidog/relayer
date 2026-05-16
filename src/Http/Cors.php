@@ -1,0 +1,119 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Polidog\Relayer\Http;
+
+use Closure;
+
+/**
+ * A ready-made CORS middleware — the framework's one provided middleware,
+ * not a parallel subsystem. Wire it in `src/Pages/middleware.php`:
+ *
+ *   use Polidog\Relayer\Http\Cors;
+ *
+ *   return Cors::middleware(['origins' => ['https://app.example.com']]);
+ *
+ * To combine it with your own logic, compose the closures by hand (the
+ * middleware contract is a single `fn(Request, $next)` — there is no chain
+ * runner, by design):
+ *
+ *   $cors = Cors::middleware([...]);
+ *   return fn ($req, $next) => $cors($req, fn ($r) => $next($r));
+ *
+ * Defaults are conservative: no origins allowed until you list them (or
+ * pass `['*']`), no credentials. A preflight (`OPTIONS` carrying
+ * `Access-Control-Request-Method`) is answered with `204` and the request
+ * does NOT continue to the route; an actual request gets the
+ * `Access-Control-Allow-Origin` header and then proceeds.
+ */
+final class Cors
+{
+    /**
+     * @param array{
+     *     origins?: list<string>,
+     *     methods?: list<string>,
+     *     headers?: list<string>,
+     *     credentials?: bool,
+     *     maxAge?: int,
+     * } $config
+     *
+     * @return Closure(Request, Closure): void
+     */
+    public static function middleware(array $config = []): Closure
+    {
+        $origins = $config['origins'] ?? [];
+        $methods = $config['methods'] ?? ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+        $headers = $config['headers'] ?? ['Content-Type'];
+        $credentials = $config['credentials'] ?? false;
+        $maxAge = $config['maxAge'] ?? 600;
+
+        return static function (Request $request, Closure $next) use (
+            $origins,
+            $methods,
+            $headers,
+            $credentials,
+            $maxAge,
+        ): void {
+            $origin = $request->header('origin');
+
+            // Not a CORS request (no Origin) — nothing to add, just continue.
+            if (null === $origin) {
+                $next($request);
+
+                return;
+            }
+
+            $allowOrigin = self::resolveAllowedOrigin($origin, $origins, $credentials);
+
+            if (!\headers_sent() && null !== $allowOrigin) {
+                \header('Access-Control-Allow-Origin: ' . $allowOrigin);
+                // Any value other than a literal `*` is request-specific, so
+                // the response varies by Origin and must say so for caches.
+                if ('*' !== $allowOrigin) {
+                    \header('Vary: Origin', false);
+                }
+                if ($credentials) {
+                    \header('Access-Control-Allow-Credentials: true');
+                }
+            }
+
+            // Preflight: the browser's OPTIONS probe before the real request.
+            $isPreflight = 'OPTIONS' === $request->method
+                && null !== $request->header('access-control-request-method');
+
+            if ($isPreflight) {
+                if (!\headers_sent()) {
+                    \header('Access-Control-Allow-Methods: ' . \implode(', ', $methods));
+                    \header('Access-Control-Allow-Headers: ' . \implode(', ', $headers));
+                    \header('Access-Control-Max-Age: ' . $maxAge);
+                }
+                \http_response_code(204);
+
+                // Preflight is answered here; the route never runs.
+                return;
+            }
+
+            $next($request);
+        };
+    }
+
+    /**
+     * Decide the `Access-Control-Allow-Origin` value, or null when the
+     * request Origin is not allowed (the header is then omitted and the
+     * browser blocks the cross-origin read — same-origin still works).
+     *
+     * `*` cannot be combined with credentials per the CORS spec, so when
+     * credentials are on we reflect the concrete Origin instead of `*`.
+     *
+     * @param list<string> $origins
+     */
+    private static function resolveAllowedOrigin(string $origin, array $origins, bool $credentials): ?string
+    {
+        if (\in_array('*', $origins, true)) {
+            return $credentials ? $origin : '*';
+        }
+
+        return \in_array($origin, $origins, true) ? $origin : null;
+    }
+}
