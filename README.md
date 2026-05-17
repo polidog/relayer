@@ -176,7 +176,7 @@ the Next.js App Router. The conventions:
 | -------------------- | ------------------------------------------------------------------- |
 | `page.psx`           | Renders the route. One per directory.                               |
 | `layout.psx`         | Wraps every nested page; layouts stack from root to leaf.           |
-| `error.psx`          | 404 / unmatched-route fallback (root only).                         |
+| `error.psx`          | Error page for 404 / `$ctx->abort()` statuses (root only).          |
 | `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
 
@@ -267,8 +267,42 @@ src/Pages/
 
 ### Error pages
 
-A root `error.psx` (extending `ErrorPageComponent`) renders 404 responses
-inside the root layout. Without one, the framework emits a minimal default.
+A root `error.psx` (extending `ErrorPageComponent`) renders error responses
+inside the root layout — an unmatched route (404) and every `$ctx->abort()`
+status. It receives the status and message via `ErrorPageComponent`, so one
+`error.psx` can branch on `getStatusCode()` for a 404 vs. 403 vs. 500 page.
+Without one, the framework emits a minimal default document.
+
+### Control flow: `redirect()` / `notFound()` / `abort()`
+
+A page factory or action handler signals an HTTP outcome by **intent**,
+never by touching `http_response_code()` / `header()`. Each throws and
+unwinds — code after the call does not run — and the router turns it into
+the right response:
+
+| Call | Result |
+| ---- | ------ |
+| `$ctx->redirect($to, $status = 303)` | `Location` response. Default 303 See Other — correct after a POST (Post/Redirect/Get). |
+| `$ctx->notFound()` | `404` → `error.psx` / fallback. Alias for `abort(404)`. |
+| `$ctx->abort($status)` | Any `4xx`/`5xx` → `error.psx` with that status / fallback. Non-error codes throw `InvalidArgumentException`. |
+
+```php
+return function (PageContext $ctx) use ($posts): Closure {
+    $post = $posts->find($ctx->params['id']) ?? $ctx->notFound();
+    if ($post->isDraft && null === $ctx->user()) {
+        $ctx->abort(403);
+    }
+
+    return fn (): Element => <article>{$post->title}</article>;
+};
+```
+
+From a `route.php` handler these stay on the JSON surface: `notFound()` /
+`abort()` become a JSON error with that status (never the HTML error page),
+while `redirect()` still produces a content-type-neutral `Location`
+response. `http_response_code()` stays a framework internal — the one place
+you still set a status by hand is `middleware.php`, which has no
+`PageContext` (it runs before route dispatch).
 
 ### API Routes
 
@@ -318,9 +352,10 @@ return [
   it is re-evaluated every request.
 - Auth uses the same `$ctx->requireAuth()` / `Identity` mechanism as
   pages, but a failure is a JSON `401` (anonymous) or `403` (wrong role) —
-  not the HTML-login `302` pages emit. A handler calling `$ctx->redirect()`
-  itself still produces a `Location` response (a deliberate handler
-  action, not an auth gate).
+  not the HTML-login `302` pages emit. `$ctx->notFound()` / `$ctx->abort()`
+  likewise become a JSON error with that status (never the HTML error
+  page); `$ctx->redirect()` still produces a content-type-neutral
+  `Location` response (a deliberate handler action, not an error gate).
 
 ### Per-page scripts (`$ctx->js()` / `addJs()`)
 
@@ -536,10 +571,9 @@ use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Runtime\Element;
 
 return function (PageContext $ctx, UserRepository $users): Closure {
-    $save = $ctx->action('save', function (array $form) use ($users): void {
+    $save = $ctx->action('save', function (array $form) use ($users, $ctx): void {
         $users->create($form['name']);
-        \header('Location: /users', true, 303);
-        exit;
+        $ctx->redirect('/users'); // 303 Post/Redirect/Get; unwinds here
     });
 
     return function () use ($save, $users): Element {
@@ -592,10 +626,10 @@ the post-dispatch value in the renderer (the typical pairing with
 ```php
 return function (PageContext $ctx) use ($schema): Closure {
     $errors = [];
-    $save = $ctx->action('save', function (array $form) use ($schema, &$errors): void {
+    $save = $ctx->action('save', function (array $form) use ($schema, &$errors, $ctx): void {
         $result = $schema->safeParse($form);
         if (!$result->success) { $errors = $result->errors; return; }
-        // ... on success, PRG redirect (header('Location: ...', true, 303); exit;)
+        // ... on success: $ctx->redirect('/users') (303 Post/Redirect/Get)
     });
 
     // $errors is mutated after the action runs → capture by reference
@@ -736,8 +770,7 @@ return function (PageContext $ctx, Request $req): Closure {
             $errors['email'] = 'Invalid email';
         }
         if ([] === $errors) {
-            \header('Location: /thanks', true, 303);
-            exit;
+            $ctx->redirect('/thanks'); // 303 Post/Redirect/Get; unwinds here
         }
     }
 
@@ -860,7 +893,7 @@ use Polidog\UsePhp\Runtime\Element;
 return function (PageContext $ctx, Authenticator $auth): Closure {
     $error = null;
 
-    $login = $ctx->action('login', function (array $form) use ($auth, &$error): void {
+    $login = $ctx->action('login', function (array $form) use ($auth, &$error, $ctx): void {
         $identity = $auth->attempt(
             (string) ($form['email']    ?? ''),
             (string) ($form['password'] ?? ''),
@@ -872,8 +905,7 @@ return function (PageContext $ctx, Authenticator $auth): Closure {
             return;
         }
 
-        \header('Location: /dashboard', true, 303);
-        exit;
+        $ctx->redirect('/dashboard'); // 303 Post/Redirect/Get; unwinds here
     });
 
     return function () use ($login, $error): Element {
