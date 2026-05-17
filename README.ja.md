@@ -1344,6 +1344,97 @@ $db->transactional(function (Database $tx): void {
   として残ります。本番では Profiler は no-op なのでオーバーヘッドは
   ありません。
 
+## 外部 API フェッチ（HTTP クライアント）
+
+外部 Web API を叩くための、ext-curl の薄いラッパーです。`Database` 層と
+**同じデコレータ構成**——契約 → 具象 → dev トレース → リクエスト内
+キャッシュ——で、メソッドと URL を渡すと `HttpResponse` が返ります。
+ミドルウェアスタックも PSR-18 の間接層もありません。
+
+### 有効化
+
+`HttpClient` は **常に登録されます**。DB と違い必須設定がないため、
+`EtagStore` と同様どのページ／コンポーネントからでも依存として受け取れ、
+追加設定は不要です。タイムアウトは任意の環境変数で指定します:
+
+```
+HTTP_CLIENT_TIMEOUT=10           # 転送全体のタイムアウト・秒 (CURLOPT_TIMEOUT)
+HTTP_CLIENT_CONNECT_TIMEOUT=3    # 接続のみのタイムアウト・秒 (CURLOPT_CONNECTTIMEOUT)
+```
+
+未設定なら cURL の既定（無制限）のままです。
+
+### 使い方
+
+ページ／コンポーネントのコンストラクタで `HttpClient` を受け取ります:
+
+```php
+use Polidog\Relayer\Http\Client\HttpClient;
+
+final class WeatherPage extends PageComponent
+{
+    public function __construct(private readonly HttpClient $http) {}
+
+    public function render(): string
+    {
+        $res = $this->http->get('https://api.example.com/weather?city=tokyo', [
+            'Accept' => 'application/json',
+        ]);
+
+        if (!$res->ok()) {
+            // 4xx/5xx は例外ではなく通常の HttpResponse。status を見て分岐
+            return '取得できませんでした (' . $res->status . ')';
+        }
+
+        $data = $res->json();
+        // ...
+    }
+}
+```
+
+| メソッド                                          | 戻り値         |
+| ------------------------------------------------ | -------------- |
+| `get($url, $headers = [])`                       | `HttpResponse` |
+| `request($method, $url, $headers = [], $body = null)` | `HttpResponse` |
+
+`HttpResponse` は `status` / `headers` / `body`（公開プロパティ）に加えて、
+`ok()`（2xx 判定）、`json()`（JSON を PHP 値へデコード。オブジェクトは
+連想配列。非 JSON なら `HttpClientException`）、`header($name)`（大文字
+小文字を無視した単一
+ヘッダ取得）を持ちます。
+
+```php
+$res = $this->http->request(
+    'POST',
+    'https://api.example.com/orders',
+    ['Content-Type' => 'application/json'],
+    json_encode(['item' => 'book']),
+);
+```
+
+### 自動で得られるもの
+
+- **エラー** — トランスポート障害（DNS・接続・TLS・タイムアウト・本文
+  途絶）はすべて単一の `Polidog\Relayer\Http\Client\HttpClientException`
+  として送出されます。**4xx/5xx は例外ではなく**、`status` で判定する
+  通常の `HttpResponse` です（0 件の SELECT が `DatabaseException` に
+  ならないのと同じ考え方）。
+- **タイムアウト** — エンドポイントが詰まった場合、ワーカーをハングさせず
+  設定したタイムアウト内に `HttpClientException` として表面化します。
+- **リクエスト内キャッシュ** — 安全メソッド（`GET` / `HEAD`）の同一
+  リクエスト（同じ method + URL + ヘッダ）はリクエストの間プロセス内
+  キャッシュにヒットします。非安全メソッド（`POST` / `PUT` / `PATCH` /
+  `DELETE` …）はキャッシュされず、その前にキャッシュを**全フラッシュ**
+  します（`CachingDatabase` の `perform()` と同じ単純で安全な選択）。
+  リクエストスコープ限定で、TTL もクロスリクエスト共有もありません。
+  リダイレクトは追跡しません（3xx をそのまま返します）。
+- **Profiler**（dev）— 実際の往復はリクエストプロファイルに
+  `http.request` の計時スパンとして method・URL・status・バイト数付きで
+  記録され、キャッシュヒットは `http.cache_hit` マーカーとして残ります。
+  リクエストヘッダ／ボディは記録しません（`Authorization` 等の秘匿値が
+  プロファイルに残らないよう、`TraceableDatabase` がバインド値を伏せるのと
+  同じ方針）。本番では Profiler は no-op なのでオーバーヘッドはありません。
+
 ## バリデーション
 
 `Polidog\Relayer\Validation` は [Zod](https://zod.dev/)（TypeScript）に
@@ -1509,6 +1600,9 @@ $span->stop(['rows' => \count($result)]);
 | `Polidog\Relayer\Router\Routing\*`             | ページスキャナ / ルートテーブル / マッチャ                          |
 | `Polidog\Relayer\Db\Database`                  | 最小 SQL コントラクト（既定 `PdoDatabase`・キャッシュ・dev トレース）|
 | `Polidog\Relayer\Db\DatabaseException`         | DB 層が送出する単一の例外型                                          |
+| `Polidog\Relayer\Http\Client\HttpClient`       | 最小 HTTP コントラクト（既定 `CurlHttpClient`・キャッシュ・dev トレース）|
+| `Polidog\Relayer\Http\Client\HttpResponse`     | HTTP クライアントの戻り値（status / headers / body / json()）       |
+| `Polidog\Relayer\Http\Client\HttpClientException` | HTTP クライアント層が送出する単一の例外型                         |
 | `Polidog\Relayer\Http\Cache`                   | `#[Cache]` アトリビュート                                           |
 | `Polidog\Relayer\Http\CachePolicy`             | ヘッダー送出 + 条件付き GET 評価                                    |
 | `Polidog\Relayer\Http\EtagStore`               | 差し替え可能な ETag ストレージインターフェース                      |

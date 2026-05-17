@@ -1350,6 +1350,98 @@ stay traced and cached.
   you can see exactly how many round-trips memoization saved. In prod the
   profiler is a no-op, so there's no overhead.
 
+## Fetching external APIs (HTTP client)
+
+A thin ext-curl wrapper for calling external Web APIs. Same **decorator
+stack as the `Database` layer** — contract → concrete → dev tracing →
+request-scoped cache: pass a method and URL, get an `HttpResponse` back.
+No middleware stack, no PSR-18 indirection.
+
+### Enable it
+
+`HttpClient` is **always registered**. Unlike the DB it needs no required
+config, so (like the `EtagStore`) any page or component can take an
+`HttpClient` dependency with zero setup. Timeouts come from optional env
+vars:
+
+```
+HTTP_CLIENT_TIMEOUT=10           # whole-transfer timeout, seconds (CURLOPT_TIMEOUT)
+HTTP_CLIENT_CONNECT_TIMEOUT=3    # connect-only timeout, seconds (CURLOPT_CONNECTTIMEOUT)
+```
+
+Left unset, cURL's defaults (no limit) apply.
+
+### Use it
+
+Take an `HttpClient` dependency in a page or component constructor:
+
+```php
+use Polidog\Relayer\Http\Client\HttpClient;
+
+final class WeatherPage extends PageComponent
+{
+    public function __construct(private readonly HttpClient $http) {}
+
+    public function render(): string
+    {
+        $res = $this->http->get('https://api.example.com/weather?city=tokyo', [
+            'Accept' => 'application/json',
+        ]);
+
+        if (!$res->ok()) {
+            // 4xx/5xx is not an exception — a normal HttpResponse to branch on
+            return 'Could not fetch (' . $res->status . ')';
+        }
+
+        $data = $res->json();
+        // ...
+    }
+}
+```
+
+| Method                                             | Returns        |
+| -------------------------------------------------- | -------------- |
+| `get($url, $headers = [])`                         | `HttpResponse` |
+| `request($method, $url, $headers = [], $body = null)` | `HttpResponse` |
+
+`HttpResponse` exposes `status` / `headers` / `body` (public properties)
+plus `ok()` (2xx check), `json()` (decode the JSON body to a PHP value,
+objects as associative arrays; throws `HttpClientException` on non-JSON),
+and `header($name)` (case-insensitive
+single-header lookup).
+
+```php
+$res = $this->http->request(
+    'POST',
+    'https://api.example.com/orders',
+    ['Content-Type' => 'application/json'],
+    json_encode(['item' => 'book']),
+);
+```
+
+### What you get for free
+
+- **Errors** — every transport failure (DNS, connect, TLS, timeout,
+  truncated body) is thrown as a single
+  `Polidog\Relayer\Http\Client\HttpClientException`. A **4xx/5xx is not an
+  exception** — it's a normal `HttpResponse` you inspect via `status` (the
+  same way a SELECT returning zero rows is not a `DatabaseException`).
+- **Timeouts** — a stuck endpoint surfaces as an `HttpClientException`
+  within the configured timeout instead of hanging the worker.
+- **Request-scoped cache** — identical safe requests (`GET` / `HEAD` with
+  the same method + URL + headers) hit an in-process cache for the rest of
+  the request. Non-safe methods (`POST` / `PUT` / `PATCH` / `DELETE` …)
+  are never cached and **flush the whole cache** first — the same simple,
+  safe choice `CachingDatabase` makes for `perform()`. Request-scoped only
+  — no TTL, no cross-request sharing. Redirects are not followed (the 3xx
+  is returned as-is).
+- **Profiler** (dev) — every real round-trip is recorded as a timed
+  `http.request` span with method, URL, status and byte count; cache hits
+  show as `http.cache_hit` markers. Request headers and bodies are not
+  recorded, so an `Authorization` header or secret-bearing body never
+  lands in the profile (the same stance `TraceableDatabase` takes on bound
+  values). In prod the profiler is a no-op, so there's no overhead.
+
 ## Validation
 
 `Polidog\Relayer\Validation` is a schema validator inspired by
@@ -1517,6 +1609,9 @@ is always safe.
 | `Polidog\Relayer\Router\Routing\*`             | Page scanner, route table, matcher.                                    |
 | `Polidog\Relayer\Db\Database`                  | Minimal SQL contract (default: `PdoDatabase`, cached, dev-traced).     |
 | `Polidog\Relayer\Db\DatabaseException`         | The single error type the DB layer raises.                             |
+| `Polidog\Relayer\Http\Client\HttpClient`       | Minimal HTTP contract (default: `CurlHttpClient`, cached, dev-traced). |
+| `Polidog\Relayer\Http\Client\HttpResponse`     | HTTP client result (status / headers / body / json()).                 |
+| `Polidog\Relayer\Http\Client\HttpClientException` | The single error type the HTTP client layer raises.                 |
 | `Polidog\Relayer\Http\Cache`                   | `#[Cache]` attribute.                                                  |
 | `Polidog\Relayer\Http\CachePolicy`             | Header emission + conditional GET evaluation.                          |
 | `Polidog\Relayer\Http\EtagStore`               | Pluggable ETag storage interface.                                      |

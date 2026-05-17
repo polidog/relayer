@@ -27,6 +27,7 @@
     },
     "require": {
         "php": ">=8.5",
+        "ext-curl": "*",
         "polidog/use-php": "^0.7.0",
         "symfony/dependency-injection": "^7.1",
         "symfony/config": "^7.1",

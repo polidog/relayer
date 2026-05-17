@@ -17,6 +17,10 @@ use Polidog\Relayer\Db\CachingDatabase;
 use Polidog\Relayer\Db\Database;
 use Polidog\Relayer\Db\PdoDatabase;
 use Polidog\Relayer\Db\TraceableDatabase;
+use Polidog\Relayer\Http\Client\CachingHttpClient;
+use Polidog\Relayer\Http\Client\CurlHttpClient;
+use Polidog\Relayer\Http\Client\HttpClient;
+use Polidog\Relayer\Http\Client\TraceableHttpClient;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
 use Polidog\Relayer\Http\TraceableEtagStore;
@@ -431,6 +435,45 @@ final class Relayer
                 ->setPublic(true)
             ;
         }
+
+        // HTTP client. Always registered — unlike the DB, an outbound HTTP
+        // client needs no required config, so (like the EtagStore) any
+        // page/component can take an HttpClient dependency with zero setup.
+        // The HttpClient alias always resolves to CachingHttpClient
+        // (request-scoped memoization of safe requests); in dev it wraps
+        // TraceableHttpClient so real round-trips land in the profiler, in
+        // prod it wraps CurlHttpClient directly. Mirrors the Database stack.
+        $container->register(CurlHttpClient::class)
+            ->setArguments([
+                self::readEnvInt('HTTP_CLIENT_TIMEOUT'),
+                self::readEnvInt('HTTP_CLIENT_CONNECT_TIMEOUT'),
+            ])
+            ->setPublic(true)
+        ;
+
+        $httpCacheInner = new Reference(CurlHttpClient::class);
+
+        if (self::isDev()) {
+            $container->register(TraceableHttpClient::class)
+                ->setArguments([
+                    new Reference(CurlHttpClient::class),
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $httpCacheInner = new Reference(TraceableHttpClient::class);
+        }
+
+        $container->register(CachingHttpClient::class)
+            ->setArguments([
+                $httpCacheInner,
+                new Reference(Profiler::class),
+            ])
+            ->setPublic(true)
+        ;
+        $container->setAlias(HttpClient::class, CachingHttpClient::class)
+            ->setPublic(true)
+        ;
     }
 
     /**
