@@ -218,6 +218,8 @@ class AppRouter
                     $this->handleAuthorizationFailure($exception);
                 } catch (RedirectException $exception) {
                     $this->handleRedirect($exception);
+                } catch (HttpException $exception) {
+                    $this->handleHttpException($exception);
                 }
             };
 
@@ -507,12 +509,42 @@ class AppRouter
 
     protected function handleNotFound(): void
     {
-        \http_response_code(404);
+        $this->handleErrorResponse(404, 'Page not found');
+    }
+
+    /**
+     * Render an arbitrary HTTP error from `PageContext::abort()` /
+     * `notFound()`. `404` is routed back through {@see handleNotFound()} so
+     * the single overridable 404 path stays unified (the dev profiler hooks
+     * it there); every other status goes straight to the shared error
+     * renderer with its standard reason phrase.
+     */
+    protected function handleHttpException(HttpException $exception): void
+    {
+        if (404 === $exception->status) {
+            $this->handleNotFound();
+
+            return;
+        }
+
+        $this->handleErrorResponse($exception->status, $exception->reason);
+    }
+
+    /**
+     * The shared error path: set the status, then render the project's
+     * `error.psx` (wrapped in the root layout, receiving the status/message
+     * via {@see ErrorPageComponent}) or fall back to the built-in error
+     * document. This is the only place the page side touches
+     * `http_response_code()` — `abort()` keeps it out of user code.
+     */
+    protected function handleErrorResponse(int $status, string $message): void
+    {
+        \http_response_code($status);
 
         $errorPagePath = $this->router->getErrorPagePath();
 
         if (null !== $errorPagePath) {
-            $errorComponent = $this->loadErrorPage($errorPagePath, 404, 'Page not found');
+            $errorComponent = $this->loadErrorPage($errorPagePath, $status, $message);
 
             if (null !== $errorComponent) {
                 $rootLayoutPath = $this->findRootLayoutPath();
@@ -531,7 +563,7 @@ class AppRouter
             }
         }
 
-        echo $this->document->renderError(404, 'Page not found');
+        echo $this->document->renderError($status, $message);
     }
 
     /**

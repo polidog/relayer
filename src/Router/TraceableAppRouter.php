@@ -262,6 +262,20 @@ class TraceableAppRouter extends AppRouter
         parent::handleNotFound();
     }
 
+    protected function handleHttpException(HttpException $exception): void
+    {
+        // 404 is recorded by handleNotFound() (parent routes 404 there);
+        // only explicit non-404 aborts need their own profiler event.
+        if (404 !== $exception->status) {
+            $this->profiler?->collect('route', 'abort', [
+                'path' => $this->readUrl(),
+                'status' => $exception->status,
+            ]);
+        }
+
+        parent::handleHttpException($exception);
+    }
+
     protected function handleAuthorizationFailure(AuthorizationException $exception): void
     {
         $this->profiler?->collect('auth', 'exception', [
