@@ -100,16 +100,21 @@ final class TraceableLogger extends AbstractLogger
      * `Throwable` (the canonical PSR-3 `exception` context key, §3) is
      * reduced to `Class: message` since it does not JSON-encode usefully.
      *
-     * @param array<string, mixed> $context
+     * Keys are `int|string` (not just `string`): PSR-3 documents context
+     * keys as placeholder names, but a caller can still pass an integer
+     * key at runtime, so the sensitive-key regex must be guarded — same
+     * shape as {@see TraceableDatabase::redact()}.
      *
-     * @return array<string, mixed>
+     * @param array<int|string, mixed> $context
+     *
+     * @return array<int|string, mixed>
      */
     private static function redact(array $context): array
     {
         $out = [];
 
         foreach ($context as $key => $value) {
-            if (1 === \preg_match('/pass|pwd|secret|token|api[-_]?key|auth/i', $key)) {
+            if (\is_string($key) && 1 === \preg_match('/pass|pwd|secret|token|api[-_]?key|auth/i', $key)) {
                 $out[$key] = '***';
 
                 continue;

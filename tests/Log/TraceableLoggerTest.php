@@ -89,4 +89,21 @@ final class TraceableLoggerTest extends TestCase
         // Inner logger keeps the real Throwable for Monolog to format.
         self::assertSame($ex, $inner->records[0]['context']['exception']);
     }
+
+    public function testNumericContextKeysDoNotBreakRedaction(): void
+    {
+        // PSR-3 types context as array<string, mixed>, but a caller can
+        // still pass integer keys at runtime; the sensitive-key regex
+        // must not run preg_match() on a non-string key (TypeError).
+        $inner = new SpyLogger();
+        $profiler = new RecordingProfiler();
+        $profile = $profiler->beginProfile('/', 'GET');
+
+        (new TraceableLogger($inner, $profiler))->info('mixed keys', [0 => 'zero', 'token' => 'sk-1']);
+
+        $recorded = $profile->getEvents()[0]->payload['context'];
+        self::assertIsArray($recorded);
+        self::assertSame('zero', $recorded[0]);
+        self::assertSame('***', $recorded['token']);
+    }
 }
