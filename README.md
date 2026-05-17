@@ -1531,6 +1531,65 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
 });
 ```
 
+## Logger
+
+A PSR-3 logger, backed by [Monolog](https://github.com/Seldaek/monolog).
+Apps depend on the standard `Psr\Log\LoggerInterface`, so the same
+binding is shared with any third-party library that logs through PSR-3.
+
+### Enable it
+
+The logger is **always registered**. Like the `HttpClient` it needs no
+required config, so any page or component can take a
+`Psr\Log\LoggerInterface` dependency with zero setup. Two optional env
+vars tune it:
+
+```
+LOG_LEVEL=info     # threshold; one of the 8 PSR-3 levels. Default: dev=debug, prod=info
+LOG_FILE=/var/log/app.log   # sink path. Default: php://stderr
+```
+
+Left unset, log lines go to **STDERR** (12-factor: `docker logs`,
+journald, or a platform log drain collects them). Set `LOG_FILE` only
+for deploys that want a file — directory creation, `.gitignore` and
+rotation are then yours to manage.
+
+### Use it
+
+Take a `Psr\Log\LoggerInterface` dependency in a page or component
+constructor:
+
+```php
+use Psr\Log\LoggerInterface;
+
+final class CheckoutPage extends PageComponent
+{
+    public function __construct(private readonly LoggerInterface $log) {}
+
+    public function render(): string
+    {
+        $this->log->info('checkout started for {user}', ['user' => $userId]);
+        // ...
+    }
+}
+```
+
+`{placeholder}` interpolation (PSR-3 §1.2) is applied to the sink output.
+The canonical `['exception' => $e]` context key is formatted by Monolog.
+
+### What you get for free
+
+- **Profiler** (dev) — every entry is mirrored onto the profiler
+  timeline as a `log` event whose label is the level, carrying the
+  interpolated message and a **redacted** copy of the context: values
+  under a `pass`/`pwd`/`secret`/`token`/`api_key`/`auth` key are masked
+  and a `Throwable` is reduced to `Class: message` (profiles are plain
+  JSON under `var/cache/profiler/` — the same stance `TraceableDatabase`
+  takes on bound values). The redaction is **profiler-only**: the real
+  Monolog sink still receives the original context the app chose to log.
+  In prod the alias points straight at Monolog with no decorator, so
+  there is no overhead.
+
 ## Profiler
 
 A dev-only request profiler. Each request is recorded as a `Profile`

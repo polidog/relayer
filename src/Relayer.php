@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
+use Monolog\Handler\StreamHandler;
+use Monolog\Logger;
+use Monolog\Processor\PsrLogMessageProcessor;
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\NativePasswordHasher;
@@ -24,6 +27,7 @@ use Polidog\Relayer\Http\Client\TraceableHttpClient;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
 use Polidog\Relayer\Http\TraceableEtagStore;
+use Polidog\Relayer\Log\TraceableLogger;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\NullProfiler;
 use Polidog\Relayer\Profiler\Profiler;
@@ -33,6 +37,8 @@ use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\TraceableAppRouter;
 use Polidog\UsePhp\UsePHP;
+use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\Definition;
@@ -474,6 +480,70 @@ final class Relayer
         $container->setAlias(HttpClient::class, CachingHttpClient::class)
             ->setPublic(true)
         ;
+
+        // Logger. Always registered — like the HTTP client it needs no
+        // required config, so any page/component can inject
+        // `Psr\Log\LoggerInterface` with zero setup. The implementation is
+        // Monolog (which also satisfies the psr/log contract apps and
+        // third-party libs share). Sink defaults to STDERR (12-factor:
+        // docker logs / journald / a platform drain collect it); set
+        // LOG_FILE to redirect to a path for deploys that want a file.
+        // LOG_LEVEL overrides the threshold (default dev=debug, prod=info).
+        // PsrLogMessageProcessor gives the sink PSR-3 `{placeholder}`
+        // interpolation, which Monolog does not do on its own.
+        $logFile = self::readEnv('LOG_FILE');
+        $logStream = '' !== $logFile ? $logFile : 'php://stderr';
+        $logLevel = self::readLogLevel(self::isDev() ? LogLevel::DEBUG : LogLevel::INFO);
+
+        $container->register(StreamHandler::class)
+            ->setArguments([$logStream, $logLevel])
+            ->setPublic(true)
+        ;
+        $container->register(PsrLogMessageProcessor::class)
+            ->setPublic(true)
+        ;
+        $container->register(Logger::class)
+            ->setArguments([
+                'app',
+                [new Reference(StreamHandler::class)],
+                [new Reference(PsrLogMessageProcessor::class)],
+            ])
+            ->setPublic(true)
+        ;
+        $container->setAlias(LoggerInterface::class, Logger::class)
+            ->setPublic(true)
+        ;
+
+        if (self::isDev()) {
+            $container->register(TraceableLogger::class)
+                ->setArguments([
+                    new Reference(Logger::class),
+                    new Reference(Profiler::class),
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(LoggerInterface::class, TraceableLogger::class)
+                ->setPublic(true)
+            ;
+        }
+    }
+
+    /**
+     * Resolve the log threshold from `LOG_LEVEL`, falling back to
+     * `$default` when unset or not one of the eight PSR-3 level names.
+     * Soft-fails like {@see readEnvInt()} rather than letting Monolog
+     * throw on a typo'd level.
+     */
+    private static function readLogLevel(string $default): string
+    {
+        $raw = \strtolower(self::readEnv('LOG_LEVEL'));
+
+        $valid = [
+            LogLevel::DEBUG, LogLevel::INFO, LogLevel::NOTICE, LogLevel::WARNING,
+            LogLevel::ERROR, LogLevel::CRITICAL, LogLevel::ALERT, LogLevel::EMERGENCY,
+        ];
+
+        return \in_array($raw, $valid, true) ? $raw : $default;
     }
 
     /**

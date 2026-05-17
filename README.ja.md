@@ -1522,6 +1522,63 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
 });
 ```
 
+## ロガー
+
+[Monolog](https://github.com/Seldaek/monolog) を実装に使った PSR-3
+ロガーです。アプリは標準の `Psr\Log\LoggerInterface` に依存するため、
+PSR-3 でログを出すサードパーティライブラリと同じ束縛を共有できます。
+
+### 有効化
+
+ロガーは **常に登録されます**。`HttpClient` と同様、必須設定がないため
+どのページ／コンポーネントからでも `Psr\Log\LoggerInterface` を依存と
+して受け取れ、追加設定は不要です。任意の環境変数が2つあります:
+
+```
+LOG_LEVEL=info     # しきい値。PSR-3 の8レベルのいずれか。既定 dev=debug, prod=info
+LOG_FILE=/var/log/app.log   # 出力先パス。既定 php://stderr
+```
+
+未設定ならログは **STDERR** に出ます（12-factor: `docker logs`・
+journald・プラットフォームのログドレインが回収）。ファイルに出したい
+デプロイだけ `LOG_FILE` を設定します——ディレクトリ作成・`.gitignore`・
+ローテーションはその場合あなたの管理範囲です。
+
+### 使い方
+
+ページ／コンポーネントのコンストラクタで `Psr\Log\LoggerInterface` を
+受け取ります:
+
+```php
+use Psr\Log\LoggerInterface;
+
+final class CheckoutPage extends PageComponent
+{
+    public function __construct(private readonly LoggerInterface $log) {}
+
+    public function render(): string
+    {
+        $this->log->info('checkout started for {user}', ['user' => $userId]);
+        // ...
+    }
+}
+```
+
+`{placeholder}` 補間（PSR-3 §1.2）は出力に適用されます。慣例の
+`['exception' => $e]` コンテキストキーは Monolog が整形します。
+
+### 自動で得られるもの
+
+- **Profiler**（dev）— 各エントリはプロファイラのタイムラインに
+  `log` イベント（ラベルはレベル）として写され、補間済みメッセージと
+  **秘匿化した**コンテキストのコピーを持ちます。`pass`/`pwd`/`secret`/
+  `token`/`api_key`/`auth` を含むキーの値はマスクされ、`Throwable` は
+  `Class: message` に短縮されます（プロファイルは `var/cache/profiler/`
+  配下の素の JSON——`TraceableDatabase` がバインド値を伏せるのと同じ
+  方針）。この秘匿化は**プロファイラ側だけ**で、実際の Monolog 出力に
+  はアプリが選んだ元のコンテキストがそのまま渡ります。本番では別名は
+  デコレータ無しで直接 Monolog を指すのでオーバーヘッドはありません。
+
 ## プロファイラ
 
 dev 限定のリクエストプロファイラです。各リクエストを `Profile`（URL・
