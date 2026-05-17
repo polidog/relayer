@@ -6,8 +6,11 @@ namespace Polidog\Relayer\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\AppConfigurator;
+use Polidog\Relayer\Http\Client\CachingHttpClient;
+use Polidog\Relayer\Http\Client\HttpClient;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
+use Psr\Container\ContainerInterface;
 use ReflectionProperty;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 
@@ -53,6 +56,22 @@ final class RelayerBootTest extends TestCase
             $this->projectRoot . '/var/cache/psx',
             $property->getValue($router),
         );
+    }
+
+    public function testHttpClientAliasResolvesToCachingDecorator(): void
+    {
+        // Regression: the HttpClient contract must always be satisfiable
+        // (it takes no required config, unlike Database) and must resolve
+        // to the request-scoped caching decorator at the outermost layer.
+        $router = Relayer::boot($this->projectRoot);
+
+        $property = new ReflectionProperty(AppRouter::class, 'container');
+        $container = $property->getValue($router);
+        self::assertInstanceOf(ContainerInterface::class, $container);
+
+        $client = $container->get(HttpClient::class);
+
+        self::assertInstanceOf(CachingHttpClient::class, $client);
     }
 
     public function testBootWithoutEnvFileDoesNotFail(): void
