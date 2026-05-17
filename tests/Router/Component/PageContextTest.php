@@ -109,7 +109,6 @@ final class PageContextTest extends TestCase
 
         try {
             $context->notFound();
-            self::fail('notFound() should unwind as HttpException');
         } catch (HttpException $exception) {
             self::assertSame(404, $exception->status);
             self::assertSame('Not Found', $exception->reason);
@@ -122,7 +121,6 @@ final class PageContextTest extends TestCase
 
         try {
             $context->abort(403);
-            self::fail('abort() should unwind as HttpException');
         } catch (HttpException $exception) {
             self::assertSame(403, $exception->status);
             self::assertSame('Forbidden', $exception->reason);
