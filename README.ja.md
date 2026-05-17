@@ -1572,10 +1572,61 @@ $this->profiler->collect('app', 'cache warmed', ['keys' => 12]);
 $span = $this->profiler->start('app', 'heavy compute');
 $result = $this->compute();
 $span->stop(['rows' => \count($result)]);
+
+// 呼び出しを計時してスパンを自動確定（戻り値をそのまま返す。例外時は
+// error ペイロードを記録して再送出）
+$user = $this->profiler->measure('lib', 'sdk.fetchUser',
+    fn () => $this->thirdPartySdk->fetchUser($id));
 ```
 
 `NullProfiler` でも同じ呼び出しがそのまま no-op になるため、環境による
 分岐は不要です。
+
+### 自前ライブラリをトレースする
+
+サードパーティ SDK や内部サービスをプロファイラのタイムラインに出したい
+ときは、**呼び出し箇所を `measure()` で包む** — これが機能の全てです。
+記録するのは `collector`/`label`/所要時間 **だけ** で、引数や戻り値は
+記録しません。汎用ラッパーはどの引数がパスワードやトークンか判別できない
+ため、明示的に渡されたもの以外は何も記録しない設計です。ペイロードが要る
+場合は `start()` + `stop()` を使い、安全な値だけを渡してください。
+
+同じ依存を多数の箇所から呼び、毎回 `measure()` を書かずに全呼び出しを
+トレースしたい場合は、薄いデコレータ（フレームワーク本体の `Traceable*`
+と同じパターン）を書き、`AppConfigurator` から **dev のときだけ** 差し
+替えます:
+
+```php
+final class TraceableWeatherApi implements WeatherApi
+{
+    public function __construct(
+        private readonly WeatherApi $inner,
+        private readonly Profiler $profiler,
+    ) {}
+
+    public function forecast(string $city): Forecast
+    {
+        // label/ペイロードは意図的に選ぶ — 実クライアントが受け取り得る
+        // API キーではなく city を記録する。
+        return $this->profiler->measure('lib', 'weather.forecast',
+            fn () => $this->inner->forecast($city));
+    }
+}
+
+// config: AppConfigurator::configure()
+if ($_ENV['APP_ENV'] === 'dev') {
+    $container->register(TraceableWeatherApi::class)
+        ->setArguments([new Reference(HttpWeatherApi::class), new Reference(Profiler::class)])
+        ->setPublic(true);
+    $container->setAlias(WeatherApi::class, TraceableWeatherApi::class)->setPublic(true);
+}
+```
+
+prod では素の alias のままなので、デコレータとプロファイラのコストは dev
+にしか存在しません（`TraceableDatabase` / `TraceableHttpClient` と全く同じ
+配線）。redaction は各デコレータの責務（キーではなく city を記録）で、
+契約ごとの判断を奪って dev プロファイル JSON に秘匿値を漏らす「全サービス
+透過トレース」プロキシは意図的に用意していません。
 
 ### 保存済みプロファイルの削除
 

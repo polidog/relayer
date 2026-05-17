@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Profiler\Profile;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
+use RuntimeException;
 
 final class RecordingProfilerTest extends TestCase
 {
@@ -44,6 +45,53 @@ final class RecordingProfilerTest extends TestCase
         self::assertSame(['componentId' => 'page:/'], $event->payload);
         self::assertNotNull($event->durationMs);
         self::assertGreaterThan(0.0, $event->durationMs);
+    }
+
+    public function testMeasureRecordsTimedSpanAndReturnsCallbackValue(): void
+    {
+        $profiler = new RecordingProfiler();
+        $profile = $profiler->beginProfile('/', 'GET');
+
+        $result = $profiler->measure('lib', 'stripe.charge', static function (): string {
+            \usleep(2000); // ~2ms so the duration is non-zero on any clock
+
+            return 'ch_123';
+        });
+
+        self::assertSame('ch_123', $result);
+
+        $events = $profile->getEvents();
+        self::assertCount(1, $events);
+        self::assertSame('lib', $events[0]->collector);
+        self::assertSame('stripe.charge', $events[0]->label);
+        self::assertSame([], $events[0]->payload, 'no args/return recorded by design');
+        self::assertNotNull($events[0]->durationMs);
+        self::assertGreaterThan(0.0, $events[0]->durationMs);
+    }
+
+    public function testMeasureRecordsErrorThenRethrows(): void
+    {
+        $profiler = new RecordingProfiler();
+        $profile = $profiler->beginProfile('/', 'GET');
+
+        // No self::fail() after the call: the callback throws
+        // unconditionally so the line would be statically dead. The
+        // payload assertion below already fails the test if the exception
+        // path was skipped (it would be empty / unrecorded); rethrow
+        // itself is covered by NullProfilerTest::testMeasureRethrows…().
+        try {
+            $profiler->measure('lib', 'stripe.charge', static function (): string {
+                throw new RuntimeException('card declined');
+            });
+        } catch (RuntimeException $e) {
+            self::assertSame('card declined', $e->getMessage());
+        }
+
+        $events = $profile->getEvents();
+        self::assertCount(1, $events);
+        self::assertSame('stripe.charge', $events[0]->label);
+        self::assertSame(['error' => 'card declined'], $events[0]->payload);
+        self::assertNotNull($events[0]->durationMs);
     }
 
     public function testCollectBeforeBeginProfileIsSilent(): void
