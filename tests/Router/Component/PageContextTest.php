@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\HttpException;
 use Polidog\Relayer\Router\RedirectException;
 
 final class PageContextTest extends TestCase
@@ -100,5 +101,43 @@ final class PageContextTest extends TestCase
             self::assertSame('/login', $exception->location);
             self::assertSame(302, $exception->status);
         }
+    }
+
+    public function testNotFoundThrowsHttpExceptionWith404(): void
+    {
+        $context = new PageContext([], '/users');
+
+        try {
+            $context->notFound();
+        } catch (HttpException $exception) {
+            self::assertSame(404, $exception->status);
+            self::assertSame('Not Found', $exception->reason);
+        }
+    }
+
+    public function testAbortThrowsHttpExceptionWithStatusAndReason(): void
+    {
+        $context = new PageContext([], '/users');
+
+        try {
+            $context->abort(403);
+        } catch (HttpException $exception) {
+            self::assertSame(403, $exception->status);
+            self::assertSame('Forbidden', $exception->reason);
+        }
+    }
+
+    public function testAbortRejectsRedirectStatus(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        (new PageContext())->abort(302);
+    }
+
+    public function testAbortRejectsSuccessStatus(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        (new PageContext())->abort(200);
     }
 }

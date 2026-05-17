@@ -14,6 +14,7 @@ use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\HttpException;
 use Polidog\Relayer\Router\RedirectException;
 use RuntimeException;
 
@@ -160,6 +161,52 @@ final class PageContext
     public function redirect(string $location, int $status = 303): never
     {
         throw new RedirectException($location, $status);
+    }
+
+    /**
+     * Stop rendering this page and respond with an HTTP error status. The
+     * router renders the project's `error.psx` (which can branch on the
+     * status) or the built-in fallback page — page authors declare intent
+     * instead of touching `http_response_code()`:
+     *
+     *   $post = $this->repo->find($ctx->params['id']);
+     *   if (null === $post) {
+     *       $ctx->notFound();
+     *   }
+     *   if ($post->isDraft && !$ctx->user()) {
+     *       $ctx->abort(403);
+     *   }
+     *
+     * Throws {@see HttpException}, which AppRouter catches and turns into an
+     * error response — so this never returns and any code after the call is
+     * skipped. Restricted to real error statuses (4xx/5xx): for redirects use
+     * {@see redirect()}, and a successful page just returns its element.
+     */
+    public function abort(int $status): never
+    {
+        if ($status < 400 || $status > 599) {
+            throw new InvalidArgumentException(
+                \sprintf(
+                    'PageContext::abort() expects a 4xx/5xx error status, got %d. '
+                    . 'Use redirect() for 3xx and just return the page element for success.',
+                    $status,
+                ),
+            );
+        }
+
+        throw new HttpException($status);
+    }
+
+    /**
+     * Respond with `404 Not Found` instead of rendering this page — the
+     * common case of {@see abort()}, named for readability. Use it when a
+     * looked-up resource does not exist:
+     *
+     *   $user = $this->repo->find($ctx->params['id']) ?? $ctx->notFound();
+     */
+    public function notFound(): never
+    {
+        $this->abort(404);
     }
 
     /**
