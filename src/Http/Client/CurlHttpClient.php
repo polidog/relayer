@@ -43,7 +43,13 @@ final class CurlHttpClient implements HttpClient
     public function request(string $method, string $url, array $headers = [], ?string $body = null): HttpResponse
     {
         $method = \strtoupper($method);
+
         $handle = \curl_init();
+        if (false === $handle) {
+            throw new HttpClientException(
+                \sprintf('Failed to initialize cURL for %s', $url),
+            );
+        }
 
         /** @var array<string, string> $responseHeaders */
         $responseHeaders = [];

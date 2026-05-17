@@ -46,6 +46,20 @@ final class CachingHttpClientTest extends TestCase
         self::assertSame(2, $inner->requestCalls);
     }
 
+    public function testSafeRequestsWithDifferentBodiesAreNotShared(): void
+    {
+        $inner = new FakeHttpClient();
+        $http = new CachingHttpClient($inner, new RecordingProfiler());
+
+        // Some APIs (e.g. search endpoints) take a body on GET; two such
+        // requests differing only by body must not collide in the cache.
+        $http->request('GET', 'https://api.test/search', [], '{"q":"a"}');
+        $http->request('GET', 'https://api.test/search', [], '{"q":"b"}');
+        $http->request('GET', 'https://api.test/search', [], '{"q":"a"}');
+
+        self::assertSame(2, $inner->requestCalls, 'body is part of the cache key');
+    }
+
     public function testHeadIsMemoizedSeparatelyFromGet(): void
     {
         $inner = new FakeHttpClient();

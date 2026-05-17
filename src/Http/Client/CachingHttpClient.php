@@ -14,7 +14,7 @@ use Polidog\Relayer\Profiler\Profiler;
  * each call the same external endpoint (a config service, the current
  * user's profile from an identity API, …). Without memoization that is N
  * identical round-trips per request. This decorator caches responses keyed
- * by `(method, url, headers)` for the lifetime of the request only — a
+ * by `(method, url, headers, body)` for the lifetime of the request only — a
  * plain in-process array, never persisted, dead with the worker. There is
  * no TTL and no cross-request sharing by design; HTTP caching with
  * freshness/revalidation is a different, much larger problem this layer
@@ -55,7 +55,7 @@ final class CachingHttpClient implements HttpClient
             return $this->inner->request($method, $url, $headers, $body);
         }
 
-        $key = $method . '|' . $url . '|' . \serialize($headers);
+        $key = $method . '|' . $url . '|' . \serialize($headers) . '|' . \serialize($body);
 
         if (\array_key_exists($key, $this->cache)) {
             $this->profiler->collect('http', 'cache_hit', ['method' => $method, 'url' => $url]);

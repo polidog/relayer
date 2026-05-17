@@ -1405,8 +1405,9 @@ final class WeatherPage extends PageComponent
 | `request($method, $url, $headers = [], $body = null)` | `HttpResponse` |
 
 `HttpResponse` exposes `status` / `headers` / `body` (public properties)
-plus `ok()` (2xx check), `json()` (decode to an associative array; throws
-`HttpClientException` on non-JSON), and `header($name)` (case-insensitive
+plus `ok()` (2xx check), `json()` (decode the JSON body to a PHP value,
+objects as associative arrays; throws `HttpClientException` on non-JSON),
+and `header($name)` (case-insensitive
 single-header lookup).
 
 ```php

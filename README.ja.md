@@ -1398,8 +1398,9 @@ final class WeatherPage extends PageComponent
 | `request($method, $url, $headers = [], $body = null)` | `HttpResponse` |
 
 `HttpResponse` は `status` / `headers` / `body`（公開プロパティ）に加えて、
-`ok()`（2xx 判定）、`json()`（連想配列へデコード。非 JSON なら
-`HttpClientException`）、`header($name)`（大文字小文字を無視した単一
+`ok()`（2xx 判定）、`json()`（JSON を PHP 値へデコード。オブジェクトは
+連想配列。非 JSON なら `HttpClientException`）、`header($name)`（大文字
+小文字を無視した単一
 ヘッダ取得）を持ちます。
 
 ```php
