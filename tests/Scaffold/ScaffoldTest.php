@@ -24,6 +24,10 @@ final class ScaffoldTest extends TestCase
             'src/AppConfigurator.php',
             'src/Pages/layout.psx',
             'src/Pages/page.psx',
+            'Dockerfile',
+            'php.ini',
+            'compose.yaml',
+            '.dockerignore',
         ], \array_keys($files));
 
         // init patches an existing composer.json; it must never ship one.
@@ -88,6 +92,47 @@ final class ScaffoldTest extends TestCase
         ] as $needle) {
             self::assertStringContainsString($needle, $relayer);
         }
+    }
+
+    public function testScaffoldsACoherentDevContainer(): void
+    {
+        $files = Scaffold::files();
+
+        // FrankenPHP serves :8000 to match compose.yaml + the README;
+        // it must never bind 127.0.0.1 (unreachable from the host).
+        self::assertStringContainsString('dunglas/frankenphp:php8.5', $files['Dockerfile']);
+        self::assertStringContainsString('SERVER_NAME=:8000', $files['Dockerfile']);
+        self::assertStringNotContainsString('127.0.0.1', $files['Dockerfile']);
+        // pdo_mysql backs the .env DATABASE_DSN example and the commented
+        // db service, so an uncommented compose db just works.
+        self::assertStringContainsString('install-php-extensions pdo_mysql', $files['Dockerfile']);
+        // php.ini must land in conf.d so it overrides the base image
+        // defaults (a plain php.ini that is never wired in is dead weight).
+        self::assertStringContainsString('COPY php.ini "$PHP_INI_DIR/conf.d/', $files['Dockerfile']);
+        self::assertStringContainsString('expose_php = Off', $files['php.ini']);
+
+        // Dependencies install in their own cached layer, before the
+        // full source copy, so editing app code does not reinstall them.
+        self::assertStringContainsString('COPY composer.* ./', $files['Dockerfile']);
+
+        // compose builds the local image and publishes the same port.
+        self::assertStringContainsString('build: .', $files['compose.yaml']);
+        self::assertStringContainsString('8000:8000', $files['compose.yaml']);
+
+        $compose = $files['compose.yaml'];
+        // The optional Compose database is the service named "db", so the
+        // documented Docker DSN must use that host — not the non-Docker
+        // .env default 127.0.0.1 — or "uncomment the db service" never
+        // connects. Keep the service name and the DSN host in lockstep.
+        self::assertStringContainsString('# db:', $compose);
+        self::assertStringContainsString('host=db;dbname=app', $compose);
+        // The bind-mount example must preserve the image's vendor/, or
+        // the host checkout (no vendor/) breaks vendor/autoload.php.
+        self::assertStringContainsString('- /app/vendor', $compose);
+
+        // vendor/ must be excluded so the image runs a fresh, in-image
+        // `composer install` (which also fires the usephp asset publisher).
+        self::assertStringContainsString('/vendor/', $files['.dockerignore']);
     }
 
     public function testComposerPatchIsAdditiveAndCarriesTheStructureMarker(): void
