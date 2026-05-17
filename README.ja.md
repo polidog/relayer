@@ -178,7 +178,7 @@ App Router の規約に倣っています）。
 | --------------------- | ------------------------------------------------------------------- |
 | `page.psx`            | ルートのレンダリング本体。ディレクトリにつき 1 つ。                 |
 | `layout.psx`          | 配下のページを包む。ルートから葉まで階層的にスタックされる。        |
-| `error.psx`           | 404 / 未マッチルートのフォールバック（ルート直下のみ）。            |
+| `error.psx`           | 404 / `$ctx->abort()` ステータスのエラーページ（ルート直下のみ）。  |
 | `route.php`           | JSON API ルート（HTML なし）。メソッド別ハンドラマップ。1 ディレクトリ 1 つ。 |
 | `[param]/`            | 動的セグメント。`$this->getParam('param')` で取得できる。           |
 
@@ -270,7 +270,42 @@ src/Pages/
 ### エラーページ
 
 ルート直下に `error.psx`（`ErrorPageComponent` を継承）を置くと、ルートレイ
-アウト内に 404 がレンダリングされます。無ければ最小限のデフォルト表示。
+アウト内にエラーレスポンスがレンダリングされます。未マッチルート（404）と
+すべての `$ctx->abort()` ステータスが対象です。ステータスとメッセージは
+`ErrorPageComponent` 経由で渡されるので、1 つの `error.psx` で
+`getStatusCode()` を見て 404 / 403 / 500 を出し分けられます。無ければ最小限
+のデフォルト表示になります。
+
+### 制御フロー: `redirect()` / `notFound()` / `abort()`
+
+ページファクトリやアクションハンドラは、HTTP の結果を **意図** で表明します。
+`http_response_code()` / `header()` を直接触る必要はありません。いずれも例外
+を投げてその場でアンワインドし（呼び出し以降のコードは実行されません）、
+ルータが適切なレスポンスに変換します:
+
+| 呼び出し | 結果 |
+| -------- | ---- |
+| `$ctx->redirect($to, $status = 303)` | `Location` レスポンス。既定は 303 See Other（POST 後の Post/Redirect/Get に正しい）。 |
+| `$ctx->notFound()` | `404` → `error.psx` / フォールバック。`abort(404)` の別名。 |
+| `$ctx->abort($status)` | 任意の `4xx`/`5xx` → そのステータスで `error.psx` / フォールバック。エラー以外のコードは `InvalidArgumentException`。 |
+
+```php
+return function (PageContext $ctx) use ($posts): Closure {
+    $post = $posts->find($ctx->params['id']) ?? $ctx->notFound();
+    if ($post->isDraft && null === $ctx->user()) {
+        $ctx->abort(403);
+    }
+
+    return fn (): Element => <article>{$post->title}</article>;
+};
+```
+
+`route.php` ハンドラからはこれらも JSON のまま返ります。`notFound()` /
+`abort()` はそのステータスの JSON エラーになり（HTML エラーページにはなりま
+せん）、`redirect()` は従来どおり content-type 非依存の `Location` レスポンス
+を返します。`http_response_code()` はフレームワーク内部のままで、ステータス
+を手で設定する唯一の場所は `PageContext` を持たない `middleware.php`（ルート
+ディスパッチより前に走る）です。
 
 ### API ルート
 
@@ -319,9 +354,11 @@ return [
   を置かない）。リクエストごとに再評価されます。
 - 認証はページと同じ `$ctx->requireAuth()` / `Identity` の仕組みですが、
   失敗時はページの HTML ログイン `302` ではなく JSON の `401`（未認証）
-  または `403`（ロール不足）になります。ハンドラ自身が
-  `$ctx->redirect()` を呼んだ場合は通常どおり `Location` を返します
-  （認証ゲートではなくハンドラの意図的な動作のため）。
+  または `403`（ロール不足）になります。`$ctx->notFound()` /
+  `$ctx->abort()` も同様にそのステータスの JSON エラーになり（HTML エラー
+  ページにはなりません）、`$ctx->redirect()` は従来どおり content-type
+  非依存の `Location` を返します（エラーゲートではなくハンドラの意図的な
+  動作のため）。
 
 ### ページ単位のスクリプト（`$ctx->js()` / `addJs()`）
 
@@ -536,10 +573,9 @@ use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\UsePhp\Runtime\Element;
 
 return function (PageContext $ctx, UserRepository $users): Closure {
-    $save = $ctx->action('save', function (array $form) use ($users): void {
+    $save = $ctx->action('save', function (array $form) use ($users, $ctx): void {
         $users->create($form['name']);
-        \header('Location: /users', true, 303);
-        exit;
+        $ctx->redirect('/users'); // 303 Post/Redirect/Get。ここでアンワインド
     });
 
     return function () use ($save, $users): Element {
@@ -592,10 +628,10 @@ $ctx->action('delete', fn (array $formData, int $id) => $repo->delete($id), ['id
 ```php
 return function (PageContext $ctx) use ($schema): Closure {
     $errors = [];
-    $save = $ctx->action('save', function (array $form) use ($schema, &$errors): void {
+    $save = $ctx->action('save', function (array $form) use ($schema, &$errors, $ctx): void {
         $result = $schema->safeParse($form);
         if (!$result->success) { $errors = $result->errors; return; }
-        // ... 成功時は PRG リダイレクト (header('Location: ...', true, 303); exit;)
+        // ... 成功時: $ctx->redirect('/users') (303 Post/Redirect/Get)
     });
 
     // $errors はアクション実行後に書き換わる → 参照で取り込んで描画する
@@ -734,8 +770,7 @@ return function (PageContext $ctx, Request $req): Closure {
             $errors['email'] = 'メールアドレスの形式が正しくありません';
         }
         if ([] === $errors) {
-            \header('Location: /thanks', true, 303);
-            exit;
+            $ctx->redirect('/thanks'); // 303 Post/Redirect/Get。ここでアンワインド
         }
     }
 
@@ -855,7 +890,7 @@ use Polidog\UsePhp\Runtime\Element;
 return function (PageContext $ctx, Authenticator $auth): Closure {
     $error = null;
 
-    $login = $ctx->action('login', function (array $form) use ($auth, &$error): void {
+    $login = $ctx->action('login', function (array $form) use ($auth, &$error, $ctx): void {
         $identity = $auth->attempt(
             (string) ($form['email']    ?? ''),
             (string) ($form['password'] ?? ''),
@@ -867,8 +902,7 @@ return function (PageContext $ctx, Authenticator $auth): Closure {
             return;
         }
 
-        \header('Location: /dashboard', true, 303);
-        exit;
+        $ctx->redirect('/dashboard'); // 303 Post/Redirect/Get。ここでアンワインド
     });
 
     return function () use ($login, $error): Element {
