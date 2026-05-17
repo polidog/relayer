@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 2;
+    public const int STRUCTURE_VERSION = 3;
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -58,6 +58,12 @@ final class Scaffold
             'src/AppConfigurator.php' => self::appConfigurator(),
             'src/Pages/layout.psx' => self::layoutPsx(),
             'src/Pages/page.psx' => self::pagePsx(),
+            // A minimal dev container so `docker compose up --build` boots
+            // the app with no host PHP. All skip-if-exists like the rest.
+            'Dockerfile' => self::dockerfile(),
+            'php.ini' => self::phpIni(),
+            'compose.yaml' => self::compose(),
+            '.dockerignore' => self::dockerignore(),
         ];
     }
 
@@ -140,6 +146,14 @@ final class Scaffold
 
             Then open <http://127.0.0.1:8000>.
 
+            Or, with no host PHP:
+
+            ```bash
+            docker compose up --build
+            ```
+
+            Then open <http://localhost:8000>.
+
             ## Layout
 
             ```
@@ -147,6 +161,10 @@ final class Scaffold
             composer.json
             RELAYER.md             agent/LLM coding conventions (co-versioned)
             AGENTS.md              auto-read pointer → RELAYER.md
+            Dockerfile             FrankenPHP (PHP 8.5) image
+            php.ini                PHP overrides (loaded via conf.d)
+            compose.yaml           `docker compose up` → http://localhost:8000
+            .dockerignore
             config/
               services.yaml        Symfony DI registrations (auto-loaded)
             public/
@@ -415,5 +433,134 @@ final class Scaffold
             </section>;
 
             PSX;
+    }
+
+    private static function dockerfile(): string
+    {
+        return <<<'DOCKER'
+            # Relayer app — FrankenPHP image. The default .env sets
+            # APP_ENV=dev, which compiles .psx on the fly, so the image
+            # needs no build step. For production, unset APP_ENV and
+            # precompile once: `vendor/bin/usephp compile src/Pages`.
+            #
+            # FrankenPHP serves /app/public through its bundled Caddy in
+            # classic (per-request) mode, so Relayer's public/index.php
+            # front controller works as-is — no framework changes. Worker
+            # mode (app kept booted between requests) is a future option.
+            FROM dunglas/frankenphp:php8.5
+
+            # curl and pdo_sqlite ship enabled in the base image.
+            # pdo_mysql matches the DATABASE_DSN example in .env and the
+            # commented db service in compose.yaml; zip lets composer
+            # install from dist. For PostgreSQL append pdo_pgsql here.
+            RUN install-php-extensions pdo_mysql zip
+
+            COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+            WORKDIR /app
+
+            # Install dependencies in their own layer so editing app code
+            # doesn't reinstall them. --no-scripts because the post-install
+            # hook (usephp asset publisher) needs the app source, which is
+            # copied next; the second install runs it with sources present.
+            COPY composer.* ./
+            RUN composer install --no-interaction --prefer-dist \
+                --no-scripts --no-autoloader
+
+            COPY . .
+            RUN composer install --no-interaction --prefer-dist
+
+            # php.ini is loaded as a conf.d override (last, so it wins);
+            # edit the project's php.ini, not this path. Applied after the
+            # Composer steps so build-time Composer keeps its own memory
+            # limit rather than the runtime override.
+            COPY php.ini "$PHP_INI_DIR/conf.d/zz-relayer.ini"
+
+            # Serve on :8000 to match compose.yaml and the README. With
+            # no hostname FrankenPHP also skips auto-HTTPS, which is what
+            # you want for local development.
+            ENV SERVER_NAME=:8000
+            EXPOSE 8000
+
+            DOCKER;
+    }
+
+    private static function phpIni(): string
+    {
+        return <<<'INI'
+            ; Relayer app — PHP overrides. The Dockerfile copies this into
+            ; $PHP_INI_DIR/conf.d/ so it loads LAST and overrides the base
+            ; image defaults: list only the directives you want to change,
+            ; not a full php.ini. APP_ENV (in .env), not this file, drives
+            ; the framework's dev/prod behaviour.
+
+            expose_php = Off
+            memory_limit = 256M
+
+            ; File uploads (keep the two in sync; post_max_size >= upload):
+            upload_max_filesize = 16M
+            post_max_size = 16M
+
+            ; OPcache. In production (APP_ENV unset + precompiled .psx)
+            ; raise this and set opcache.validate_timestamps=0:
+            opcache.memory_consumption = 128
+
+            INI;
+    }
+
+    private static function compose(): string
+    {
+        return <<<'YAML'
+            # Relayer app — minimal Compose setup. `docker compose up
+            # --build`, then open http://localhost:8000.
+            services:
+              app:
+                build: .
+                ports:
+                  - "8000:8000"
+                # Mount the source for live edits (APP_ENV=dev recompiles
+                # .psx on the fly). The bare /app/vendor volume keeps the
+                # image's installed dependencies from being hidden by the
+                # host checkout (which has no vendor/). Remove both for an
+                # immutable image.
+                # volumes:
+                #   - .:/app
+                #   - /app/vendor
+                # env_file: .env
+
+              # A database is optional. To use one, uncomment this service
+              # and set in .env: DATABASE_DSN=mysql:host=db;dbname=app —
+              # under Compose the host is the service name "db", not the
+              # .env default 127.0.0.1 (which, from the app container,
+              # would be the app itself).
+              # db:
+              #   image: mysql:8
+              #   environment:
+              #     MYSQL_DATABASE: app
+              #     MYSQL_USER: app
+              #     MYSQL_PASSWORD: secret
+              #     MYSQL_ROOT_PASSWORD: secret
+              #   ports:
+              #     - "3306:3306"
+              #   volumes:
+              #     - db-data:/var/lib/mysql
+
+            # volumes:
+            #   db-data:
+
+            YAML;
+    }
+
+    private static function dockerignore(): string
+    {
+        return <<<'DOCKERIGNORE'
+            /vendor/
+            /var/
+            /.git/
+            /public/usephp.js
+            /.env.local
+            /.env.*.local
+
+            DOCKERIGNORE;
     }
 }
