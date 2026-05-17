@@ -1581,10 +1581,62 @@ $this->profiler->collect('app', 'cache warmed', ['keys' => 12]);
 $span = $this->profiler->start('app', 'heavy compute');
 $result = $this->compute();
 $span->stop(['rows' => \count($result)]);
+
+// timed span around a call, finalized for you (returns the call's value,
+// records an `error` payload and rethrows if it throws)
+$user = $this->profiler->measure('lib', 'sdk.fetchUser',
+    fn () => $this->thirdPartySdk->fetchUser($id));
 ```
 
 The same calls are no-ops under `NullProfiler`, so no environment branching
 is needed.
+
+### Tracing your own libraries
+
+To see a third-party SDK or an internal service on the profiler timeline,
+**wrap the call site with `measure()`** — that is the whole feature. It
+records *only* the `collector`/`label`/duration, never the call's
+arguments or return value: a generic wrapper can't know which argument is
+a password or token, so it records nothing it wasn't explicitly given. If
+you want a payload, use `start()` + `stop()` and pass only what is safe.
+
+When you call the same dependency from many places and want every call
+traced without repeating `measure()`, write a thin decorator — the same
+pattern the framework's own `Traceable*` classes use — and swap it in
+**for dev only** from your `AppConfigurator`:
+
+```php
+final class TraceableWeatherApi implements WeatherApi
+{
+    public function __construct(
+        private readonly WeatherApi $inner,
+        private readonly Profiler $profiler,
+    ) {}
+
+    public function forecast(string $city): Forecast
+    {
+        // Choose the label/payload deliberately — record the city, not an
+        // API key the real client might also take.
+        return $this->profiler->measure('lib', 'weather.forecast',
+            fn () => $this->inner->forecast($city));
+    }
+}
+
+// config: AppConfigurator::configure()
+if ($_ENV['APP_ENV'] === 'dev') {
+    $container->register(TraceableWeatherApi::class)
+        ->setArguments([new Reference(HttpWeatherApi::class), new Reference(Profiler::class)])
+        ->setPublic(true);
+    $container->setAlias(WeatherApi::class, TraceableWeatherApi::class)->setPublic(true);
+}
+```
+
+Prod keeps the plain alias, so the decorator and its profiler cost exist
+only in dev — exactly how `TraceableDatabase` / `TraceableHttpClient` are
+wired. Each decorator stays responsible for its own redaction (log the
+city, not the key); there is deliberately no generic "trace every service"
+proxy, because it would strip that per-contract judgement and leak secrets
+into the dev profile JSON.
 
 ### Clearing stored profiles
 

@@ -148,6 +148,11 @@ final class TraceableAppRouterTest extends TestCase
                 return new TraceSpan(static fn (float $ms, array $p): null => null, \microtime(true));
             }
 
+            public function measure(string $collector, string $label, callable $fn): mixed
+            {
+                return $fn();
+            }
+
             public function currentProfile(): ?Profile
             {
                 return null;

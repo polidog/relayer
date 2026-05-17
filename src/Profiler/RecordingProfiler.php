@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Profiler;
 
 use Polidog\Relayer\Router\TraceableAppRouter;
+use Throwable;
 
 /**
  * Dev-time {@see Profiler} that builds a {@see Profile} per request and
@@ -81,6 +82,22 @@ final class RecordingProfiler implements Profiler
             },
             $startedAt,
         );
+    }
+
+    public function measure(string $collector, string $label, callable $fn): mixed
+    {
+        $span = $this->start($collector, $label);
+
+        try {
+            $result = $fn();
+            $span->stop();
+
+            return $result;
+        } catch (Throwable $e) {
+            $span->stop(['error' => $e->getMessage()]);
+
+            throw $e;
+        }
     }
 
     public function currentProfile(): ?Profile
