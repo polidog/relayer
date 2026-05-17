@@ -4,13 +4,16 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests;
 
+use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\AppConfigurator;
 use Polidog\Relayer\Http\Client\CachingHttpClient;
 use Polidog\Relayer\Http\Client\HttpClient;
+use Polidog\Relayer\Log\TraceableLogger;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use ReflectionProperty;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 
@@ -72,6 +75,40 @@ final class RelayerBootTest extends TestCase
         $client = $container->get(HttpClient::class);
 
         self::assertInstanceOf(CachingHttpClient::class, $client);
+    }
+
+    public function testLoggerAliasResolvesToTraceableLoggerInDev(): void
+    {
+        // Mirror of the HttpClient regression: the PSR-3 LoggerInterface
+        // contract must always be satisfiable with zero config, and in
+        // dev the alias must point at the profiler-feeding decorator.
+        $router = Relayer::boot($this->projectRoot);
+
+        $property = new ReflectionProperty(AppRouter::class, 'container');
+        $container = $property->getValue($router);
+        self::assertInstanceOf(ContainerInterface::class, $container);
+
+        self::assertInstanceOf(TraceableLogger::class, $container->get(LoggerInterface::class));
+    }
+
+    public function testLoggerAliasResolvesToMonologInProd(): void
+    {
+        // Force prod via the .env itself rather than $_ENV: once an
+        // earlier test has loaded APP_ENV, Symfony tracks it in
+        // SYMFONY_DOTENV_VARS and re-applies the .env value over a
+        // plain $_ENV assignment, so only the file is order-independent.
+        \file_put_contents($this->projectRoot . '/.env', "APP_ENV=prod\n");
+
+        $router = Relayer::boot($this->projectRoot);
+
+        $property = new ReflectionProperty(AppRouter::class, 'container');
+        $container = $property->getValue($router);
+        self::assertInstanceOf(ContainerInterface::class, $container);
+
+        // In dev the alias resolves to TraceableLogger (not a Monolog
+        // Logger), so asserting the concrete Monolog Logger here proves
+        // prod is unwrapped — the decorator is skipped entirely.
+        self::assertInstanceOf(Logger::class, $container->get(LoggerInterface::class));
     }
 
     public function testBootWithoutEnvFileDoesNotFail(): void
