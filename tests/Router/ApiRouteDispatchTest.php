@@ -269,6 +269,43 @@ final class ApiRouteDispatchTest extends TestCase
         self::assertSame('{"error":"Unauthorized"}', $output);
     }
 
+    public function testAbortFromApiHandlerIsJsonErrorNotHtmlErrorPage(): void
+    {
+        // $ctx->abort()/notFound() inside an API handler must stay on the
+        // JSON surface (status + {"error":...}), never fall through to
+        // run()'s HTML error page — same boundary as the auth 401/403 above.
+        $this->writeRoute('articles', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+            use Polidog\Relayer\Router\Component\PageContext;
+
+            return ['GET' => static function (PageContext $ctx): Response {
+                $ctx->notFound();
+            }];
+            PHP);
+
+        $output = $this->dispatch('/articles', 'GET');
+
+        self::assertSame(404, \http_response_code());
+        self::assertSame('{"error":"Not Found"}', $output);
+    }
+
+    public function testAbortFromApiHandlerHonorsCustomErrorStatus(): void
+    {
+        $this->writeRoute('locked', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+            use Polidog\Relayer\Router\Component\PageContext;
+
+            return ['GET' => static function (PageContext $ctx): Response {
+                $ctx->abort(403);
+            }];
+            PHP);
+
+        $output = $this->dispatch('/locked', 'GET');
+
+        self::assertSame(403, \http_response_code());
+        self::assertSame('{"error":"Forbidden"}', $output);
+    }
+
     public function testInvalidRouteFileRaisesActionableError(): void
     {
         $this->writeRoute('bad', <<<'PHP'

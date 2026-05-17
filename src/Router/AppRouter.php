@@ -301,9 +301,12 @@ class AppRouter
      *
      * Auth failures are translated to a JSON `401` / `403` here rather than
      * the page path's HTML-login `302`: an API client wants a status code,
-     * not a redirect to a form. A handler that calls `$ctx->redirect()`
-     * itself still produces a `Location` response — that is a deliberate
-     * handler action, not an auth gate, so it bubbles to `run()` unchanged.
+     * not a redirect to a form. `$ctx->abort()` / `notFound()` is likewise
+     * translated to a JSON error with the exception's status here, so an API
+     * route never emits the HTML error page. A handler that calls
+     * `$ctx->redirect()` still produces a `Location` response — that is a
+     * deliberate, content-type-neutral handler action, not an error gate, so
+     * it bubbles to `run()` unchanged.
      */
     protected function handleApiMatch(RouteMatch $match): void
     {
@@ -370,6 +373,15 @@ class AppRouter
         } catch (AuthorizationException $exception) {
             $status = AuthGuard::DECISION_FORBIDDEN === $exception->decision ? 403 : 401;
             $response = Response::json(['error' => 403 === $status ? 'Forbidden' : 'Unauthorized'], $status);
+            ($omitBody ? $response->withoutBody() : $response)->send();
+
+            return;
+        } catch (HttpException $exception) {
+            // $ctx->abort()/notFound() from an API handler: keep the API
+            // surface JSON instead of letting it bubble to run() and render
+            // the HTML error page (same API/HTML boundary the
+            // AuthorizationException translation above maintains).
+            $response = Response::json(['error' => $exception->reason], $exception->status);
             ($omitBody ? $response->withoutBody() : $response)->send();
 
             return;
@@ -516,8 +528,11 @@ class AppRouter
      * Render an arbitrary HTTP error from `PageContext::abort()` /
      * `notFound()`. `404` is routed back through {@see handleNotFound()} so
      * the single overridable 404 path stays unified (the dev profiler hooks
-     * it there); every other status goes straight to the shared error
-     * renderer with its standard reason phrase.
+     * it there) — this means a 404 always renders the standard not-found
+     * page/message and does NOT surface a custom `HttpException` reason.
+     * That is intentional and lossless: the public `notFound()` / `abort()`
+     * APIs expose no custom-message parameter. Every other status goes
+     * straight to the shared error renderer with its standard reason phrase.
      */
     protected function handleHttpException(HttpException $exception): void
     {
