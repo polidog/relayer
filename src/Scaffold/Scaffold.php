@@ -216,9 +216,10 @@ final class Scaffold
             ## Routing — `src/Pages/` (Next.js App Router-style)
 
             - `page.psx` (or `.php`) = a route; `layout.psx` wraps nested
-              pages; root `error.psx` renders 404; a `[param]` directory is
-              a dynamic segment. A directory is a page **or** a `route.php`,
-              never both.
+              pages; root `error.psx` is the shared error page for any
+              HTTP error (404/403/500…, raised via `$ctx->abort()` /
+              `notFound()`); a `[param]` directory is a dynamic segment.
+              A directory is a page **or** a `route.php`, never both.
             - Function page: `return fn (PageContext $ctx, MyService $s) =>
               <section/>;` — or two-level: `return function (PageContext
               $ctx) { ...; return fn () => <section/>; };`
@@ -344,7 +345,8 @@ final class Scaffold
             directory is a **page** (`page.psx`/`page.php` + optional
             `layout.psx`) **or** an API endpoint (`route.php`) — never
             both. `[param]` directories are dynamic segments; the root
-            `error.psx` renders 404.
+            `error.psx` renders any HTTP error (404/403/500…) raised via
+            `$ctx->abort()` / `notFound()`.
 
             ## Pages
 
