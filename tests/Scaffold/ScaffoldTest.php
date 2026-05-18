@@ -19,6 +19,8 @@ final class ScaffoldTest extends TestCase
             'README.md',
             'RELAYER.md',
             'AGENTS.md',
+            '.claude/skills/relayer-routing/SKILL.md',
+            '.claude/agents/relayer-reviewer.md',
             'public/index.php',
             'config/services.yaml',
             'src/AppConfigurator.php',
@@ -91,6 +93,39 @@ final class ScaffoldTest extends TestCase
             'Do NOT',
         ] as $needle) {
             self::assertStringContainsString($needle, $relayer);
+        }
+    }
+
+    public function testScaffoldsClaudeCodeSkillAndReviewerAgent(): void
+    {
+        $files = Scaffold::files();
+
+        $skill = $files['.claude/skills/relayer-routing/SKILL.md'];
+        $agent = $files['.claude/agents/relayer-reviewer.md'];
+
+        // Both must carry the YAML frontmatter Claude Code keys on
+        // (name/description; the agent also scopes tools) or they are
+        // inert files the tool never loads.
+        foreach (["---\nname: relayer-routing", 'description:'] as $needle) {
+            self::assertStringContainsString($needle, $skill);
+        }
+        foreach (["---\nname: relayer-reviewer", 'description:', 'tools:'] as $needle) {
+            self::assertStringContainsString($needle, $agent);
+        }
+
+        // They are thin, trigger-scoped entrypoints — RELAYER.md stays
+        // the single source of truth, so each must defer to it rather
+        // than fork the conventions.
+        self::assertStringContainsString('RELAYER.md', $skill);
+        self::assertStringContainsString('RELAYER.md', $agent);
+
+        // Spot-check the load-bearing contracts so the skill/agent are
+        // not stubs that pass the presence check but help nobody.
+        foreach (['route.php', 'Response', 'vendor/bin/relayer routes'] as $needle) {
+            self::assertStringContainsString($needle, $skill);
+        }
+        foreach (['route.php', '$_GET', 'Cors::middleware'] as $needle) {
+            self::assertStringContainsString($needle, $agent);
         }
     }
 

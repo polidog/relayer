@@ -87,7 +87,12 @@ php -S 127.0.0.1:8000 -t public
 読むファイル名である **`AGENTS.md`**（2 行・`RELAYER.md` を指すだけ）も
 生成します。いずれも `polidog/relayer` に同梱され **フレームワークと
 co-version され陳腐化しません**。どちらも skip-if-exists なので、利用者
-自身の `AGENTS.md` を上書きしません。実ルートは
+自身の `AGENTS.md` を上書きしません。さらに **`.claude/`** 配下に
+Claude Code 向けツールも生成します — ルーティング / `Response` / CSRF
+契約をトリガー時に与える `relayer-routing` **skill** と、変更を
+`RELAYER.md` に照らしてレビューする `relayer-reviewer` **subagent** の
+2 つです。どちらも `RELAYER.md` を唯一の正とし、同じ理由で
+co-version + skip-if-exists です。実ルートは
 `vendor/bin/relayer routes` で確認できます。
 
 ## プロジェクト構成

@@ -87,6 +87,11 @@ philosophy, a "do not" list) — plus a 2-line **`AGENTS.md`** that points at
 it (the filename agent tools auto-read). Both ship inside `polidog/relayer`,
 so they are **co-versioned with the framework and cannot drift**, and both
 are skip-if-exists, so a project's own `AGENTS.md` is never overwritten.
+It additionally scaffolds Claude Code tooling under **`.claude/`** — a
+`relayer-routing` **skill** (the routing / `Response` / CSRF contracts,
+trigger-scoped) and a `relayer-reviewer` **subagent** that reviews changes
+against `RELAYER.md`. Both defer to `RELAYER.md` as the single source of
+truth and are co-versioned + skip-if-exists for the same reason.
 Run `vendor/bin/relayer routes` for the project's actual route map.
 
 ## Project Layout
