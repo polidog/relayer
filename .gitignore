@@ -10,3 +10,6 @@
 /.env.local
 /.env.local.php
 /.env.*.local
+
+# Claude Code: share project settings + hooks, keep personal overrides local.
+/.claude/settings.local.json
