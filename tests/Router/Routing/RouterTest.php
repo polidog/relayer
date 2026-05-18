@@ -68,6 +68,52 @@ final class RouterTest extends TestCase
         self::assertCount(4, $routes);
     }
 
+    public function testLoadsFromCompiledFileWhenPresentAndSkipsScanning(): void
+    {
+        // A compiled artifact that deliberately disagrees with the
+        // filesystem: it advertises /from-compiled and omits /about. If
+        // the router honours the file it must match the former and miss
+        // the latter — proof the filesystem scan was bypassed.
+        $file = \sys_get_temp_dir() . '/router-compiled-' . \uniqid() . '.php';
+        \file_put_contents($file, <<<'PHP'
+            <?php
+
+            return [
+                [
+                    'pattern' => '/from-compiled',
+                    'regex' => '#^/from\-compiled$#',
+                    'pagePath' => 'page.php',
+                    'layoutPaths' => [],
+                    'paramNames' => [],
+                    'staticSegments' => 1,
+                    'totalSegments' => 1,
+                    'isApi' => false,
+                ],
+            ];
+            PHP);
+
+        try {
+            $router = Router::create(__DIR__ . '/../fixtures/app', $file);
+
+            self::assertNotNull($router->match('/from-compiled'));
+            self::assertNull($router->match('/about'));
+            self::assertCount(1, $router->getRoutes());
+        } finally {
+            @\unlink($file);
+        }
+    }
+
+    public function testFallsBackToScanWhenCompiledFileIsAbsent(): void
+    {
+        $router = Router::create(
+            __DIR__ . '/../fixtures/app',
+            \sys_get_temp_dir() . '/does-not-exist-' . \uniqid() . '.php',
+        );
+
+        self::assertNotNull($router->match('/about'));
+        self::assertCount(4, $router->getRoutes());
+    }
+
     private static function assertStringContains(string $needle, string $haystack): void
     {
         self::assertStringContainsString($needle, $haystack);

@@ -62,10 +62,11 @@ class AppRouter
         ?ContainerInterface $container = null,
         bool $autoCompilePsx = false,
         ?string $psxCacheDir = null,
+        ?string $compiledRoutesFile = null,
     ) {
         $this->appDirectory = \rtrim($appDirectory, '/');
         $this->container = $container;
-        $this->router = Router::create($this->appDirectory);
+        $this->router = Router::create($this->appDirectory, $compiledRoutesFile);
         $this->document = new HtmlDocument();
         $this->autoCompilePsx = $autoCompilePsx;
         // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
@@ -80,11 +81,13 @@ class AppRouter
         string $appDirectory,
         bool $autoCompilePsx = false,
         ?string $psxCacheDir = null,
+        ?string $compiledRoutesFile = null,
     ): self {
         return new self(
             $appDirectory,
             autoCompilePsx: $autoCompilePsx,
             psxCacheDir: $psxCacheDir,
+            compiledRoutesFile: $compiledRoutesFile,
         );
     }
 

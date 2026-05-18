@@ -10,13 +10,23 @@ final class Router implements RouterInterface
     private ?string $errorPagePath = null;
     private bool $errorPagePathLoaded = false;
 
+    /**
+     * @param null|string $compiledRoutesFile when set and the file exists,
+     *                                        routes are loaded from this
+     *                                        precompiled artifact instead
+     *                                        of scanning the filesystem.
+     *                                        Absent file → live scan, so
+     *                                        dev (which never compiles)
+     *                                        always reflects the tree.
+     */
     public function __construct(
         private readonly PageScanner $scanner,
+        private readonly ?string $compiledRoutesFile = null,
     ) {}
 
-    public static function create(string $appDirectory): self
+    public static function create(string $appDirectory, ?string $compiledRoutesFile = null): self
     {
-        return new self(new PageScanner($appDirectory));
+        return new self(new PageScanner($appDirectory), $compiledRoutesFile);
     }
 
     public function match(string $path): ?RouteMatch
@@ -40,7 +50,9 @@ final class Router implements RouterInterface
     public function getRoutes(): RouteCollection
     {
         if (null === $this->routes) {
-            $this->routes = $this->scanner->scan();
+            $this->routes = null !== $this->compiledRoutesFile && \is_file($this->compiledRoutesFile)
+                ? CompiledRoutes::load($this->compiledRoutesFile, $this->scanner->appDirectory())
+                : $this->scanner->scan();
         }
 
         return $this->routes;

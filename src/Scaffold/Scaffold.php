@@ -441,7 +441,11 @@ final class Scaffold
             # Relayer app — FrankenPHP image. The default .env sets
             # APP_ENV=dev, which compiles .psx on the fly, so the image
             # needs no build step. For production, unset APP_ENV and
-            # precompile once: `vendor/bin/usephp compile src/Pages`.
+            # precompile once:
+            #   vendor/bin/usephp compile src/Pages   # .psx -> .psx.php
+            #   vendor/bin/relayer routes:compile      # route artifact
+            # Both are pure build steps; prod then reads the artifacts
+            # instead of scanning/compiling per request.
             #
             # FrankenPHP serves /app/public through its bundled Caddy in
             # classic (per-request) mode, so Relayer's public/index.php
