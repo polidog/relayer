@@ -41,6 +41,16 @@ final class Relayer
     public const PROFILER_CACHE_DIR = 'var/cache/profiler';
 
     /**
+     * Project-root-relative path of the compiled-routes artifact. The
+     * single source of truth for that location: the prod wiring below
+     * passes `<projectRoot>/` + this constant to {@see AppRouter} as the
+     * presence-gated route source, and `relayer routes:compile` writes the
+     * same path off this constant so the two cannot drift. Dev is never
+     * pointed at it, so a live filesystem scan always wins there.
+     */
+    public const COMPILED_ROUTES_FILE = 'var/cache/routes/routes.php';
+
+    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
@@ -84,7 +94,15 @@ final class Relayer
             }
             $router = $traceable;
         } else {
-            $router = AppRouter::create($appDir, psxCacheDir: $psxCacheDir);
+            // Prod: read the precompiled route artifact when it exists
+            // (`relayer routes:compile` at deploy), otherwise fall back to
+            // a live scan. Dev deliberately gets no path so it always
+            // reflects the current tree.
+            $router = AppRouter::create(
+                $appDir,
+                psxCacheDir: $psxCacheDir,
+                compiledRoutesFile: $projectRoot . '/' . self::COMPILED_ROUTES_FILE,
+            );
         }
         $router->setContainer($psr);
 

@@ -179,11 +179,22 @@ the Next.js App Router. The conventions:
 | `error.psx`          | Error page for 404 / `$ctx->abort()` statuses (root only).          |
 | `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
+| `(group)/`           | Route group: organises files without adding a URL segment. May hold its own `layout.psx`. |
+| `_private/`          | Opts the folder and everything under it out of routing entirely.    |
 
 `.psx` is the JSX-style source. The runtime executes the compiled
 `*.psx.php` sibling — produced automatically in dev (`APP_ENV=dev`) or by
 `vendor/bin/usephp compile src/Pages` at deploy time. Plain `.php` page files
 also work and skip the compile step.
+
+**Compiled routes (production).** By default the router scans `src/Pages/`
+on every request. Run `vendor/bin/relayer routes:compile` at deploy and it
+writes a readable, portable snapshot to `var/cache/routes/routes.php`;
+production then reads that one OPcache-warm file instead of walking the
+tree. It is presence-gated — no file means a live scan, so dev always
+reflects the current tree and never goes stale. Scan-time ambiguities
+(page/`route.php` clashes, route-group URL collisions) fail the compile at
+deploy rather than on the first request.
 
 ### Class-style page
 

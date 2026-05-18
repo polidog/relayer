@@ -19,10 +19,25 @@ final class PageScanner
     private const LAYOUT_FILES = ['layout.psx', 'layout.php'];
     private const ERROR_FILES = ['error.psx', 'error.php'];
     private const DYNAMIC_SEGMENT_PATTERN = '/^\[([a-zA-Z_][a-zA-Z0-9_]*)\]$/';
+    // Next.js App Router conventions for directory names:
+    //  - `(group)`  organises files without contributing a URL segment;
+    //  - `_private` opts the folder and everything under it out of routing.
+    private const ROUTE_GROUP_PATTERN = '/^\(.+\)$/';
+    private const PRIVATE_SEGMENT_PREFIX = '_';
 
     public function __construct(
         private readonly string $appDirectory,
     ) {}
+
+    /**
+     * The normalised app directory this scanner walks — the single source
+     * of truth for turning the compiled artifact's relative paths back
+     * into absolute ones (see {@see CompiledRoutes::load()}).
+     */
+    public function appDirectory(): string
+    {
+        return \rtrim($this->appDirectory, '/');
+    }
 
     public function scan(): RouteCollection
     {
@@ -33,8 +48,29 @@ final class PageScanner
             throw new RuntimeException("App directory does not exist: {$appDir}");
         }
 
+        // Route groups let two different paths collapse onto one URL
+        // (e.g. `(a)/about/` and `(b)/about/` both → `/about`). Next.js
+        // rejects that; we do too, naming both files instead of silently
+        // letting sort order pick a winner.
+        /** @var array<string, string> $patternSource pattern → source file */
+        $patternSource = [];
+
         foreach ($this->findRoutables($appDir) as $routable) {
-            $collection->add($this->createRoute($appDir, $routable['path'], $routable['isApi']));
+            $route = $this->createRoute($appDir, $routable['path'], $routable['isApi']);
+
+            if (isset($patternSource[$route->pattern])) {
+                throw new RuntimeException(\sprintf(
+                    "Route pattern \"%s\" is produced by two files:\n  %s\n  %s\n"
+                    . 'Route groups (parenthesised folders) and the remaining '
+                    . 'path must still yield a unique URL.',
+                    $route->pattern,
+                    $patternSource[$route->pattern],
+                    $routable['path'],
+                ));
+            }
+
+            $patternSource[$route->pattern] = $routable['path'];
+            $collection->add($route);
         }
 
         return $collection;
@@ -93,6 +129,13 @@ final class PageScanner
             }
             $name = $file->getFilename();
             $dir = $file->getPath();
+
+            // A `_private` folder anywhere on the path opts this file (and
+            // its whole subtree) out of routing — it never becomes a route.
+            if ($this->isPrivatePath($appDir, $dir)) {
+                continue;
+            }
+
             $perDir[$dir] ??= ['pages' => [], 'route' => null];
 
             if (\in_array($name, self::PAGE_FILES, true)) {
@@ -179,6 +222,28 @@ final class PageScanner
         return \substr($to, \strlen($from) + 1);
     }
 
+    /**
+     * True when any directory between $appDir and $dir is a `_private`
+     * folder. Such a folder — and everything nested under it — is an
+     * implementation detail the router must never expose as a route.
+     */
+    private function isPrivatePath(string $appDir, string $dir): bool
+    {
+        $relativePath = $this->getRelativePath($appDir, $dir);
+
+        if ('' === $relativePath) {
+            return false;
+        }
+
+        foreach (\explode('/', $relativePath) as $segment) {
+            if (\str_starts_with($segment, self::PRIVATE_SEGMENT_PREFIX)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function buildPattern(string $relativePath): string
     {
         if ('' === $relativePath) {
@@ -189,11 +254,22 @@ final class PageScanner
         $patternSegments = [];
 
         foreach ($segments as $segment) {
+            if (1 === \preg_match(self::ROUTE_GROUP_PATTERN, $segment)) {
+                // Organisational only — contributes no URL segment.
+                continue;
+            }
+
             if (\preg_match(self::DYNAMIC_SEGMENT_PATTERN, $segment, $matches)) {
                 $patternSegments[] = '[' . $matches[1] . ']';
             } else {
                 $patternSegments[] = $segment;
             }
+        }
+
+        // A path made entirely of route groups (e.g. `(marketing)/`) maps
+        // to the root, exactly like an empty relative path.
+        if ([] === $patternSegments) {
+            return '/';
         }
 
         return '/' . \implode('/', $patternSegments);

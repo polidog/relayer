@@ -34,6 +34,7 @@ final class InitCommand
         Usage:
           relayer init             scaffold the project structure in the current directory
           relayer routes           list the routes discovered under src/Pages
+          relayer routes:compile   write the precompiled route artifact (run at deploy)
           relayer profiler:clear   delete cached dev profiler data (var/cache/profiler)
 
         Run inside a project that has already required the framework
@@ -64,6 +65,10 @@ final class InitCommand
 
         if ('routes' === $command) {
             return RoutesCommand::run(\array_slice($args, 1), $write, $cwd);
+        }
+
+        if ('routes:compile' === $command) {
+            return RoutesCompileCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('profiler:clear' === $command) {
