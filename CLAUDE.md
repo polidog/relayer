@@ -65,12 +65,17 @@ dispatched through `Scaffold\InitCommand::run()`.
   namespaced code), short arrays, trailing commas in multiline, classes
   imported via `use` but functions/constants **not** imported. Don't
   hand-fight the formatter — see the hook below.
-- **PHPStan level `max`** over `src` + `tests`. Keep it green; add precise
-  generics/types rather than suppressing.
-- Tests: PHPUnit 11, `final` classes, `self::assert*`, fixtures live under
-  `tests/**/fixtures` and `tests/Fixtures` (both excluded from cs-fixer and
-  phpstan). Use PHPUnit **attributes**, not docblock metadata
-  (`@covers`/`@internal` are intentionally disabled in cs-fixer).
+- **PHPStan level `max`** over `src` + `tests`, excluding only
+  `tests/Router/fixtures`. Keep it green; add precise generics/types
+  rather than suppressing.
+- cs-fixer scans `src` + `tests`, `*.php` only, skipping any directory
+  named `fixtures`. So the router's `tests/**/fixtures` trees (the
+  `.psx`/page scaffolds the scanner consumes) are formatted/analyzed by
+  neither tool, but `tests/Fixtures/` is **real** `Tests\Fixtures` support
+  code and *is* both formatted and analyzed — treat it as production code.
+- Tests: PHPUnit 11, `final` classes, `self::assert*`. Use PHPUnit
+  **attributes**, not docblock metadata (`@covers`/`@internal` are
+  intentionally disabled in cs-fixer).
 - `README.md` and `README.ja.md` are kept **in sync** — update both when
   changing documented behavior.
 - `.env` uses the Symfony cascade (`.env` committed, `.env.local` /
