@@ -28,6 +28,9 @@ Opinionated, batteries-included framework on top of
   with pluggable `EtagStore` (file-based default, Redis-ready)
 - Session-based authentication: `#[Auth]` attribute / `$ctx->requireAuth()`,
   role checks, password hashing, pluggable `UserProvider` and `SessionStorage`
+- Bearer **token** auth: server-side Firebase / Cognito ID-token
+  verification (JWKS, cached + rotation-aware) — stateless API or
+  verify-then-session, same `#[Auth]` guard
 - [Zod](https://zod.dev/)-style schema validation (`Validator::object()`,
   `safeParse` / `parse`, form-input coercion + per-field errors)
 - A dev-only request profiler (`/_profiler` view, no-op in production)
@@ -1059,6 +1062,141 @@ machinery — no duplicate session starts.
 - Sessions are rotated on **both** login and logout. A pre-login
   session id captured by an attacker stops working the moment the
   user authenticates.
+
+### 6. Token authentication (Firebase / Cognito)
+
+For apps where a client SDK already mints a signed ID token — the
+Firebase JS SDK, AWS Amplify, the Cognito Hosted UI — the framework
+verifies that token instead of running a password handshake. It owns
+**no** OAuth redirect / code-exchange flow: the client holds the token
+and sends it as `Authorization: Bearer <jwt>`; Relayer validates the
+signature against the IdP's published JWKS and the registered claims
+(`iss`, `aud`, `exp`/`nbf`/`iat`, and `token_use` for Cognito).
+
+#### Bind a `TokenVerifier`
+
+`TokenVerifier` is the token-based counterpart of `UserProvider`. Build
+one with the `Firebase` / `Cognito` factory. Symfony's service factory
+syntax keeps it to config — no glue class:
+
+```yaml
+# config/services.yaml
+services:
+  _defaults: { autowire: true, autoconfigure: true, public: true }
+
+  # Firebase
+  Polidog\Relayer\Auth\Token\TokenVerifier:
+    factory: ['Polidog\Relayer\Auth\Token\Firebase', 'verifier']
+    arguments:
+      $http: '@Polidog\Relayer\Http\Client\HttpClient'
+      $projectId: '%env(FIREBASE_PROJECT_ID)%'
+      $cacheDir: '%app.project_root%/var/cache/jwks'
+
+  # …or Cognito
+  # Polidog\Relayer\Auth\Token\TokenVerifier:
+  #   factory: ['Polidog\Relayer\Auth\Token\Cognito', 'verifier']
+  #   arguments:
+  #     $http: '@Polidog\Relayer\Http\Client\HttpClient'
+  #     $region: '%env(COGNITO_REGION)%'
+  #     $userPoolId: '%env(COGNITO_USER_POOL_ID)%'
+  #     $appClientId: '%env(COGNITO_APP_CLIENT_ID)%'
+  #     $cacheDir: '%app.project_root%/var/cache/jwks'
+```
+
+| Env var                 | Used by  | Example                 |
+| ----------------------- | -------- | ----------------------- |
+| `FIREBASE_PROJECT_ID`   | Firebase | `my-app`                |
+| `COGNITO_REGION`        | Cognito  | `ap-northeast-1`        |
+| `COGNITO_USER_POOL_ID`  | Cognito  | `ap-northeast-1_AbCdEf` |
+| `COGNITO_APP_CLIENT_ID` | Cognito  | `7f3k…` (app client id) |
+
+The JWKS is fetched through the framework's own `HttpClient` (so it
+lands in the dev profiler like any other egress) and cached on disk per
+URL, honouring the response's `Cache-Control: max-age`. Key rotation is
+automatic: a token whose `kid` is missing from the cached set triggers
+exactly one refresh (rate-limited, so forged `kid`s can't be amplified
+into a JWKS-fetch flood). An unreachable JWKS endpoint is an
+operational fault — it surfaces as a server error, it does **not**
+silently log everyone out.
+
+#### Mode A — stateless API (bearer per request)
+
+Bind only a `TokenVerifier` (no `UserProvider`). `AuthenticatorInterface`
+then resolves to the stateless `TokenAuthenticator`, so the **same**
+`#[Auth]` / `requireAuth()` machinery works unchanged — every request
+re-derives the principal from the bearer header, nothing is persisted:
+
+```php
+#[Auth(redirectTo: '')]            // 401 for an absent/bad token (no redirect)
+final class ApiEndpoint extends PageComponent { /* ... */ }
+
+#[Auth(roles: ['admin'])]          // roles read from the token's claims
+final class AdminApi extends PageComponent { /* ... */ }
+```
+
+#### Mode B — session login (verify once, then a cookie session)
+
+Verify the token in a login route and hand the resulting `Identity` to
+`Authenticator::login()`. The session `Authenticator` no longer needs a
+`UserProvider`, so a Firebase/Cognito app with **no** local password
+store still gets a normal cookie session and all the session-based
+`#[Auth]` behaviour after the first request:
+
+```php
+<?php
+// src/Pages/auth/token/route.php — POST { } with Authorization: Bearer <jwt>
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\Token\BearerToken;
+use Polidog\Relayer\Auth\Token\TokenVerifier;
+use Polidog\Relayer\Auth\Token\AuthorizationHeader;
+use Polidog\Relayer\Http\Response;
+
+return [
+    'POST' => static function (
+        TokenVerifier $verifier,
+        Authenticator $auth,
+        AuthorizationHeader $header,
+    ): Response {
+        $identity = $verifier->verify(
+            BearerToken::parse($header->value()) ?? '',
+        );
+        if (null === $identity) {
+            return Response::json(['error' => 'invalid token'], 401);
+        }
+
+        $auth->login($identity);             // rotates the session id
+
+        return Response::json(['user' => $identity->toArray()]);
+    },
+];
+```
+
+#### Precedence (one rule, no hybrid)
+
+| Bound services                | `AuthenticatorInterface` is… | Notes                                                              |
+| ----------------------------- | ---------------------------- | ------------------------------------------------------------------ |
+| `UserProvider`                | session `Authenticator`      | Password app (today's behaviour).                                  |
+| `TokenVerifier` only          | `TokenAuthenticator`         | Token-first API; `#[Auth]` enforces the bearer token.              |
+| both                          | session `Authenticator`      | Session-first; `TokenAuthenticator` is still injectable by type on specific API routes. |
+
+#### Notes
+
+- **Bearer only.** The token is read from `Authorization: Bearer …`.
+  On Apache/CGI the `Authorization` header is often stripped unless an
+  `.htaccess`/vhost rule re-injects it — Relayer also reads the
+  documented `REDIRECT_HTTP_AUTHORIZATION` fallback, but the rewrite
+  rule must still be present on those hosts.
+- **Pluggable claim mapping.** Both factories take an optional
+  `identityMapper` closure (`fn(\stdClass $claims): ?Identity`) to map
+  custom claims / role sources; the defaults use `sub` as the id, fall
+  back `name → email → sub` for the display name (Cognito also tries
+  `cognito:username`), and read roles from `cognito:groups` (Cognito)
+  or a custom `roles` array (Firebase).
+- `attempt()` / `login()` / `logout()` on `TokenAuthenticator` throw
+  `LogicException` — a stateless bearer authenticator has no password
+  handshake and no session; failing loudly beats a misleading no-op.
 
 ## HTTP Cache Headers via `#[Cache]`
 
