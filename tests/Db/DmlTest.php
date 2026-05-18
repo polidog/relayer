@@ -181,6 +181,18 @@ final class DmlTest extends TestCase
             static fn (PdoDatabase $db) => $db->delete('users', ['1=1 --' => 1]),
             'Invalid column identifier',
         ];
+
+        // The table identifier is validated before the empty-arg guards,
+        // so a bad table never gets masked by a "must not be empty" error.
+        yield 'invalid table beats empty insert data' => [
+            static fn (PdoDatabase $db) => $db->insert('bad table', []),
+            'Invalid table identifier',
+        ];
+
+        yield 'invalid table beats empty delete where' => [
+            static fn (PdoDatabase $db) => $db->delete('bad table', []),
+            'Invalid table identifier',
+        ];
     }
 
     private function sqlite(): PdoDatabase

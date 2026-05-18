@@ -80,11 +80,12 @@ final class PdoDatabase implements Database
 
     public function insert(string $table, array $data): string
     {
+        self::assertIdentifier($table, 'table', true);
+
         if ([] === $data) {
             throw new DatabaseException('insert(): $data must not be empty');
         }
 
-        self::assertIdentifier($table, 'table', true);
         $columns = \array_keys($data);
         foreach ($columns as $column) {
             self::assertIdentifier((string) $column, 'column', false);
@@ -101,6 +102,8 @@ final class PdoDatabase implements Database
 
     public function update(string $table, array $set, array $where): int
     {
+        self::assertIdentifier($table, 'table', true);
+
         if ([] === $set) {
             throw new DatabaseException('update(): $set must not be empty');
         }
@@ -109,8 +112,6 @@ final class PdoDatabase implements Database
                 'update(): $where must not be empty — use perform() for an unfiltered UPDATE',
             );
         }
-
-        self::assertIdentifier($table, 'table', true);
 
         $assignments = [];
         foreach (\array_keys($set) as $column) {
@@ -128,13 +129,14 @@ final class PdoDatabase implements Database
 
     public function delete(string $table, array $where): int
     {
+        self::assertIdentifier($table, 'table', true);
+
         if ([] === $where) {
             throw new DatabaseException(
                 'delete(): $where must not be empty — use perform() to delete every row',
             );
         }
 
-        self::assertIdentifier($table, 'table', true);
         [$whereSql, $whereParams] = self::buildWhere($where);
 
         return $this->perform('DELETE FROM ' . $table . ' WHERE ' . $whereSql, $whereParams);

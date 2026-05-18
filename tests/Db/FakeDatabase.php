@@ -95,7 +95,7 @@ final class FakeDatabase implements Database
      */
     public function update(string $table, array $set, array $where): int
     {
-        return $this->perform('update', $set + $where);
+        return $this->perform('update', [...\array_values($set), ...\array_values($where)]);
     }
 
     /**
