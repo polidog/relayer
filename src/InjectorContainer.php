@@ -6,7 +6,6 @@ namespace Polidog\Relayer;
 
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
-use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
@@ -112,9 +111,12 @@ final class InjectorContainer implements ContainerInterface
 
     private function resolveAuthenticator(): ?AuthenticatorInterface
     {
-        // Gate on UserProvider — an unbound interface signals "auth not
-        // configured" and lets apps without auth skip the whole code path.
-        if (!$this->container->has(UserProvider::class) || !$this->container->has(AuthenticatorInterface::class)) {
+        // The AuthenticatorInterface binding itself is the "auth
+        // configured" signal: ContainerFactory only aliases it when a
+        // UserProvider (session) or a TokenVerifier (stateless) is bound,
+        // so apps without auth still skip the whole code path — without
+        // assuming the password-based UserProvider is the only model.
+        if (!$this->container->has(AuthenticatorInterface::class)) {
             return null;
         }
 

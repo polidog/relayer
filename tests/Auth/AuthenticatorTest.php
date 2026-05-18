@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Auth;
 
+use LogicException;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Auth\Credentials;
@@ -104,6 +105,36 @@ final class AuthenticatorTest extends TestCase
         self::assertSame('sso-42', $auth->user()?->id);
     }
 
+    public function testWorksWithoutAUserProviderForTokenOrSocialLogin(): void
+    {
+        // A Firebase/Cognito app has no local password store: it verifies
+        // a token elsewhere then promotes the resulting Identity. The
+        // session paths must work with neither UserProvider nor hasher.
+        $session = new ArraySessionStorage();
+        $auth = new Authenticator($session);
+
+        $auth->login(new Identity(id: 'firebase-uid', displayName: 'Token User', roles: ['user']));
+
+        self::assertTrue($auth->check());
+        self::assertSame('firebase-uid', $auth->user()?->id);
+        self::assertSame(1, $session->regenerateCount);
+
+        $auth->logout();
+
+        self::assertFalse($auth->check());
+        self::assertSame(2, $session->regenerateCount);
+    }
+
+    public function testAttemptWithoutAUserProviderFailsLoudly(): void
+    {
+        // Misconfiguration (calling the password path on a token-only
+        // Authenticator) must not masquerade as a failed login.
+        $auth = new Authenticator(new ArraySessionStorage());
+
+        $this->expectException(LogicException::class);
+        $auth->attempt('alice@example.com', 'secret123');
+    }
+
     private function makeAuthenticator(ArraySessionStorage $session): Authenticator
     {
         $hasher = new NativePasswordHasher();
@@ -128,6 +159,6 @@ final class AuthenticatorTest extends TestCase
             }
         };
 
-        return new Authenticator($provider, $hasher, $session);
+        return new Authenticator($session, $provider, $hasher);
     }
 }

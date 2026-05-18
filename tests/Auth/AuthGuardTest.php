@@ -84,6 +84,6 @@ final class AuthGuardTest extends TestCase
             }
         };
 
-        return new Authenticator($provider, $hasher, new ArraySessionStorage());
+        return new Authenticator(new ArraySessionStorage(), $provider, $hasher);
     }
 }

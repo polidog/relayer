@@ -30,6 +30,9 @@
 - セッションベースの認証: `#[Auth]` アトリビュート / `$ctx->requireAuth()`、
   ロール検査、パスワードハッシュ、差し替え可能な `UserProvider` /
   `SessionStorage`
+- Bearer **トークン**認証: サーバー側で Firebase / Cognito の ID
+  トークンを検証（JWKS をキャッシュ・ローテーション追従）。
+  ステートレス API でも検証→セッションでも、同じ `#[Auth]` ガード
 - [Zod](https://zod.dev/) 風のスキーマバリデーション（`Validator::object()`
   など、`safeParse` / `parse`、フォーム入力の coercion とフィールド別エラー）
 - dev 限定のリクエストプロファイラ（`/_profiler` ビュー、本番では no-op）
@@ -1058,6 +1061,142 @@ $container->register(NativePasswordHasher::class)
 - セッションはログインとログアウト **両方** で再生成します。攻撃者が
   ログイン前のセッション ID を奪取しても、ユーザーが認証した時点で
   そのセッション ID は無効になります。
+
+### 6. トークン認証（Firebase / Cognito）
+
+クライアント SDK が署名済み ID トークンを発行する構成（Firebase JS
+SDK、AWS Amplify、Cognito Hosted UI）では、パスワードハンドシェイク
+の代わりにそのトークンを検証します。OAuth のリダイレクト/コード交換
+フローはフレームワーク側に **持ちません**。クライアントがトークンを
+保持し `Authorization: Bearer <jwt>` で送信、Relayer は IdP 公開の
+JWKS で署名を、登録済みクレーム（`iss`・`aud`・`exp`/`nbf`/`iat`、
+Cognito は `token_use`）を検証します。
+
+#### `TokenVerifier` をバインドする
+
+`TokenVerifier` は `UserProvider` のトークン版です。`Firebase` /
+`Cognito` ファクトリで生成します。Symfony のサービス factory 構文で
+設定だけに収まり、グルーコードは不要です:
+
+```yaml
+# config/services.yaml
+services:
+  _defaults: { autowire: true, autoconfigure: true, public: true }
+
+  # Firebase
+  Polidog\Relayer\Auth\Token\TokenVerifier:
+    factory: ['Polidog\Relayer\Auth\Token\Firebase', 'verifier']
+    arguments:
+      $http: '@Polidog\Relayer\Http\Client\HttpClient'
+      $projectId: '%env(FIREBASE_PROJECT_ID)%'
+      $cacheDir: '%app.project_root%/var/cache/jwks'
+
+  # …または Cognito
+  # Polidog\Relayer\Auth\Token\TokenVerifier:
+  #   factory: ['Polidog\Relayer\Auth\Token\Cognito', 'verifier']
+  #   arguments:
+  #     $http: '@Polidog\Relayer\Http\Client\HttpClient'
+  #     $region: '%env(COGNITO_REGION)%'
+  #     $userPoolId: '%env(COGNITO_USER_POOL_ID)%'
+  #     $appClientId: '%env(COGNITO_APP_CLIENT_ID)%'
+  #     $cacheDir: '%app.project_root%/var/cache/jwks'
+```
+
+| 環境変数                | 用途     | 例                      |
+| ----------------------- | -------- | ----------------------- |
+| `FIREBASE_PROJECT_ID`   | Firebase | `my-app`                |
+| `COGNITO_REGION`        | Cognito  | `ap-northeast-1`        |
+| `COGNITO_USER_POOL_ID`  | Cognito  | `ap-northeast-1_AbCdEf` |
+| `COGNITO_APP_CLIENT_ID` | Cognito  | `7f3k…`（app client id）|
+
+JWKS はフレームワークの `HttpClient` 経由で取得し（dev プロファイラ
+にも乗ります）、URL ごとにディスクへキャッシュ、応答の
+`Cache-Control: max-age` を尊重します。鍵ローテーションは自動です。
+キャッシュに無い `kid` のトークンが来ると 1 回だけリフレッシュします
+（レート制限付きなので偽 `kid` の連打を JWKS フェッチ洪水に増幅でき
+ません）。JWKS エンドポイント到達不能は運用障害として表に出し、全
+ユーザーを黙ってログアウト扱いには **しません**。
+
+#### モード A — ステートレス API（リクエスト毎の Bearer）
+
+`TokenVerifier` だけをバインド（`UserProvider` なし）すると、
+`AuthenticatorInterface` はステートレスな `TokenAuthenticator` に解決
+され、**同じ** `#[Auth]` / `requireAuth()` がそのまま機能します。毎
+リクエストで Bearer ヘッダから principal を再導出し、何も永続化しま
+せん:
+
+```php
+#[Auth(redirectTo: '')]            // トークン無効/不在は 401（リダイレクトなし）
+final class ApiEndpoint extends PageComponent { /* ... */ }
+
+#[Auth(roles: ['admin'])]          // ロールはトークンのクレームから
+final class AdminApi extends PageComponent { /* ... */ }
+```
+
+#### モード B — セッションログイン（1 回検証して Cookie セッション）
+
+ログインルートでトークンを検証し、得た `Identity` を
+`Authenticator::login()` に渡します。セッション `Authenticator` は
+`UserProvider` を必要としなくなったので、ローカルにパスワードを
+持たない Firebase/Cognito アプリでも、初回以降は通常の Cookie
+セッションとセッションベースの `#[Auth]` をそのまま使えます:
+
+```php
+<?php
+// src/Pages/auth/token/route.php — POST { } を Authorization: Bearer <jwt> 付きで
+declare(strict_types=1);
+
+use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\Token\BearerToken;
+use Polidog\Relayer\Auth\Token\TokenVerifier;
+use Polidog\Relayer\Auth\Token\AuthorizationHeader;
+use Polidog\Relayer\Http\Response;
+
+return [
+    'POST' => static function (
+        TokenVerifier $verifier,
+        Authenticator $auth,
+        AuthorizationHeader $header,
+    ): Response {
+        $identity = $verifier->verify(
+            BearerToken::parse($header->value()) ?? '',
+        );
+        if (null === $identity) {
+            return Response::json(['error' => 'invalid token'], 401);
+        }
+
+        $auth->login($identity);             // セッション ID を再生成
+
+        return Response::json(['user' => $identity->toArray()]);
+    },
+];
+```
+
+#### 優先順位（ルールは 1 つ・ハイブリッド層なし）
+
+| バインド済みサービス          | `AuthenticatorInterface` は…  | 備考                                                          |
+| ----------------------------- | ----------------------------- | ------------------------------------------------------------- |
+| `UserProvider`                | セッション `Authenticator`    | パスワードアプリ（従来動作）。                                 |
+| `TokenVerifier` のみ          | `TokenAuthenticator`          | トークン優先 API。`#[Auth]` が Bearer を強制。                |
+| 両方                          | セッション `Authenticator`    | セッション優先。`TokenAuthenticator` は特定 API ルートで型指定により注入可。 |
+
+#### 注意
+
+- **Bearer のみ。** トークンは `Authorization: Bearer …` から読みます。
+  Apache/CGI では `.htaccess`/vhost の再注入ルールが無いと
+  `Authorization` ヘッダが落ちることがあります。Relayer は
+  `REDIRECT_HTTP_AUTHORIZATION` フォールバックも読みますが、その
+  rewrite ルール自体は当該ホストに必要です。
+- **クレームマッピングは差し替え可能。** 両ファクトリは任意の
+  `identityMapper` クロージャ（`fn(\stdClass $claims): ?Identity`）を
+  受け取り、カスタムクレーム/ロール源を写像できます。デフォルトは
+  `sub` を id とし、表示名は `name → email → sub`（Cognito は
+  `cognito:username` も）、ロールは `cognito:groups`（Cognito）または
+  カスタム `roles` 配列（Firebase）から読みます。
+- `TokenAuthenticator` の `attempt()` / `login()` / `logout()` は
+  `LogicException` を投げます。ステートレスな Bearer 認証にはパス
+  ワードハンドシェイクもセッションも無く、黙って no-op にするより
+  明示的に失敗させます。
 
 ## `#[Cache]` による HTTP キャッシュ制御
 

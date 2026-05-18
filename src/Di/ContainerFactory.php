@@ -14,6 +14,10 @@ use Polidog\Relayer\Auth\NativePasswordHasher;
 use Polidog\Relayer\Auth\NativeSession;
 use Polidog\Relayer\Auth\PasswordHasher;
 use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\Auth\Token\AuthorizationHeader;
+use Polidog\Relayer\Auth\Token\ServerAuthorizationHeader;
+use Polidog\Relayer\Auth\Token\TokenAuthenticator;
+use Polidog\Relayer\Auth\Token\TokenVerifier;
 use Polidog\Relayer\Auth\TraceableAuthenticator;
 use Polidog\Relayer\Auth\TraceableSessionStorage;
 use Polidog\Relayer\Auth\UserProvider;
@@ -82,30 +86,61 @@ final class ContainerFactory
         $configurator ??= new AppConfigurator($projectRoot);
         $configurator->configure($container);
 
-        // Conditionally register Authenticator now that the app has had
-        // a chance to bind a UserProvider. Without this gate, apps that
-        // don't use auth would fail container compilation because
-        // Authenticator's `$users` parameter is unsatisfiable.
-        if ($container->has(UserProvider::class) && !$container->has(Authenticator::class)) {
+        // Conditionally register the session Authenticator now that the
+        // app has had a chance to bind a UserProvider and/or a
+        // TokenVerifier. It no longer needs either to function for
+        // login()/logout()/user()/check() (only the always-bound
+        // SessionStorage), so a token-first app still gets a working
+        // session authenticator for the verify-then-login mode. With no
+        // auth configured at all, nothing is registered and apps that
+        // don't use auth pay nothing and never fail compilation over an
+        // unsatisfiable dependency.
+        $hasUsers = $container->has(UserProvider::class);
+        $hasTokenVerifier = $container->has(TokenVerifier::class);
+
+        if (($hasUsers || $hasTokenVerifier) && !$container->has(Authenticator::class)) {
             $container->register(Authenticator::class)
                 ->setAutowired(true)
                 ->setPublic(true)
             ;
         }
 
-        // Bind the AuthenticatorInterface ID to the concrete Authenticator
-        // when auth is configured. In dev, swap the alias to point at the
-        // TraceableAuthenticator decorator so framework code (and apps
-        // that depend on the interface) get auth event tracing for free.
-        if ($container->has(Authenticator::class)) {
-            $container->setAlias(AuthenticatorInterface::class, Authenticator::class)
+        // Stateless bearer authenticator. Registered whenever a
+        // TokenVerifier is bound, so an app can type-hint it directly on
+        // specific API routes even when a password UserProvider also
+        // exists. Gated on TokenVerifier so its dependency stays
+        // satisfiable (mirrors the Authenticator gate).
+        if ($hasTokenVerifier && !$container->has(TokenAuthenticator::class)) {
+            $container->register(TokenAuthenticator::class)
+                ->setAutowired(true)
+                ->setPublic(true)
+            ;
+        }
+
+        // Pick the AuthenticatorInterface implementation that #[Auth]
+        // enforces. One rule, no hybrid: a password UserProvider means a
+        // session-first app, so the guard runs against the session
+        // Authenticator; otherwise a TokenVerifier means a token-first
+        // app, so the guard runs against the stateless TokenAuthenticator
+        // (and `#[Auth(redirectTo: '')]` yields a clean 401). In dev,
+        // whichever is chosen is wrapped by TraceableAuthenticator, which
+        // decorates the interface so it fits either concrete.
+        $authConcrete = null;
+        if ($hasUsers && $container->has(Authenticator::class)) {
+            $authConcrete = Authenticator::class;
+        } elseif ($hasTokenVerifier) {
+            $authConcrete = TokenAuthenticator::class;
+        }
+
+        if (null !== $authConcrete) {
+            $container->setAlias(AuthenticatorInterface::class, $authConcrete)
                 ->setPublic(true)
             ;
 
             if ($isDev) {
                 $container->register(TraceableAuthenticator::class)
                     ->setArguments([
-                        new Reference(Authenticator::class),
+                        new Reference($authConcrete),
                         new Reference(Profiler::class),
                     ])
                     ->setPublic(true)
@@ -170,10 +205,22 @@ final class ContainerFactory
             ->setPublic(true)
         ;
 
-        // Authenticator is NOT registered unconditionally — it depends on
-        // UserProvider, which the app supplies. We register it in a
-        // deferred step in create() only when UserProvider has been bound
-        // by the user's AppConfigurator. Apps without auth pay nothing.
+        // Always registered (no required config, like the HTTP client):
+        // it only reads $_SERVER, so the stateless TokenAuthenticator can
+        // be autowired with zero app setup once a TokenVerifier is bound.
+        $container->register(ServerAuthorizationHeader::class)
+            ->setPublic(true)
+        ;
+        $container->setAlias(AuthorizationHeader::class, ServerAuthorizationHeader::class)
+            ->setPublic(true)
+        ;
+
+        // Authenticator is NOT registered here. It no longer depends on
+        // UserProvider (both $users and $hasher are optional), but
+        // registering it only makes sense once auth is actually
+        // configured. create() does that in a deferred step, gated on
+        // "a UserProvider OR a TokenVerifier is bound". Apps without auth
+        // pay nothing.
 
         // Profiler. Prod resolves to NullProfiler so user code can take a
         // `Profiler` dependency without any cost; dev swaps the alias to
