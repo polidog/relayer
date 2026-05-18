@@ -10,6 +10,7 @@ use Firebase\JWT\JWT;
 use InvalidArgumentException;
 use Polidog\Relayer\Auth\Identity;
 use stdClass;
+use Throwable;
 use UnexpectedValueException;
 
 /**
@@ -24,9 +25,10 @@ use UnexpectedValueException;
  * {@see JWT::decode()} against the {@see JwksProvider}'s key set; `iss`,
  * `aud` and the required claims are checked here because `JWT::decode()`
  * does not. A token that fails *any* of these resolves to `null` — the
- * failure reason is never leaked. A `kid` absent from the cached key set
- * triggers exactly one {@see JwksProvider::refresh()} (key rotation),
- * then a single retry.
+ * failure reason is never leaked. A JWKS {@see JwksProvider::refresh()}
+ * is triggered only by a genuine signing-key rotation — a header `kid`
+ * the cached set has never seen — detected up front, so an expired or
+ * forged token does not pay a refresh + a second decode.
  *
  * Trust boundary: only `firebase/php-jwt`'s own validation exceptions
  * (all `UnexpectedValueException` / `DomainException` /
@@ -76,23 +78,59 @@ final class JwtTokenVerifier implements TokenVerifier
         JWT::$leeway = $this->leeway;
 
         try {
+            $keys = $this->jwks->keys();
+
+            // Only a real signing-key rotation — a `kid` the cached set
+            // has never seen — warrants a JWKS refresh. Detecting that up
+            // front (instead of inferring it from a catch-all on every
+            // JWT::decode() failure) means an expired / bad-signature /
+            // malformed token does not each pay a refresh + a second
+            // decode just to arrive at the same null.
+            $kid = $this->keyId($token);
+            if (null !== $kid && !\array_key_exists($kid, $keys)) {
+                $keys = $this->jwks->refresh();
+            }
+
             try {
-                return JWT::decode($token, $this->jwks->keys());
+                return JWT::decode($token, $keys);
             } catch (DomainException|InvalidArgumentException|UnexpectedValueException) {
-                // Most often a rotated signing key: the `kid` is no longer
-                // in the cached set. Refresh once and retry. Still failing
-                // means a genuinely bad token -> null. An unreachable JWKS
-                // endpoint throws RuntimeException from the provider, which
-                // is deliberately not caught here.
-                try {
-                    return JWT::decode($token, $this->jwks->refresh());
-                } catch (DomainException|InvalidArgumentException|UnexpectedValueException) {
-                    return null;
-                }
+                // Bad token (signature, exp/nbf/iat, claims, unknown
+                // alg/kid) -> never an Identity. An unreachable JWKS
+                // endpoint throws RuntimeException from the provider
+                // above and is deliberately not caught here.
+                return null;
             }
         } finally {
             JWT::$leeway = $previousLeeway;
         }
+    }
+
+    /**
+     * The `kid` from the JWT header *without verifying anything* — used
+     * purely to tell a key rotation (refresh worthwhile) apart from an
+     * ordinary bad token (refresh pointless). Returns null for a
+     * malformed token or one with no `kid`; either way the single
+     * {@see JWT::decode()} below still rejects it.
+     */
+    private function keyId(string $token): ?string
+    {
+        $segments = \explode('.', $token);
+        if (3 !== \count($segments)) {
+            return null;
+        }
+
+        try {
+            $header = \json_decode(JWT::urlsafeB64Decode($segments[0]), true);
+        } catch (Throwable) {
+            return null;
+        }
+
+        if (!\is_array($header)) {
+            return null;
+        }
+        $kid = $header['kid'] ?? null;
+
+        return \is_string($kid) && '' !== $kid ? $kid : null;
     }
 
     private function claimsValid(stdClass $claims): bool

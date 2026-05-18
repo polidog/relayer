@@ -215,10 +215,12 @@ final class ContainerFactory
             ->setPublic(true)
         ;
 
-        // Authenticator is NOT registered unconditionally — it depends on
-        // UserProvider, which the app supplies. We register it in a
-        // deferred step in create() only when UserProvider has been bound
-        // by the user's AppConfigurator. Apps without auth pay nothing.
+        // Authenticator is NOT registered here. It no longer depends on
+        // UserProvider (both $users and $hasher are optional), but
+        // registering it only makes sense once auth is actually
+        // configured. create() does that in a deferred step, gated on
+        // "a UserProvider OR a TokenVerifier is bound". Apps without auth
+        // pay nothing.
 
         // Profiler. Prod resolves to NullProfiler so user code can take a
         // `Profiler` dependency without any cost; dev swaps the alias to

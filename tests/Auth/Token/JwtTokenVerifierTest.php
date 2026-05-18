@@ -193,6 +193,29 @@ final class JwtTokenVerifierTest extends TestCase
         self::assertNull($verifier->verify('a.b.c'));
     }
 
+    public function testBadTokenWithAKnownKidDoesNotRefresh(): void
+    {
+        $fixture = new JwtFixture(); // default kid 'test-key-1'
+        $provider = new ArrayJwksProvider($fixture->keySet());
+        $verifier = $this->verifier($provider);
+
+        // Expired, but its `kid` is in the cached set: not a rotation, so
+        // no refresh and no wasted second decode.
+        self::assertNull($verifier->verify($fixture->sign($this->claims(['exp' => \time() - 3600]))));
+        self::assertSame(0, $provider->refreshCalls);
+    }
+
+    public function testGarbageTokenDoesNotRefresh(): void
+    {
+        $fixture = new JwtFixture();
+        $provider = new ArrayJwksProvider($fixture->keySet());
+        $verifier = $this->verifier($provider);
+
+        self::assertNull($verifier->verify('not-a-jwt'));
+        self::assertNull($verifier->verify('a.b.c'));
+        self::assertSame(0, $provider->refreshCalls, 'a malformed token never triggers a JWKS refresh');
+    }
+
     /**
      * @param array<string, string> $requiredClaims
      */
