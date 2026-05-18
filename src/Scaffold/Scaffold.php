@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 3;
+    public const int STRUCTURE_VERSION = 4;
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -53,6 +53,12 @@ final class Scaffold
             // own AGENTS.md is never clobbered.
             'RELAYER.md' => self::relayerMd(),
             'AGENTS.md' => self::agentsPointer(),
+            // Claude Code task tooling, co-versioned exactly like
+            // RELAYER.md (ships in the framework, skip-if-exists, cannot
+            // drift). RELAYER.md stays the single source of truth; these
+            // are thin, trigger-scoped entrypoints that defer to it.
+            '.claude/skills/relayer-routing/SKILL.md' => self::claudeRoutingSkill(),
+            '.claude/agents/relayer-reviewer.md' => self::claudeReviewerAgent(),
             'public/index.php' => self::indexPhp(),
             'config/services.yaml' => self::servicesYaml(),
             'src/AppConfigurator.php' => self::appConfigurator(),
@@ -161,6 +167,7 @@ final class Scaffold
             composer.json
             RELAYER.md             agent/LLM coding conventions (co-versioned)
             AGENTS.md              auto-read pointer → RELAYER.md
+            .claude/               Claude Code skill + reviewer agent (co-versioned)
             Dockerfile             FrankenPHP (PHP 8.5) image
             php.ini                PHP overrides (loaded via conf.d)
             compose.yaml           `docker compose up` → http://localhost:8000
@@ -209,9 +216,10 @@ final class Scaffold
             ## Routing — `src/Pages/` (Next.js App Router-style)
 
             - `page.psx` (or `.php`) = a route; `layout.psx` wraps nested
-              pages; root `error.psx` renders 404; a `[param]` directory is
-              a dynamic segment. A directory is a page **or** a `route.php`,
-              never both.
+              pages; root `error.psx` is the shared error page for any
+              HTTP error (404/403/500…, raised via `$ctx->abort()` /
+              `notFound()`); a `[param]` directory is a dynamic segment.
+              A directory is a page **or** a `route.php`, never both.
             - Function page: `return fn (PageContext $ctx, MyService $s) =>
               <section/>;` — or two-level: `return function (PageContext
               $ctx) { ...; return fn () => <section/>; };`
@@ -315,6 +323,138 @@ final class Scaffold
             Run `vendor/bin/relayer routes` to see the actual route map.
 
             MD;
+    }
+
+    private static function claudeRoutingSkill(): string
+    {
+        return <<<'SKILL'
+            ---
+            name: relayer-routing
+            description: Use when adding or editing routes in this Relayer app — page.psx/.php pages, route.php API endpoints, src/Pages/middleware.php, or React islands. Encodes the autowiring, Response, and CSRF/action contracts that are easy to get wrong.
+            ---
+
+            # Relayer routing
+
+            `RELAYER.md` at the project root is the authoritative spec —
+            read it for the full model. This is the short, do-the-task
+            version; when the two ever disagree, RELAYER.md wins.
+
+            ## Where routes live
+
+            `src/Pages/` is file-based (Next.js App Router-style). A
+            directory is a **page** (`page.psx`/`page.php` + optional
+            `layout.psx`) **or** an API endpoint (`route.php`) — never
+            both. `[param]` directories are dynamic segments; the root
+            `error.psx` renders any HTTP error (404/403/500…) raised via
+            `$ctx->abort()` / `notFound()`.
+
+            ## Pages
+
+            Function page (preferred — the thinnest form):
+
+            ```php
+            return fn (PageContext $ctx, MyService $s) => <section>…</section>;
+            ```
+
+            Class page: `final class X extends PageComponent { public
+            function render(): Element { … } }`.
+
+            - Arguments autowire **by type**: `PageContext`, `Request`,
+              `Identity`, and container services. A nullable `?Identity`
+              = optional auth; a non-nullable `Identity` makes the page
+              auth-required.
+            - Never read `$_GET` / `$_POST` / `$_SERVER` — take a
+              `Request`.
+            - Forms: `$ctx->action('save', fn (array $form) => …)` — CSRF
+              is automatic and the handler runs before render. Redirect
+              with `$ctx->redirect('/x')`.
+
+            ## API routes — `route.php`
+
+            ```php
+            use Polidog\Relayer\Http\Response;
+
+            return [
+                'GET'  => fn (MyRepo $r) => Response::json($r->all()),
+                'POST' => fn (Request $req) => Response::json(['ok' => true], 201),
+            ];
+            ```
+
+            - A method-keyed map of autowired closures. Every handler
+              **must return a `Response`**
+              (`Response::json/text/noContent/redirect`) — returning raw
+              data is a hard error.
+            - The file may **only return the map**: no class/function
+              declarations (it is re-evaluated per request).
+              `OPTIONS`/`HEAD` are synthesized when undeclared.
+
+            ## Middleware — `src/Pages/middleware.php` (optional)
+
+            ```php
+            return function (Request $request, Closure $next): void {
+                $next($request);          // omit to short-circuit (401, 429, …)
+            };
+            ```
+
+            One closure, declaration-free. For CORS use
+            `Cors::middleware([...])` — never hand-roll it.
+
+            ## React islands
+
+            In PSX: `{Island::mount('Chart', ['points' => $data])}`. You
+            own the React bundle; island↔server talk is `fetch` to your
+            own `route.php` endpoints. No SSR.
+
+            ## Before you finish
+
+            Run `vendor/bin/relayer routes` and confirm the new route
+            shows up. Stay minimal — add the thinnest thing that works:
+            no new Composer deps, no Node/build step, no "just in case"
+            layers.
+
+            SKILL;
+    }
+
+    private static function claudeReviewerAgent(): string
+    {
+        return <<<'AGENT'
+            ---
+            name: relayer-reviewer
+            description: Reviews changes in this Relayer app against the framework conventions in RELAYER.md — the routing model, the route.php Response contract, CSRF/actions, the no-superglobals rule, and the minimal-design philosophy. Use after editing pages, route.php, middleware, or services, or before opening a PR.
+            tools: Read, Grep, Glob, Bash
+            ---
+
+            You review code in a Relayer application for conformance to
+            the framework's conventions. The authoritative spec is
+            `RELAYER.md` at the project root — read it first, then review
+            the changes (default to the unstaged / current-branch diff
+            unless told otherwise).
+
+            Flag, each with `file:line` and the concrete fix, any of:
+
+            - A directory containing **both** a page and `route.php`.
+            - A `route.php` handler returning raw data instead of a
+              `Response` (`Response::json/text/noContent/redirect`), or a
+              class/function declared in `route.php` or `middleware.php`.
+            - Reading `$_GET` / `$_POST` / `$_SERVER` / `$_COOKIE` in a
+              page or handler instead of taking a `Request`.
+            - Hand-rolled CORS instead of `Cors::middleware(...)`.
+            - A hand-edited `extra.relayer.structure_version` in
+              `composer.json`.
+            - A new Composer dependency or a Node/build step added for
+              something the framework already covers, or convenience /
+              hybrid layers added "just in case" (breaks the
+              minimal-design rule).
+            - Auth done ad hoc instead of `#[Auth]` /
+              `$ctx->requireAuth()`, or services bypassing autowiring /
+              `AppConfigurator`.
+
+            Be specific and terse. Report only real violations and their
+            fix; if the change is clean against RELAYER.md, say so
+            plainly. Do not invent rules beyond RELAYER.md and the list
+            above.
+
+            AGENT;
     }
 
     private static function indexPhp(): string
