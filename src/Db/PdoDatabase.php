@@ -78,6 +78,70 @@ final class PdoDatabase implements Database
         return $this->statement($sql, $params)->rowCount();
     }
 
+    public function insert(string $table, array $data): string
+    {
+        self::assertIdentifier($table, 'table', true);
+
+        if ([] === $data) {
+            throw new DatabaseException('insert(): $data must not be empty');
+        }
+
+        $columns = \array_keys($data);
+        foreach ($columns as $column) {
+            self::assertIdentifier((string) $column, 'column', false);
+        }
+
+        $placeholders = \implode(', ', \array_fill(0, \count($columns), '?'));
+        $sql = 'INSERT INTO ' . $table
+            . ' (' . \implode(', ', $columns) . ') VALUES (' . $placeholders . ')';
+
+        $this->perform($sql, \array_values($data));
+
+        return $this->lastInsertId();
+    }
+
+    public function update(string $table, array $set, array $where): int
+    {
+        self::assertIdentifier($table, 'table', true);
+
+        if ([] === $set) {
+            throw new DatabaseException('update(): $set must not be empty');
+        }
+        if ([] === $where) {
+            throw new DatabaseException(
+                'update(): $where must not be empty — use perform() for an unfiltered UPDATE',
+            );
+        }
+
+        $assignments = [];
+        foreach (\array_keys($set) as $column) {
+            self::assertIdentifier((string) $column, 'column', false);
+            $assignments[] = $column . ' = ?';
+        }
+
+        [$whereSql, $whereParams] = self::buildWhere($where);
+
+        $sql = 'UPDATE ' . $table . ' SET ' . \implode(', ', $assignments)
+            . ' WHERE ' . $whereSql;
+
+        return $this->perform($sql, [...\array_values($set), ...$whereParams]);
+    }
+
+    public function delete(string $table, array $where): int
+    {
+        self::assertIdentifier($table, 'table', true);
+
+        if ([] === $where) {
+            throw new DatabaseException(
+                'delete(): $where must not be empty — use perform() to delete every row',
+            );
+        }
+
+        [$whereSql, $whereParams] = self::buildWhere($where);
+
+        return $this->perform('DELETE FROM ' . $table . ' WHERE ' . $whereSql, $whereParams);
+    }
+
     public function lastInsertId(?string $name = null): string
     {
         try {
@@ -158,6 +222,59 @@ final class PdoDatabase implements Database
         }
 
         return $out;
+    }
+
+    /**
+     * Build the `WHERE` fragment and its positional params for the DML
+     * helpers. Equality only, `AND`-combined; `null` maps to `IS NULL`
+     * because `col = ?` bound with null never matches in SQL — a
+     * silent-no-match trap.
+     *
+     * @param array<string, mixed> $where
+     *
+     * @return array{0: string, 1: list<mixed>}
+     */
+    private static function buildWhere(array $where): array
+    {
+        $clauses = [];
+        $params = [];
+
+        foreach ($where as $column => $value) {
+            self::assertIdentifier((string) $column, 'column', false);
+
+            if (null === $value) {
+                $clauses[] = $column . ' IS NULL';
+
+                continue;
+            }
+
+            $clauses[] = $column . ' = ?';
+            $params[] = $value;
+        }
+
+        return [\implode(' AND ', $clauses), $params];
+    }
+
+    /**
+     * Reject anything that is not a plain SQL identifier so a column or
+     * table name from a DML helper can never carry SQL (values are always
+     * bound, so only the non-parameterizable parts need this guard).
+     *
+     * @throws DatabaseException
+     */
+    private static function assertIdentifier(string $identifier, string $kind, bool $allowQualifier): void
+    {
+        $pattern = $allowQualifier
+            ? '/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/'
+            : '/^[A-Za-z_][A-Za-z0-9_]*$/';
+
+        if (1 !== \preg_match($pattern, $identifier)) {
+            throw new DatabaseException(\sprintf(
+                'Invalid %s identifier %s — use perform() for quoted/expression identifiers',
+                $kind,
+                '"' . $identifier . '"',
+            ));
+        }
     }
 
     /**

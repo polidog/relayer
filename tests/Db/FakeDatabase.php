@@ -79,6 +79,33 @@ final class FakeDatabase implements Database
         return $this->insertId;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
+    public function insert(string $table, array $data): string
+    {
+        $this->perform('insert', $data);
+
+        return $this->lastInsertId();
+    }
+
+    /**
+     * @param array<string, mixed> $set
+     * @param array<string, mixed> $where
+     */
+    public function update(string $table, array $set, array $where): int
+    {
+        return $this->perform('update', [...\array_values($set), ...\array_values($where)]);
+    }
+
+    /**
+     * @param array<string, mixed> $where
+     */
+    public function delete(string $table, array $where): int
+    {
+        return $this->perform('delete', $where);
+    }
+
     public function transactional(callable $callback): mixed
     {
         ++$this->transactionalCalls;

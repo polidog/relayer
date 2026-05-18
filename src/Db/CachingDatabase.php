@@ -90,6 +90,27 @@ final class CachingDatabase implements Database
         return $this->inner->perform($sql, $params);
     }
 
+    public function insert(string $table, array $data): string
+    {
+        $this->flush();
+
+        return $this->inner->insert($table, $data);
+    }
+
+    public function update(string $table, array $set, array $where): int
+    {
+        $this->flush();
+
+        return $this->inner->update($table, $set, $where);
+    }
+
+    public function delete(string $table, array $where): int
+    {
+        $this->flush();
+
+        return $this->inner->delete($table, $where);
+    }
+
     public function lastInsertId(?string $name = null): string
     {
         return $this->inner->lastInsertId($name);

@@ -104,6 +104,54 @@ final class TraceableDatabase implements Database
         }
     }
 
+    public function insert(string $table, array $data): string
+    {
+        $span = $this->profiler->start('db', 'mutate');
+
+        try {
+            $id = $this->inner->insert($table, $data);
+            $span->stop(['op' => 'insert', 'table' => $table, 'id' => $id]);
+
+            return $id;
+        } catch (Throwable $e) {
+            $span->stop(['op' => 'insert', 'table' => $table, 'error' => $e->getMessage()]);
+
+            throw $e;
+        }
+    }
+
+    public function update(string $table, array $set, array $where): int
+    {
+        $span = $this->profiler->start('db', 'mutate');
+
+        try {
+            $affected = $this->inner->update($table, $set, $where);
+            $span->stop(['op' => 'update', 'table' => $table, 'affected' => $affected]);
+
+            return $affected;
+        } catch (Throwable $e) {
+            $span->stop(['op' => 'update', 'table' => $table, 'error' => $e->getMessage()]);
+
+            throw $e;
+        }
+    }
+
+    public function delete(string $table, array $where): int
+    {
+        $span = $this->profiler->start('db', 'mutate');
+
+        try {
+            $affected = $this->inner->delete($table, $where);
+            $span->stop(['op' => 'delete', 'table' => $table, 'affected' => $affected]);
+
+            return $affected;
+        } catch (Throwable $e) {
+            $span->stop(['op' => 'delete', 'table' => $table, 'error' => $e->getMessage()]);
+
+            throw $e;
+        }
+    }
+
     public function lastInsertId(?string $name = null): string
     {
         return $this->inner->lastInsertId($name);

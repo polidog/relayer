@@ -182,7 +182,7 @@ abstract class PageComponent extends BaseComponent
 
     private function resolveHandlerMethod(callable $handler): string
     {
-        if (\is_array($handler) && 2 === \count($handler)) {
+        if (\is_array($handler)) {
             [$target, $method] = $handler;
             if ($target === $this) {
                 return $method;
