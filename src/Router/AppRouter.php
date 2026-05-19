@@ -162,6 +162,16 @@ class AppRouter
             $this->container->setCurrentRequest($this->currentRequest);
         }
 
+        // Resolve the locale up front — before the deferred handler and any
+        // user middleware — so middleware code, defer fragments, and the
+        // ambient validation Translator all observe the correct locale
+        // rather than a default (or, under a long-running worker, the
+        // previous request's). The dispatch closure re-resolves
+        // (idempotent) so a middleware-substituted Request still gets its
+        // own locale + path-prefix treatment. A no-op when no
+        // LocaleResolver is bound.
+        $request = $this->currentRequest = $this->resolveLocale($request);
+
         // Establish the active UsePHP for compiled PSX page bodies that call
         // RenderContext::getApp()->renderPsxComponent(...). Without this the
         // deferred-component glue would have no app to dispatch through.
@@ -186,6 +196,10 @@ class AppRouter
             if ($hasUsephp) {
                 RenderContext::clearApp();
             }
+            // Drop the ambient request Translator so a non-default locale
+            // cannot bleed into the next request's pre-dispatch code (e.g.
+            // validation) under a long-running worker.
+            Translators::reset();
         });
 
         try {
@@ -249,6 +263,7 @@ class AppRouter
             if (null !== $this->usephp) {
                 RenderContext::clearApp();
             }
+            Translators::reset();
         }
     }
 
@@ -546,10 +561,22 @@ class AppRouter
      * Fully gated on the container exposing a `LocaleResolver`: an app that
      * never configures i18n (or a test with a stub container) keeps the
      * exact pre-i18n behavior at no cost.
+     *
+     * Idempotent. `run()` resolves once up front (so middleware / defer see
+     * the locale) and the dispatch closure calls this again on whatever
+     * Request it routes. A Request that already carries a resolved locale
+     * is returned untouched — re-running source detection on an
+     * already-stripped path would otherwise drop the prefix-derived locale
+     * back to the default. A middleware that hands `$next` a brand-new
+     * Request (`locale() === null`) still gets it fully resolved.
      */
     protected function resolveLocale(Request $request): Request
     {
         if (null === $this->container || !$this->container->has(LocaleResolver::class)) {
+            return $request;
+        }
+
+        if (null !== $request->locale()) {
             return $request;
         }
 

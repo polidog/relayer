@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\I18n;
 
+use RuntimeException;
+
 /**
  * Loads PHP-array message catalogs from disk.
  *
@@ -68,7 +70,18 @@ final class CatalogLoader
 
             $loaded = require $file;
             if (!\is_array($loaded)) {
-                continue;
+                // Fail loud: a translation file that doesn't `return` an
+                // array would otherwise make every key in that locale
+                // silently fall back to English / the key itself — a
+                // miserable thing to debug. Surface it with the path and
+                // what it actually returned (mirrors the framework's
+                // route/middleware "actionable error with the file path"
+                // contract).
+                throw new RuntimeException(\sprintf(
+                    'Translation catalog %s must return an array, %s returned.',
+                    $file,
+                    \get_debug_type($loaded),
+                ));
             }
 
             /** @var array<array-key, mixed> $loaded */

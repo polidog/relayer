@@ -1699,15 +1699,27 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
 ### 設定
 
 ```
-APP_LOCALE=en            # デフォルト / フォールバックロケール（既定: en）
+APP_LOCALE=en            # デフォルト / アクティブロケール（既定: en）
 APP_LOCALES=en,ja        # サポートロケール（既定: APP_LOCALE のみ）
 LOCALE_COOKIE=locale     # Cookie ソースの Cookie 名（既定: locale）
-LOCALE_PATH_PREFIX=true  # /{locale}/... ルーティングの有効化（既定: true）
+LOCALE_PATH_PREFIX=true  # /{locale}/... ルーティングの opt-out（既定: true）
 ```
 
-`Translator` と `LocaleResolver` は常にコンテナへ登録され（autowire・
-public）、`APP_LOCALES` に複数ロケールを並べた時点でパイプライン全体が
-作動します。
+`Translator` と `LocaleResolver` は常にコンテナへ登録されます（autowire・
+public）。ただしロケールの*切り替え*（Cookie / `Accept-Language` /
+パスプレフィックス解決）が実際に作用するのは **`APP_LOCALES` に 2 つ以上**
+ロケールを並べたときだけです。未設定（または単一ロケール）の場合は
+全リクエストが `APP_LOCALE` に解決され、**パスの書き換えは一切起きません**
+— `/en/*` のルートは i18n 導入前とまったく同じに動きます。
+`LOCALE_PATH_PREFIX=false` は複数ロケールアプリで `/{locale}/...`
+ルーティングを*無効化*するだけ（Cookie / `Accept-Language` は有効のまま）で、
+単一ロケールアプリでプレフィックスルーティングを有効化することはできません
+（区別すべきものが無いため）。
+
+`APP_LOCALE` はデフォルトの*アクティブ*ロケールであり、フレームワークの
+フォールバックではありません。組み込みの `relayer.*` メッセージは常に
+**英語**（同梱の完全なカタログ）にフォールバックするため、フレームワーク
+文字列で未翻訳キーがそのまま露出することはありません。
 
 ### ロケール解決の優先順位
 

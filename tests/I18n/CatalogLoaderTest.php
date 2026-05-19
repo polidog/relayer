@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Tests\I18n;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\I18n\CatalogLoader;
+use RuntimeException;
 
 final class CatalogLoaderTest extends TestCase
 {
@@ -60,6 +61,20 @@ final class CatalogLoaderTest extends TestCase
         self::assertSame('Not Found', $catalogs['en']['relayer.http.404']);
         // A locale only the framework ships still survives the overlay.
         self::assertSame('ページが見つかりません', $catalogs['ja']['relayer.http.404']);
+    }
+
+    public function testInvalidCatalogFileFailsLoud(): void
+    {
+        \mkdir($this->workDir . '/translations', 0o777, true);
+        \file_put_contents(
+            $this->workDir . '/translations/ja.php',
+            "<?php\n\nreturn 'oops, not an array';\n",
+        );
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('translations/ja.php must return an array, string returned.');
+
+        CatalogLoader::forProject($this->workDir);
     }
 
     private function rmrf(string $path): void

@@ -38,12 +38,21 @@ final class AppRouterLocaleTest extends TestCase
         Translators::reset();
     }
 
-    public function testPathPrefixIsStrippedAndRouteIsServed(): void
+    public function testPathPrefixIsStrippedAndLocaleIsPropagated(): void
     {
+        // The route echoes the injected Request's path + locale, proving
+        // in-request that `/ja/users` was stripped to `/users` for routing
+        // and the resolved locale rode along on the Request.
         $this->writeRoute('users', <<<'PHP'
+            use Polidog\Relayer\Http\Request;
             use Polidog\Relayer\Http\Response;
 
-            return ['GET' => static fn (): Response => Response::json(['ok' => true])];
+            return [
+                'GET' => static fn (Request $r): Response => Response::json([
+                    'path' => $r->path,
+                    'loc' => $r->locale(),
+                ]),
+            ];
             PHP);
 
         $app = AppRouter::create($this->workDir);
@@ -51,9 +60,36 @@ final class AppRouterLocaleTest extends TestCase
 
         $output = $this->dispatch($app, '/ja/users', 'GET');
 
-        self::assertSame('{"ok":true}', $output);
         self::assertSame(200, \http_response_code());
-        self::assertSame('ja', Translators::default()->getLocale());
+        self::assertSame(['path' => '/users', 'loc' => 'ja'], \json_decode($output, true));
+    }
+
+    public function testRootMiddlewareObservesResolvedLocale(): void
+    {
+        // Regression for the review note: locale must be resolved BEFORE
+        // user middleware runs, so middleware sees the stripped path and
+        // the resolved locale rather than a default.
+        $this->writeRoute('users', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
+            return ['GET' => static fn (): Response => Response::json(['reached' => 'page'])];
+            PHP);
+        \file_put_contents(
+            $this->workDir . '/middleware.php',
+            "<?php\n\ndeclare(strict_types=1);\n\n"
+            . "use Polidog\\Relayer\\Http\\Request;\n"
+            . "use Polidog\\Relayer\\Http\\Response;\n\n"
+            . "return static function (Request \$request, Closure \$next): void {\n"
+            . "    Response::json(['mw_path' => \$request->path, 'mw_loc' => \$request->locale()])->send();\n"
+            . "};\n",
+        );
+
+        $app = AppRouter::create($this->workDir);
+        $app->setContainer($this->container());
+
+        $output = $this->dispatch($app, '/ja/users', 'GET');
+
+        self::assertSame(['mw_path' => '/users', 'mw_loc' => 'ja'], \json_decode($output, true));
     }
 
     public function testFrameworkErrorJsonIsLocalized(): void

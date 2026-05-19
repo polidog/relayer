@@ -414,16 +414,28 @@ final class ContainerFactory
      * i18n defaults. Always registered (like the HTTP client / logger):
      * both services are cheap, and a single-locale app simply resolves to
      * its one locale with the framework's English catalog — so an app that
-     * never configures i18n keeps the pre-i18n English output at no cost.
+     * never configures i18n keeps the pre-i18n output at no cost.
+     *
+     * Crucially, `/{locale}/...` path-prefix routing is only switched on
+     * when 2+ locales are actually configured. With no `APP_LOCALES` (or a
+     * single locale) there is no locale to disambiguate, so a request to
+     * `/en/...` is left exactly as-is — a previously-valid route under
+     * `/en/*` keeps working, which is what "pre-i18n behavior at no cost"
+     * has to mean. `LOCALE_PATH_PREFIX` only *opts out* of the otherwise-on
+     * prefix routing in a multi-locale app; it cannot force prefix routing
+     * onto a single-locale one (there would be nothing to route).
      *
      * Knobs (all optional, read from the `.env` cascade):
-     *  - `APP_LOCALE`         default/active locale (default `en`)
+     *  - `APP_LOCALE`         default/active locale (default `en`); English
+     *                         is always the built-in fallback for the
+     *                         framework's own `relayer.*` messages
      *  - `APP_LOCALES`        comma list of supported locales
-     *                         (default: just `APP_LOCALE`)
+     *                         (default: just `APP_LOCALE`); 2+ entries
+     *                         activate locale switching + path routing
      *  - `LOCALE_COOKIE`      cookie name for the cookie source
      *                         (default `locale`)
-     *  - `LOCALE_PATH_PREFIX` enable `/{locale}/...` routing
-     *                         (default `true`)
+     *  - `LOCALE_PATH_PREFIX` opt out of `/{locale}/...` routing in a
+     *                         multi-locale app (default `true`)
      *
      * `LocaleResolver` takes the always-bound `SessionStorage`, but only
      * reads it when a session is already active, so registering it here
@@ -448,7 +460,11 @@ final class ContainerFactory
         }
 
         $cookieName = self::readEnv('LOCALE_COOKIE') ?: 'locale';
-        $pathPrefix = self::readEnvBool('LOCALE_PATH_PREFIX', true);
+        // Path-prefix routing is meaningful only when there is more than
+        // one locale to disambiguate. Gating it here keeps a no-i18n /
+        // single-locale app byte-identical to pre-i18n behavior: `/en/...`
+        // is never treated as a locale segment and never rewritten.
+        $pathPrefix = \count($supported) >= 2 && self::readEnvBool('LOCALE_PATH_PREFIX', true);
 
         $container->register(Translator::class)
             ->setFactory([Translator::class, 'createForProject'])

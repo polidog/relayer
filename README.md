@@ -1706,15 +1706,26 @@ output.
 ### Configure
 
 ```
-APP_LOCALE=en            # default / fallback locale (default: en)
+APP_LOCALE=en            # default / active locale (default: en)
 APP_LOCALES=en,ja        # supported locales (default: just APP_LOCALE)
 LOCALE_COOKIE=locale     # cookie name for the cookie source (default: locale)
-LOCALE_PATH_PREFIX=true  # enable /{locale}/... routing (default: true)
+LOCALE_PATH_PREFIX=true  # opt out of /{locale}/... routing (default: true)
 ```
 
 `Translator` and `LocaleResolver` are always registered in the container
-(autowired, public), so once `APP_LOCALES` lists more than one locale the
-whole pipeline is active.
+(autowired, public), but locale *switching* — cookie / `Accept-Language` /
+path-prefix resolution — only does anything once **`APP_LOCALES` lists 2+
+locales**. With none (or a single locale) every request resolves to
+`APP_LOCALE` and **no path rewriting happens**: a route under `/en/*`
+keeps working exactly as before i18n existed. `LOCALE_PATH_PREFIX=false`
+only opts a multi-locale app *out* of `/{locale}/...` routing (cookie /
+`Accept-Language` still apply); it cannot turn prefix routing on for a
+single-locale app — there would be nothing to disambiguate.
+
+`APP_LOCALE` is the default *active* locale, not the framework's fallback:
+the built-in `relayer.*` messages always fall back to **English** (the
+guaranteed-complete shipped catalog), so a missing translation never
+surfaces a raw key for a framework string.
 
 ### Locale resolution order
 
