@@ -19,6 +19,7 @@ final class ScaffoldTest extends TestCase
             'README.md',
             'RELAYER.md',
             'AGENTS.md',
+            'CLAUDE.md',
             '.claude/skills/relayer-routing/SKILL.md',
             '.claude/agents/relayer-reviewer.md',
             'public/index.php',
@@ -77,9 +78,14 @@ final class ScaffoldTest extends TestCase
     {
         $files = Scaffold::files();
 
-        // AGENTS.md is the filename agent tools auto-read; it must point at
-        // the substantive doc so the conventions actually reach the agent.
+        // AGENTS.md and CLAUDE.md are the filenames agent tools / Claude
+        // Code auto-read; each must point at the substantive doc so the
+        // conventions actually reach the agent. They share one body, so a
+        // mismatched heading would mean the wrong generator was wired.
+        self::assertStringContainsString('# AGENTS.md', $files['AGENTS.md']);
         self::assertStringContainsString('RELAYER.md', $files['AGENTS.md']);
+        self::assertStringContainsString('# CLAUDE.md', $files['CLAUDE.md']);
+        self::assertStringContainsString('RELAYER.md', $files['CLAUDE.md']);
 
         // RELAYER.md must actually carry the contracts an LLM needs, not
         // just a stub — spot-check the load-bearing ones.
