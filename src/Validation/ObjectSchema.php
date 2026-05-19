@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 final class ObjectSchema extends Schema
 {
     /**
@@ -30,7 +32,7 @@ final class ObjectSchema extends Schema
     protected function parseDefined(mixed $input, string $path, array &$errors): mixed
     {
         if (!\is_array($input)) {
-            $errors[$path] = 'Must be an object.';
+            $errors[$path] = Translators::default()->trans('relayer.validation.object.type');
 
             return null;
         }

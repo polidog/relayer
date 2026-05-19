@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 /**
  * Base class for all schema definitions. Inspired by Zod (TypeScript):
  * declare a schema with a fluent builder, then call {@see safeParse} or
@@ -161,7 +163,7 @@ abstract class Schema
                 return null;
             }
 
-            $errors[$path] = $this->requiredMessage ?? 'Required.';
+            $errors[$path] = $this->requiredMessage ?? Translators::default()->trans('relayer.validation.required');
 
             return null;
         }

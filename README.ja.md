@@ -157,10 +157,19 @@ APP_ENV=dev
 DATABASE_DSN=mysql:host=127.0.0.1;dbname=app;charset=utf8mb4
 DATABASE_USER=app
 DATABASE_PASSWORD=secret
+
+# i18n（すべて任意 — 多言語化を参照）
+APP_LOCALE=en
+APP_LOCALES=en,ja
+LOCALE_COOKIE=locale
+LOCALE_PATH_PREFIX=true
 ```
 
 `DATABASE_*` は任意です。DB 層は `DATABASE_DSN` が設定されているときだけ
-配線されます（[データベース](#データベース)を参照）。
+配線されます（[データベース](#データベース)を参照）。`APP_LOCALE` /
+`APP_LOCALES` / `LOCALE_COOKIE` / `LOCALE_PATH_PREFIX` も任意で、何も
+設定しなければ単一ロケール（英語）のままコスト無しで動作します
+（[多言語化](#多言語化-i18n)を参照）。
 
 [`symfony/dotenv`](https://symfony.com/doc/current/configuration.html#configuring-environment-variables-in-env-files)
 で読まれ、Symfony 標準の cascade に従います:
@@ -1678,6 +1687,111 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
     // $result->data は coercion 済み
 });
 ```
+
+## 多言語化 (i18n)
+
+依存ゼロのトランスレータ、ファイルベースのカタログ、自動ロケール解決、
+そしてフレームワーク標準メッセージのローカライズを提供します。**設定で
+オプトイン**で、i18n 関連の環境変数を一切設定しなければ単一ロケール
+（英語）のままコスト無しで動き、フレームワークの全文字列は i18n 導入前と
+バイト単位で同一です。
+
+### 設定
+
+```
+APP_LOCALE=en            # デフォルト / アクティブロケール（既定: en）
+APP_LOCALES=en,ja        # サポートロケール（既定: APP_LOCALE のみ）
+LOCALE_COOKIE=locale     # Cookie ソースの Cookie 名（既定: locale）
+LOCALE_PATH_PREFIX=true  # /{locale}/... ルーティングの opt-out（既定: true）
+```
+
+`Translator` と `LocaleResolver` は常にコンテナへ登録されます（autowire・
+public）。ただしロケールの*切り替え*（Cookie / `Accept-Language` /
+パスプレフィックス解決）が実際に作用するのは **`APP_LOCALES` に 2 つ以上**
+ロケールを並べたときだけです。未設定（または単一ロケール）の場合は
+全リクエストが `APP_LOCALE` に解決され、**パスの書き換えは一切起きません**
+— `/en/*` のルートは i18n 導入前とまったく同じに動きます。
+`LOCALE_PATH_PREFIX=false` は複数ロケールアプリで `/{locale}/...`
+ルーティングを*無効化*するだけ（Cookie / `Accept-Language` は有効のまま）で、
+単一ロケールアプリでプレフィックスルーティングを有効化することはできません
+（区別すべきものが無いため）。
+
+`APP_LOCALE` はデフォルトの*アクティブ*ロケールであり、フレームワークの
+フォールバックではありません。組み込みの `relayer.*` メッセージは常に
+**英語**（同梱の完全なカタログ）にフォールバックするため、フレームワーク
+文字列で未翻訳キーがそのまま露出することはありません。
+
+### ロケール解決の優先順位
+
+リクエストごとに `LocaleResolver` が以下の優先順（上が最優先）でロケールを
+決定します:
+
+1. **URL パスプレフィックス** — 先頭セグメントがサポートロケールのとき
+   `/{locale}/...`。ルーターがマッチするパスを書き換える唯一のソースで、
+   `/ja/about` と `/about` は同じ `src/Pages/about/page.psx` に到達します。
+2. **セッション** — **既にセッションが開始済みのときだけ**参照します。
+   ロケール判定のためだけにセッションを開始するとリクエスト毎に
+   `Set-Cookie` が出て匿名ページの CDN キャッシュを壊すため、リゾルバは
+   それをしません。既にセッションを持つログイン済みフローでは保存済みの
+   `_locale` が尊重されます。
+3. **Cookie** — `LOCALE_COOKIE`（CDN セーフ、セッション不要）。
+4. **`Accept-Language`** — サポートリストに対し q 値でネゴシエート。
+5. **デフォルト** — `APP_LOCALE`。
+
+照合はプライマリサブタグ単位（`ja-JP` はサポートされた `ja` に一致）で、
+解決値は `APP_LOCALES` の正規表記です。決定したロケールは
+`<html lang="…">` にも反映され、`$request->locale()` で取得できます。
+
+> **defer フラグメントとパスプレフィックスルーティング。** `<X defer />`
+> のサブリクエストは `/{locale}` を含まないルート絶対の `/_defer/{name}`
+> URL で取得されます（usePHP がルートに固定するため）。よって親ページの
+> パスプレフィックスは伝わらず、フラグメントのロケールは URL パスでは
+> なく Cookie / `Accept-Language` / デフォルトから解決されます。
+> `/{locale}/…` プレフィックスだけでロケールを切り替えていて defer
+> フラグメントも同じ言語にしたい場合は、`LOCALE_COOKIE` も設定して
+> ください（または `Accept-Language` に委ねる）。Cookie は CDN セーフで、
+> このケースの想定キャリアです。
+
+### 自分のコンテンツを翻訳する
+
+`<projectRoot>/translations/{locale}.php` に PHP カタログを置きます。
+フラットでもネストでも可で、フレームワークのカタログにマージ（上書き）
+されます:
+
+```php
+// translations/ja.php
+return [
+    'home.title'   => 'ようこそ',
+    'cart.items'   => '{count}点|{count}点', // パイプ = 複数形
+    'user'         => ['greeting' => 'こんにちは、{name}さん'],
+];
+```
+
+`Translator` は任意のページ・レイアウト・サービスに注入できます:
+
+```php
+use Polidog\Relayer\I18n\Translator;
+
+return static fn (Translator $t) => h('h1', [], $t->trans('home.title'));
+// プレースホルダ:  $t->trans('user.greeting', ['name' => $name])
+// 複数形:          $t->transChoice('cart.items', $count)
+```
+
+`transChoice()` は `one|other` のパイプ区切りメッセージから簡易 CLDR
+ルール（英語型 one/other、日本語・中国語・韓国語などは単一形）で形を
+選びます。未知のキーはキー自身（プレースホルダ置換後）にフォールバック
+します — 見えるが致命的にはなりません。
+
+### フレームワーク標準メッセージのローカライズ
+
+バリデーションメッセージと HTTP エラーの理由句（HTML エラーページ、および
+API ルートの JSON `{"error": …}` ボディ）は、同じカタログの `relayer.*`
+名前空間で解決され、`en` と `ja` を同梱しています。バリデーションスキーマ
+はコンテナ外で構築されるため、AppRouter がリクエスト毎に設定する
+プロセス全体のアンビエント保持器（`Polidog\Relayer\I18n\Translators`）
+経由で現在のトランスレータに到達します。`refine()` / `required('…')` に
+渡した独自メッセージは常にそのまま透過されます。CLI 出力（`relayer …`）は
+現時点では英語のみです。
 
 ## ロガー
 

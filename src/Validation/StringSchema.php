@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 final class StringSchema extends Schema
 {
     private bool $trim = false;
@@ -13,7 +15,7 @@ final class StringSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_string($v) && \mb_strlen($v) >= $length,
-            $message ?? \sprintf('Must be at least %d character%s.', $length, 1 === $length ? '' : 's'),
+            $message ?? Translators::default()->transChoice('relayer.validation.string.min', $length, ['min' => $length]),
         );
     }
 
@@ -21,7 +23,7 @@ final class StringSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_string($v) && \mb_strlen($v) <= $length,
-            $message ?? \sprintf('Must be at most %d character%s.', $length, 1 === $length ? '' : 's'),
+            $message ?? Translators::default()->transChoice('relayer.validation.string.max', $length, ['max' => $length]),
         );
     }
 
@@ -29,7 +31,7 @@ final class StringSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_string($v) && \mb_strlen($v) === $length,
-            $message ?? \sprintf('Must be exactly %d character%s.', $length, 1 === $length ? '' : 's'),
+            $message ?? Translators::default()->transChoice('relayer.validation.string.length', $length, ['length' => $length]),
         );
     }
 
@@ -37,7 +39,7 @@ final class StringSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_string($v) && 1 === \preg_match($pattern, $v),
-            $message ?? 'Invalid format.',
+            $message ?? Translators::default()->trans('relayer.validation.string.regex'),
         );
     }
 
@@ -45,7 +47,7 @@ final class StringSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_string($v) && false !== \filter_var($v, \FILTER_VALIDATE_EMAIL),
-            $message ?? 'Please enter a valid email address.',
+            $message ?? Translators::default()->trans('relayer.validation.string.email'),
         );
     }
 
@@ -53,7 +55,7 @@ final class StringSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_string($v) && false !== \filter_var($v, \FILTER_VALIDATE_URL),
-            $message ?? 'Please enter a valid URL.',
+            $message ?? Translators::default()->trans('relayer.validation.string.url'),
         );
     }
 
@@ -108,7 +110,7 @@ final class StringSchema extends Schema
     {
         if (!\is_string($input)) {
             // Form input is always a string; reject array / int / etc.
-            $errors[$path] = 'Must be a string.';
+            $errors[$path] = Translators::default()->trans('relayer.validation.string.type');
 
             return null;
         }

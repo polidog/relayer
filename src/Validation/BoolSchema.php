@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 final class BoolSchema extends Schema
 {
     private const TRUTHY = ['1', 'true', 'on', 'yes'];
@@ -13,7 +15,7 @@ final class BoolSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => true === $v,
-            $message ?? 'Must be true.',
+            $message ?? Translators::default()->trans('relayer.validation.bool.true'),
         );
     }
 
@@ -55,7 +57,7 @@ final class BoolSchema extends Schema
             }
         }
 
-        $errors[$path] = 'Must be a boolean.';
+        $errors[$path] = Translators::default()->trans('relayer.validation.bool.type');
 
         return null;
     }

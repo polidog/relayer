@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 final class FloatSchema extends Schema
 {
     public function min(float $value, ?string $message = null): static
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_float($v) && $v >= $value,
-            $message ?? \sprintf('Must be %s or greater.', $value),
+            $message ?? Translators::default()->trans('relayer.validation.float.min', ['value' => $value]),
         );
     }
 
@@ -18,7 +20,7 @@ final class FloatSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_float($v) && $v <= $value,
-            $message ?? \sprintf('Must be %s or less.', $value),
+            $message ?? Translators::default()->trans('relayer.validation.float.max', ['value' => $value]),
         );
     }
 
@@ -26,7 +28,7 @@ final class FloatSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_float($v) && $v > 0.0,
-            $message ?? 'Must be greater than 0.',
+            $message ?? Translators::default()->trans('relayer.validation.float.positive'),
         );
     }
 
@@ -34,7 +36,7 @@ final class FloatSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_float($v) && $v >= 0.0,
-            $message ?? 'Must be 0 or greater.',
+            $message ?? Translators::default()->trans('relayer.validation.float.non_negative'),
         );
     }
 
@@ -68,7 +70,7 @@ final class FloatSchema extends Schema
             }
         }
 
-        $errors[$path] = 'Must be a number.';
+        $errors[$path] = Translators::default()->trans('relayer.validation.float.type');
 
         return null;
     }
