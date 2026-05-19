@@ -34,8 +34,8 @@ CI (`.github/workflows/ci.yml`) runs exactly: `phpunit`, `phpstan analyse`,
 pushing.
 
 The shipped CLI (`bin/relayer`, for *consumers* of the framework):
-`relayer init` / `routes` / `routes:compile` / `profiler:clear` — all
-dispatched through `Scaffold\InitCommand::run()`.
+`relayer init` / `upgrade` / `routes` / `routes:compile` / `profiler:clear`
+— all dispatched through `Scaffold\InitCommand::run()`.
 
 ## Layout
 

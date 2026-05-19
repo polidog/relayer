@@ -191,4 +191,46 @@ final class ScaffoldTest extends TestCase
             $patch['extra']['relayer']['structure_version'],
         );
     }
+
+    public function testMigrationsMapIsConsistentWithFilesAndTheStructureVersion(): void
+    {
+        $migrations = Scaffold::migrations();
+        $fileKeys = \array_keys(Scaffold::files());
+
+        // Versions are exactly 2 .. STRUCTURE_VERSION, contiguous: every
+        // bump must register the files it added or `upgrade` silently skips
+        // them. v1 is the baseline (no step), so the map starts at 2.
+        self::assertSame(
+            \range(2, Scaffold::STRUCTURE_VERSION),
+            \array_keys($migrations),
+        );
+
+        $seen = [];
+        foreach ($migrations as $version => $paths) {
+            self::assertNotSame([], $paths, "version {$version} must add at least one file");
+            foreach ($paths as $relative) {
+                // Contents come from files(); migrations() only groups
+                // paths by the version that introduced them.
+                self::assertContains(
+                    $relative,
+                    $fileKeys,
+                    "{$relative} (v{$version}) must be a Scaffold::files() key",
+                );
+                self::assertArrayNotHasKey(
+                    $relative,
+                    $seen,
+                    "{$relative} is registered under more than one version",
+                );
+                $seen[$relative] = $version;
+            }
+        }
+
+        // The v1 baseline (files with no migration step) must be non-empty
+        // — the minimal bootable layout predates the first delta.
+        self::assertNotSame(
+            [],
+            \array_diff($fileKeys, \array_keys($seen)),
+            'expected at least one v1 baseline file outside the migration map',
+        );
+    }
 }
