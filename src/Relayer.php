@@ -10,8 +10,6 @@ use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\TraceableAppRouter;
 use Polidog\UsePhp\UsePHP;
-use RuntimeException;
-use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -106,37 +104,16 @@ final class Relayer
         // itself mid-boot.
         $isDev = self::isDev();
 
-        // Prod: load the dumped DI container when `relayer
-        // container:compile` produced one, skipping the full
-        // ContainerBuilder build + compile() per request. Presence-gated
-        // and dev-excluded exactly like the compiled-routes artifact, so
-        // a missing dump simply falls back to a live build and dev always
-        // reflects current config. The dumped class extends
-        // Symfony\...\Container, so InjectorContainer (which only needs a
-        // Symfony ContainerInterface) wraps it unchanged.
-        $dumpFile = $projectRoot . '/' . self::COMPILED_CONTAINER_FILE;
-
-        if (!$isDev && \is_file($dumpFile)) {
-            require_once $dumpFile;
-
-            // The dumped class only exists after `container:compile`
-            // generated it, so it is opaque to static analysis — treat
-            // the FQCN as a plain string and prove the contract at
-            // runtime via the instanceof guard below.
-            /** @var string $dumpedClass */
-            $dumpedClass = self::COMPILED_CONTAINER_CLASS;
-            $container = new $dumpedClass();
-
-            if (!$container instanceof SymfonyContainerInterface) {
-                throw new RuntimeException(\sprintf(
-                    'Dumped container %s did not produce a %s — re-run `relayer container:compile`.',
-                    self::COMPILED_CONTAINER_FILE,
-                    SymfonyContainerInterface::class,
-                ));
-            }
-        } else {
-            $container = ContainerFactory::create($projectRoot, $configurator, $isDev);
-        }
+        // ContainerFactory owns the "load the dump if present, else live
+        // build" decision (mirrors AppRouter::create's presence-gated
+        // artifact contract). Dev passes null so config edits never read
+        // a stale dump; prod points at COMPILED_CONTAINER_FILE.
+        $container = ContainerFactory::create(
+            $projectRoot,
+            $configurator,
+            $isDev,
+            $isDev ? null : $projectRoot . '/' . self::COMPILED_CONTAINER_FILE,
+        );
 
         $psr = new InjectorContainer($container);
 
