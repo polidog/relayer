@@ -12,6 +12,7 @@ use Polidog\Relayer\Http\Client\HttpClient;
 use Polidog\Relayer\Log\TraceableLogger;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Router\Dispatch\PsxCompiler;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use ReflectionProperty;
@@ -53,11 +54,15 @@ final class RelayerBootTest extends TestCase
         // <projectRoot>/src/var/cache/psx from AppRouter's dirname() default.
         $router = Relayer::boot($this->projectRoot);
 
-        $property = new ReflectionProperty(AppRouter::class, 'psxCacheDir');
+        // The cache directory is now owned by the AppRouter's PsxCompiler
+        // collaborator; reach in via reflection and read its observability
+        // accessor rather than the previous AppRouter::$psxCacheDir field.
+        $psxCompiler = (new ReflectionProperty(AppRouter::class, 'psxCompiler'))->getValue($router);
+        self::assertInstanceOf(PsxCompiler::class, $psxCompiler);
 
         self::assertSame(
             $this->projectRoot . '/var/cache/psx',
-            $property->getValue($router),
+            $psxCompiler->cacheDir(),
         );
     }
 

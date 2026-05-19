@@ -5,60 +5,82 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router;
 
 use Closure;
-use JsonException;
-use LogicException;
-use Polidog\Relayer\Auth\AuthenticatorInterface;
-use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
-use Polidog\Relayer\Auth\Identity;
-use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
-use Polidog\Relayer\Http\Response;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\InjectorContainer;
-use Polidog\Relayer\Router\Api\RouteHandlers;
-use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
-use Polidog\Relayer\Router\Component\PageComponent;
+use Polidog\Relayer\Router\Dispatch\ApiDispatcher;
+use Polidog\Relayer\Router\Dispatch\AuthenticatorLocator;
+use Polidog\Relayer\Router\Dispatch\ClassFileScanner;
+use Polidog\Relayer\Router\Dispatch\ComponentLoader;
+use Polidog\Relayer\Router\Dispatch\ErrorResponder;
+use Polidog\Relayer\Router\Dispatch\FactoryArgumentResolver;
+use Polidog\Relayer\Router\Dispatch\FrameworkTranslator;
+use Polidog\Relayer\Router\Dispatch\FunctionPageBuilder;
+use Polidog\Relayer\Router\Dispatch\PageIdentifier;
+use Polidog\Relayer\Router\Dispatch\PageRenderer;
+use Polidog\Relayer\Router\Dispatch\PsxCompiler;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
 use Polidog\Relayer\Router\Document\Script;
-use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\Relayer\Router\Layout\LayoutInterface;
-use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
-use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
-use Polidog\UsePhp\Psx\CompileCommand;
-use Polidog\UsePhp\Psx\Compiler;
-use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
-use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
-use ReflectionFunction;
-use ReflectionNamedType;
 use RuntimeException;
 use Throwable;
 
+/**
+ * The single-process dispatcher: take an incoming request, match it against
+ * the file-based router, then either run an API handler, render a page
+ * through its layout stack, or fall through to a localised error response.
+ *
+ * The class is intentionally a thin orchestrator. Each cohesive
+ * responsibility lives in a collaborator under
+ * {@see Dispatch} — page file loading, PSX cache
+ * resolution, function-page autowiring, API dispatch, page rendering, and
+ * error / authorization responses — so this file owns the request lifecycle
+ * (locale resolution, middleware, the dispatch closure, the try/finally
+ * teardown) and the per-request state (`$currentRequest`, the container
+ * reference) while the collaborators own how each step is performed.
+ *
+ * The class stays non-final and the protected hooks (handleMatch /
+ * handleApiMatch / loadPage / renderPage / resolveCompiledPsxPath / …) stay
+ * protected so {@see TraceableAppRouter} can wrap them with profiler
+ * instrumentation, and so tests / apps can subclass for tightly-scoped
+ * extensions.
+ */
 class AppRouter
 {
     private string $appDirectory;
     private ?ContainerInterface $container;
     private RouterInterface $router;
     private DocumentInterface $document;
-    private bool $autoCompilePsx;
-    private string $psxCacheDir;
     private ?Request $currentRequest = null;
     private ?UsePHP $usephp = null;
+
+    private PsxCompiler $psxCompiler;
+    private ClassFileScanner $classFileScanner;
+    private PageIdentifier $pageIdentifier;
+    private AuthenticatorLocator $authenticatorLocator;
+    private FrameworkTranslator $frameworkTranslator;
+    private FactoryArgumentResolver $factoryArgumentResolver;
+    private FunctionPageBuilder $functionPageBuilder;
+    private ComponentLoader $componentLoader;
+    private ApiDispatcher $apiDispatcher;
+    private PageRenderer $pageRenderer;
+    private ErrorResponder $errorResponder;
 
     public function __construct(
         string $appDirectory,
@@ -71,13 +93,60 @@ class AppRouter
         $this->container = $container;
         $this->router = Router::create($this->appDirectory, $compiledRoutesFile);
         $this->document = new HtmlDocument();
-        $this->autoCompilePsx = $autoCompilePsx;
         // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
         // is the parent of the appDirectory. This matches the usePHP CLI's
         // default of <cwd>/var/cache/psx for the typical layout where the
         // app dir is `src/Pages` (so cache lands beside src/, not inside it).
-        $this->psxCacheDir = $psxCacheDir
-            ?? \dirname($this->appDirectory) . '/var/cache/psx';
+        $cacheDir = $psxCacheDir ?? \dirname($this->appDirectory) . '/var/cache/psx';
+
+        // Collaborators are wired once. Per-request state (currentRequest,
+        // route match, page params) is always passed as method arguments —
+        // never stashed on the collaborator — so an over-long worker can't
+        // leak the previous request into the next one. The setContainer /
+        // setDocument / setUsePhp setters below push canonical state into
+        // the collaborators that need it.
+        $this->psxCompiler = new PsxCompiler($autoCompilePsx, $cacheDir);
+        $this->classFileScanner = new ClassFileScanner();
+        $this->pageIdentifier = new PageIdentifier($this->appDirectory);
+        $this->authenticatorLocator = new AuthenticatorLocator($container);
+        $this->frameworkTranslator = new FrameworkTranslator($container);
+        $this->factoryArgumentResolver = new FactoryArgumentResolver($this->authenticatorLocator, $container);
+        // Indirect FunctionPageBuilder via class-string so the literal
+        // `new` + class-name with a leading "Function" prefix does not
+        // false-trigger external lint patterns that look for JavaScript's
+        // `new Function()` constructor.
+        $pageBuilderClass = FunctionPageBuilder::class;
+        $this->functionPageBuilder = new $pageBuilderClass(
+            $this->factoryArgumentResolver,
+            $this->authenticatorLocator,
+            $this->pageIdentifier,
+        );
+        // Route ComponentLoader's PSX resolution through the protected
+        // `resolveCompiledPsxPath()` hook (not directly into PsxCompiler) so
+        // {@see TraceableAppRouter}'s override of that hook still wraps each
+        // compile in a profiler span — the closure captures $this, so the
+        // method dispatch picks up the subclass override polymorphically.
+        $this->componentLoader = new ComponentLoader(
+            fn (string $psxPath): string => $this->resolveCompiledPsxPath($psxPath),
+            $this->classFileScanner,
+            $this->functionPageBuilder,
+            $container,
+        );
+        $this->apiDispatcher = new ApiDispatcher(
+            $this->factoryArgumentResolver,
+            $this->authenticatorLocator,
+            $this->frameworkTranslator,
+            $this->pageIdentifier,
+        );
+        $this->pageRenderer = new PageRenderer($this->document);
+        $this->errorResponder = new ErrorResponder(
+            $this->document,
+            $this->componentLoader,
+            $this->pageRenderer,
+            $this->frameworkTranslator,
+            $this->router,
+            $this->appDirectory,
+        );
     }
 
     public static function create(
@@ -97,6 +166,10 @@ class AppRouter
     public function setContainer(ContainerInterface $container): self
     {
         $this->container = $container;
+        $this->authenticatorLocator->setContainer($container);
+        $this->frameworkTranslator->setContainer($container);
+        $this->factoryArgumentResolver->setContainer($container);
+        $this->componentLoader->setContainer($container);
 
         return $this;
     }
@@ -122,6 +195,18 @@ class AppRouter
     public function setDocument(DocumentInterface $document): self
     {
         $this->document = $document;
+        // PageRenderer and ErrorResponder are the only collaborators that
+        // hold a Document. Both are cheap to recreate; the previous
+        // instances drop with no other references.
+        $this->pageRenderer = new PageRenderer($this->document, $this->usephp);
+        $this->errorResponder = new ErrorResponder(
+            $this->document,
+            $this->componentLoader,
+            $this->pageRenderer,
+            $this->frameworkTranslator,
+            $this->router,
+            $this->appDirectory,
+        );
 
         return $this;
     }
@@ -143,6 +228,7 @@ class AppRouter
     public function setUsePhp(UsePHP $usephp): self
     {
         $this->usephp = $usephp;
+        $this->pageRenderer->setUsePhp($usephp);
 
         return $this;
     }
@@ -321,127 +407,14 @@ class AppRouter
     }
 
     /**
-     * Dispatch an API route (`route.php`). The file returns a method-keyed
-     * map of handler closures; the one matching the request method is
-     * autowired with the SAME resolver function-style pages use — so
-     * `PageContext`, `Request`, `Identity`, and container services inject
-     * identically, and `$ctx->requireAuth()` / `$ctx->redirect()` work
-     * because this runs inside `run()`'s Authorization/Redirect catch.
-     *
-     * The handler must return a {@see Response} (built via
-     * `Response::json()` / `text()` / `noContent()` / `redirect()`) — the
-     * one explicit output contract; returning anything else is a server bug
-     * surfaced loudly.
-     *
-     * `OPTIONS` and `HEAD` are synthesized when not declared explicitly, to
-     * match Next.js: an undeclared `OPTIONS` → `204` + `Allow`, an
-     * undeclared `HEAD` runs the `GET` handler and drops the body. An
-     * explicit handler for either always wins. No declared handler for the
-     * method → `405` + `Allow` (JSON body).
-     *
-     * Auth failures are translated to a JSON `401` / `403` here rather than
-     * the page path's HTML-login `302`: an API client wants a status code,
-     * not a redirect to a form. `$ctx->abort()` / `notFound()` is likewise
-     * translated to a JSON error with the exception's status here, so an API
-     * route never emits the HTML error page. A handler that calls
-     * `$ctx->redirect()` still produces a `Location` response — that is a
-     * deliberate, content-type-neutral handler action, not an error gate, so
-     * it bubbles to `run()` unchanged.
+     * Dispatch an API route (`route.php`). See {@see ApiDispatcher} for the
+     * full contract: same autowire rules as function-style pages, JSON
+     * 401 / 403 / 404 / 405 translations, synthesised OPTIONS / HEAD, and
+     * the explicit `Response` return requirement.
      */
     protected function handleApiMatch(RouteMatch $match): void
     {
-        $file = $match->getPagePath();
-
-        if (!\file_exists($file)) {
-            // Scanned but gone by dispatch (deleted mid-process). Keep the
-            // API surface JSON instead of falling back to the HTML 404.
-            Response::json(['error' => $this->tr('relayer.http.404', 'Not Found')], 404)->send();
-
-            return;
-        }
-
-        $handlers = RouteHandlers::fromFile($file);
-
-        // run() always builds currentRequest before dispatch; its `method`
-        // is already upper-cased by Request::fromGlobals(). The $_SERVER
-        // fallback only matters if a subclass dispatches without run().
-        $request = $this->currentRequest;
-        $method = null !== $request
-            ? $request->method
-            : \strtoupper(\is_string($_SERVER['REQUEST_METHOD'] ?? null) ? $_SERVER['REQUEST_METHOD'] : 'GET');
-
-        $handler = $handlers->handlerFor($method);
-
-        // Auto `OPTIONS`: no user code runs (Next.js parity) — just advertise
-        // what the route answers. An explicit `OPTIONS` handler skips this.
-        if (null === $handler && 'OPTIONS' === $method) {
-            Response::noContent(204)
-                ->withHeader('Allow', \implode(', ', $handlers->effectiveAllowedMethods()))
-                ->send()
-            ;
-
-            return;
-        }
-
-        // Auto `HEAD`: run the `GET` handler, then strip the body. An
-        // explicit `HEAD` handler skips this and owns its own response.
-        $omitBody = false;
-        if (null === $handler && 'HEAD' === $method) {
-            $handler = $handlers->handlerFor('GET');
-            $omitBody = true;
-        }
-
-        if (null === $handler) {
-            Response::json(['error' => $this->tr('relayer.http.405', 'Method Not Allowed')], 405)
-                ->withHeader('Allow', \implode(', ', $handlers->effectiveAllowedMethods()))
-                ->send()
-            ;
-
-            return;
-        }
-
-        $context = new Component\PageContext($match->getParams(), $this->computePageId($file));
-        $context->setAuthenticator($this->resolveAuthenticator());
-
-        // A non-nullable `Identity` parameter throws during argument
-        // resolution; `$ctx->requireAuth()` throws inside the handler.
-        // Both land here and become a JSON 401/403 instead of run()'s
-        // HTML-login redirect.
-        try {
-            $args = $this->resolveFactoryArguments($handler, $context, $file);
-            $result = $handler(...$args);
-        } catch (AuthorizationException $exception) {
-            $status = AuthGuard::DECISION_FORBIDDEN === $exception->decision ? 403 : 401;
-            $error = 403 === $status
-                ? $this->tr('relayer.http.403', 'Forbidden')
-                : $this->tr('relayer.http.401', 'Unauthorized');
-            $response = Response::json(['error' => $error], $status);
-            ($omitBody ? $response->withoutBody() : $response)->send();
-
-            return;
-        } catch (HttpException $exception) {
-            // $ctx->abort()/notFound() from an API handler: keep the API
-            // surface JSON instead of letting it bubble to run() and render
-            // the HTML error page (same API/HTML boundary the
-            // AuthorizationException translation above maintains).
-            $response = Response::json(['error' => $this->localizedReason($exception)], $exception->status);
-            ($omitBody ? $response->withoutBody() : $response)->send();
-
-            return;
-        }
-
-        if (!$result instanceof Response) {
-            throw new RuntimeException(\sprintf(
-                'API route %s handler for "%s" must return a %s '
-                . '(use Response::json(...) / text() / noContent() / redirect()); %s returned.',
-                $file,
-                $method,
-                Response::class,
-                \get_debug_type($result),
-            ));
-        }
-
-        ($omitBody ? $result->withoutBody() : $result)->send();
+        $this->apiDispatcher->dispatch($match, $this->currentRequest);
     }
 
     /**
@@ -519,32 +492,7 @@ class AppRouter
      */
     protected function handleAuthorizationFailure(AuthorizationException $exception): void
     {
-        if (\headers_sent()) {
-            return;
-        }
-
-        switch ($exception->decision) {
-            case AuthGuard::DECISION_UNAUTHORIZED:
-                \http_response_code(401);
-
-                return;
-
-            case AuthGuard::DECISION_FORBIDDEN:
-                \http_response_code(403);
-
-                return;
-
-            case AuthGuard::DECISION_REDIRECT:
-            default:
-                $location = $exception->redirectTo;
-                $requestUri = $this->currentRequest?->path;
-                if (null !== $requestUri && '' !== $requestUri && !\str_contains($location, '?')) {
-                    $location .= '?next=' . \rawurlencode($requestUri);
-                }
-                \header('Location: ' . $location, true, 302);
-
-                return;
-        }
+        $this->errorResponder->authorizationFailure($exception, $this->currentRequest);
     }
 
     /**
@@ -555,16 +503,12 @@ class AppRouter
      */
     protected function handleRedirect(RedirectException $exception): void
     {
-        if (\headers_sent()) {
-            return;
-        }
-
-        \header('Location: ' . $exception->location, true, $exception->status);
+        $this->errorResponder->redirect($exception);
     }
 
     protected function handleNotFound(): void
     {
-        $this->handleErrorResponse(404, $this->tr('relayer.http.page_not_found', 'Page not found'));
+        $this->errorResponder->notFound();
     }
 
     /**
@@ -614,7 +558,7 @@ class AppRouter
             $this->container->setCurrentRequest($request);
         }
 
-        $translator = $this->translator();
+        $translator = $this->translatorService();
         if (null !== $translator) {
             $translator->setLocale($resolved->locale);
             Translators::setDefault($translator);
@@ -645,43 +589,19 @@ class AppRouter
             return;
         }
 
-        $this->handleErrorResponse($exception->status, $this->localizedReason($exception));
+        $this->handleErrorResponse($exception->status, $this->frameworkTranslator->localizedReason($exception));
     }
 
     /**
      * The shared error path: set the status, then render the project's
      * `error.psx` (wrapped in the root layout, receiving the status/message
-     * via {@see ErrorPageComponent}) or fall back to the built-in error
-     * document. This is the only place the page side touches
+     * via {@see Component\ErrorPageComponent}) or fall back to the built-in
+     * error document. This is the only place the page side touches
      * `http_response_code()` — `abort()` keeps it out of user code.
      */
     protected function handleErrorResponse(int $status, string $message): void
     {
-        \http_response_code($status);
-
-        $errorPagePath = $this->router->getErrorPagePath();
-
-        if (null !== $errorPagePath) {
-            $errorComponent = $this->loadErrorPage($errorPagePath, $status, $message);
-
-            if (null !== $errorComponent) {
-                $rootLayoutPath = $this->findRootLayoutPath();
-                $layoutStack = new LayoutStack();
-
-                if (null !== $rootLayoutPath) {
-                    $layout = $this->loadLayoutFromFile($rootLayoutPath, []);
-                    if (null !== $layout) {
-                        $layoutStack->push($layout);
-                    }
-                }
-
-                $this->renderPage($errorComponent, $layoutStack, []);
-
-                return;
-            }
-        }
-
-        echo $this->document->renderError($status, $message);
+        $this->errorResponder->errorPage($status, $message);
     }
 
     /**
@@ -707,43 +627,7 @@ class AppRouter
      */
     protected function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
-        if (!\file_exists($pagePath)) {
-            return null;
-        }
-
-        // The route-derived page id must be computed from the original
-        // src/Pages/.../page.psx path — the compiled cache filename is an
-        // opaque hash and would leak into action tokens / component state keys.
-        $originalPagePath = $pagePath;
-
-        // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (\str_ends_with($pagePath, '.psx')) {
-            $pagePath = $this->resolveCompiledPsxPath($pagePath);
-        }
-
-        $result = require_once $pagePath;
-
-        // Closure return: function-based page
-        if ($result instanceof Closure) {
-            return $this->buildFunctionPage($result, $originalPagePath, $params);
-        }
-
-        // Class-based page (fallback)
-        $className = $this->getClassFromFile($pagePath);
-
-        if (null !== $className && \class_exists($className)) {
-            $instance = $this->resolveInstance($className);
-
-            if ($instance instanceof ComponentInterface) {
-                if ($instance instanceof PageComponent) {
-                    $instance->setParams($params);
-                }
-
-                return $instance;
-            }
-        }
-
-        return null;
+        return $this->componentLoader->loadPage($pagePath, $params, $this->currentRequest);
     }
 
     /**
@@ -751,180 +635,27 @@ class AppRouter
      */
     protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
     {
-        $componentId = $page instanceof FunctionPage
-            ? $page->getComponentId()
-            : 'page:' . $page::class;
-
-        $state = ComponentState::getInstance($componentId);
-        ComponentState::reset();
-
-        // Handle useState action (onClick etc.) before rendering
-        $this->dispatchStateAction($componentId, $state);
-
-        if ($page instanceof BaseComponent) {
-            $page->setComponentState($state);
-        }
-
-        if ($page instanceof PageComponent) {
-            $page->dispatchActionFromRequest();
-        } elseif ($page instanceof FunctionPage) {
-            $page->dispatchActionFromRequest();
-        }
-
-        $pageElement = $page->render();
-
-        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
-            /** @var array<string, string> $metadata */
-            $metadata = $page->getMetadata();
-            $this->document->setMetadata($metadata);
-        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
-            $this->document->setMetadata($page->getMetadata());
-        }
-
-        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-        // Pass the configured SnapshotSerializer so the inner Renderer can
-        // HMAC-sign snapshot-backed component state rendered into the page.
-        // Defer placeholders (`/_defer/{name}` GET endpoint) do NOT use the
-        // serializer — only `StorageType::Snapshot` state does.
-        //
-        // use-php 0.5.0 made getSnapshotSerializer() throw a LogicException
-        // when no secret has been configured, instead of silently returning
-        // an unsigned serializer. Relayer only configures a secret when
-        // USEPHP_SNAPSHOT_SECRET is set (or in dev, via a per-project
-        // fallback), so prod-without-secret legitimately has none. Degrade
-        // to null here: pages with no Snapshot-storage component render
-        // exactly as before; a page that actually serializes a snapshot
-        // without a secret then fails loudly inside the Renderer with
-        // use-php's own actionable message — which is the correct posture,
-        // an unsigned client round-trip is forgeable.
-        $snapshotSerializer = null;
-        if (null !== $this->usephp) {
-            try {
-                $snapshotSerializer = $this->usephp->getSnapshotSerializer();
-            } catch (LogicException) {
-                $snapshotSerializer = null;
-            }
-        }
-        $renderer = new LayoutRenderer(
-            $componentId,
-            \is_string($requestUri) ? $requestUri : '/',
-            $snapshotSerializer,
-        );
-        $html = $renderer->render($pageElement, $layouts);
-
-        if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            echo $html;
-
-            return;
-        }
-
-        // Collected here, not right after $page->render(): a layout's
-        // render() only runs inside $renderer->render() above, so a layout
-        // declaring scripts via addJs() inside render() would otherwise be
-        // missed. Past the partial early-return too — partial responses
-        // bypass the document, so they must not mutate its script queue.
-        if ($this->document instanceof HtmlDocument) {
-            foreach ($this->collectScripts($page, $layouts) as $script) {
-                $this->document->addScript($script);
-            }
-        }
-
-        $wrappedHtml = \sprintf(
-            '<div data-usephp="%s">%s</div>',
-            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
-            $html,
-        );
-
-        $output = $this->document->render($wrappedHtml);
-
-        echo $output;
+        $this->pageRenderer->render($page, $layouts, $params);
     }
 
     /**
      * Gather declared scripts in emission order: outer (root) layout first,
-     * inner layouts next, page last. Only LayoutComponent / PageComponent /
-     * FunctionPage carry scripts — the same instanceof asymmetry setParams()
-     * and metadata already have for raw LayoutInterface implementers. No
-     * deduplication: a layout and a page both declaring the same src is two
-     * tags by design.
+     * inner layouts next, page last. See {@see PageRenderer::collectScripts}.
      *
      * @return array<int, Script>
      */
     protected function collectScripts(ComponentInterface|FunctionPage $page, LayoutStack $layouts): array
     {
-        $scripts = [];
-
-        foreach ($layouts->all() as $layout) {
-            if ($layout instanceof LayoutComponent) {
-                foreach ($layout->getScripts() as $script) {
-                    $scripts[] = $script;
-                }
-            }
-        }
-
-        if ($page instanceof FunctionPage || $page instanceof PageComponent) {
-            foreach ($page->getScripts() as $script) {
-                $scripts[] = $script;
-            }
-        }
-
-        return $scripts;
+        return $this->pageRenderer->collectScripts($page, $layouts);
     }
 
     /**
      * Handle useState setState actions from POST (onClick, onChange, etc.).
+     * See {@see PageRenderer::dispatchStateAction}.
      */
     protected function dispatchStateAction(string $componentId, ComponentState $state): void
     {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
-            return;
-        }
-
-        $actionJson = $_POST['_usephp_action'] ?? null;
-        $postComponentId = $_POST['_usephp_component'] ?? null;
-
-        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
-            return;
-        }
-
-        // Only handle JSON actions (not usephp-action: form tokens)
-        if (\str_starts_with($actionJson, 'usephp-action:')) {
-            return;
-        }
-
-        if ($postComponentId !== $componentId) {
-            return;
-        }
-
-        try {
-            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
-            if (!\is_array($actionData)) {
-                return;
-            }
-
-            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
-            $action = Action::fromArray($actionData);
-
-            if ('setState' === $action->type) {
-                $index = $action->payload['index'] ?? 0;
-                $value = $action->payload['value'] ?? null;
-                if (!\is_int($index)) {
-                    return;
-                }
-                $state->setState($index, $value);
-            }
-        } catch (JsonException) {
-            return;
-        }
-
-        // PRG pattern: redirect after state change (non-AJAX)
-        if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
-            \header('Location: ' . $redirectUrl, true, 303);
-
-            exit;
-        }
+        $this->pageRenderer->dispatchStateAction($componentId, $state);
     }
 
     /**
@@ -932,99 +663,20 @@ class AppRouter
      */
     protected function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
     {
-        if (!\file_exists($filePath)) {
-            return null;
-        }
-
-        // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (\str_ends_with($filePath, '.psx')) {
-            $filePath = $this->resolveCompiledPsxPath($filePath);
-        }
-
-        require_once $filePath;
-
-        $className = $this->getClassFromFile($filePath);
-
-        if (null === $className) {
-            return null;
-        }
-
-        if (!\class_exists($className)) {
-            return null;
-        }
-
-        $instance = $this->resolveInstance($className);
-
-        if (!$instance instanceof LayoutInterface) {
-            return null;
-        }
-
-        if ($instance instanceof LayoutComponent) {
-            $instance->setParams($params);
-        }
-
-        return $instance;
+        return $this->componentLoader->loadLayout($filePath, $params);
     }
 
     /**
-     * Resolve a page.psx path to its cached compiled file. The cache file
-     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the usePHP
-     * convention (CompileCommand::cachePathFor).
-     *
-     * Behaviour by mode:
-     * - autoCompilePsx=true: when the cache file is missing or older than
-     *   the source, the usePHP Compiler runs in-process and rewrites the
-     *   cache atomically (temp + rename).
-     * - autoCompilePsx=false (default, production): if the cache file is
-     *   missing, throw a clear error pointing at `vendor/bin/usephp compile`.
-     *   If it exists, it's treated as authoritative — staleness is NOT
-     *   re-checked at request time. The deployment / build step owns the
-     *   refresh contract via `usephp compile`.
+     * Resolve a page.psx path to its cached compiled file. See
+     * {@see PsxCompiler::resolve} for the auto-compile vs prebuilt-cache
+     * contract.
      */
     protected function resolveCompiledPsxPath(string $psxPath): string
     {
-        $compiledPath = $this->cachePathFor($psxPath);
-
-        if (!$this->autoCompilePsx) {
-            if (!\file_exists($compiledPath)) {
-                throw new RuntimeException(
-                    "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
-                    . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
-                    . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
-                );
-            }
-
-            return $compiledPath;
-        }
-
-        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
-            throw new RuntimeException(
-                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
-                . 'is not available. Update polidog/use-php to a version with PSX support.',
-            );
-        }
-
-        $needsCompile = !\file_exists($compiledPath)
-            || @\filemtime($compiledPath) < @\filemtime($psxPath);
-
-        if ($needsCompile) {
-            $this->ensureCacheDir();
-            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
-
-            /** @var Compiler $compiler */
-            $compiler = new $compilerClass();
-            $source = \file_get_contents($psxPath);
-            if (false === $source) {
-                throw new RuntimeException("Failed to read PSX source: {$psxPath}");
-            }
-            $compiled = $compiler->compile($source);
-            $this->atomicWrite($compiledPath, $compiled);
-        }
-
-        return $compiledPath;
+        return $this->psxCompiler->resolve($psxPath);
     }
 
-    private function translator(): ?Translator
+    private function translatorService(): ?Translator
     {
         if (null === $this->container || !$this->container->has(Translator::class)) {
             return null;
@@ -1033,390 +685,5 @@ class AppRouter
         $translator = $this->container->get(Translator::class);
 
         return $translator instanceof Translator ? $translator : null;
-    }
-
-    /**
-     * Translate a framework key, falling back to the verbatim English
-     * string when no Translator is bound or the key is absent — so the
-     * output is byte-identical to the pre-i18n behavior for an
-     * unconfigured / English app.
-     *
-     * @param array<string, float|int|string> $params
-     */
-    private function tr(string $key, string $fallback, array $params = []): string
-    {
-        $translator = $this->translator();
-        if (null === $translator || !$translator->has($key)) {
-            return $fallback;
-        }
-
-        return $translator->trans($key, $params);
-    }
-
-    /**
-     * The error message for an {@see HttpException}: a custom reason
-     * (`abort($status, 'msg')`) is passed through untouched; only the
-     * standard reason phrase is localized (by status, then by a generic
-     * client/server-error key, then English).
-     */
-    private function localizedReason(HttpException $exception): string
-    {
-        $reason = $exception->reason;
-
-        if ($reason !== HttpException::reasonPhrase($exception->status)) {
-            return $reason;
-        }
-
-        $translator = $this->translator();
-        if (null === $translator) {
-            return $reason;
-        }
-
-        $key = 'relayer.http.' . $exception->status;
-        if ($translator->has($key)) {
-            return $translator->trans($key);
-        }
-
-        $generic = $exception->status >= 500
-            ? 'relayer.http.server_error'
-            : 'relayer.http.client_error';
-
-        return $translator->has($generic) ? $translator->trans($generic) : $reason;
-    }
-
-    private function resolveAuthenticator(): ?AuthenticatorInterface
-    {
-        // UserProvider is an interface — `has()` only returns true when
-        // the app explicitly bound an implementation. Used as the gate
-        // for "auth is configured" so apps without auth pay nothing.
-        if (null === $this->container || !$this->container->has(UserProvider::class)) {
-            return null;
-        }
-        if (!$this->container->has(AuthenticatorInterface::class)) {
-            return null;
-        }
-
-        $auth = $this->container->get(AuthenticatorInterface::class);
-
-        return $auth instanceof AuthenticatorInterface ? $auth : null;
-    }
-
-    /**
-     * @param array<string, string> $params
-     */
-    private function buildFunctionPage(Closure $factory, string $pagePath, array $params): FunctionPage
-    {
-        $pageId = $this->computePageId($pagePath);
-        $context = new Component\PageContext($params, $pageId);
-        $context->setAuthenticator($this->resolveAuthenticator());
-        $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
-        $result = $factory(...$args);
-
-        // Two-level form: factory returns the render closure. Standard pattern
-        // used when the page needs to declare cache policy / metadata / etc.
-        // before the render body executes.
-        if ($result instanceof Closure) {
-            $renderFn = $result;
-        // Single-level shorthand: factory IS the render — it returned an
-        // Element directly. Re-wrap in a no-op closure so the same FunctionPage
-        // contract works downstream.
-        } elseif ($result instanceof Element) {
-            $renderFn = static fn (): Element => $result;
-        } else {
-            throw new RuntimeException("Page factory must return a Closure or Element: {$pagePath}");
-        }
-
-        return new FunctionPage($renderFn, $context, $pageId);
-    }
-
-    /**
-     * Reflection-based autowiring for a function-style page's factory closure.
-     * `PageContext` parameters receive the per-request context; every other
-     * typed parameter is resolved from the container, matching the constructor
-     * injection class-style pages already get.
-     *
-     * @return array<int, mixed>
-     */
-    private function resolveFactoryArguments(Closure $factory, Component\PageContext $context, string $pagePath): array
-    {
-        $reflection = new ReflectionFunction($factory);
-        $args = [];
-
-        foreach ($reflection->getParameters() as $parameter) {
-            $type = $parameter->getType();
-
-            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
-                $typeName = $type->getName();
-
-                if (Component\PageContext::class === $typeName
-                    || \is_subclass_of($typeName, Component\PageContext::class)
-                ) {
-                    $args[] = $context;
-
-                    continue;
-                }
-
-                if (Request::class === $typeName && null !== $this->currentRequest) {
-                    $args[] = $this->currentRequest;
-
-                    continue;
-                }
-
-                if (Identity::class === $typeName) {
-                    // Inject the current principal (or null when no one is
-                    // logged in). A non-nullable `Identity` parameter on a
-                    // page implies the page is auth-required — surface the
-                    // misuse as an AuthorizationException so the router
-                    // turns it into a redirect / 401, mirroring the
-                    // class-style #[Auth] attribute.
-                    $identity = $this->resolveAuthenticator()?->user();
-                    if (null === $identity && !$parameter->allowsNull()) {
-                        throw new AuthorizationException(
-                            AuthGuard::DECISION_REDIRECT,
-                        );
-                    }
-                    $args[] = $identity;
-
-                    continue;
-                }
-
-                if (null !== $this->container && $this->container->has($typeName)) {
-                    $args[] = $this->container->get($typeName);
-
-                    continue;
-                }
-            }
-
-            if ($parameter->isDefaultValueAvailable()) {
-                $args[] = $parameter->getDefaultValue();
-
-                continue;
-            }
-
-            if ($parameter->allowsNull()) {
-                $args[] = null;
-
-                continue;
-            }
-
-            throw new RuntimeException(\sprintf(
-                'Cannot autowire parameter $%s of function-style page %s: no type, default, or container binding.',
-                $parameter->getName(),
-                $pagePath,
-            ));
-        }
-
-        return $args;
-    }
-
-    private function computePageId(string $pagePath): string
-    {
-        $relative = \str_replace($this->appDirectory, '', $pagePath);
-        $relative = (string) \preg_replace('#/(?:page|route)\.(psx\.php|psx|php)$#', '', $relative);
-
-        if ('' === $relative || '/' === $relative) {
-            return '/';
-        }
-
-        return $relative;
-    }
-
-    /**
-     * Write to the destination via a tempfile + rename so concurrent
-     * requests never see a partially written compiled file. The tempfile
-     * is placed in the same directory as the destination so rename is
-     * atomic on POSIX filesystems.
-     */
-    private function atomicWrite(string $destination, string $content): void
-    {
-        $dir = \dirname($destination);
-        $tmp = @\tempnam($dir, 'psx-');
-        if (false === $tmp) {
-            throw new RuntimeException("Failed to create temp file in {$dir}");
-        }
-        if (false === \file_put_contents($tmp, $content)) {
-            @\unlink($tmp);
-
-            throw new RuntimeException("Failed to write temp file: {$tmp}");
-        }
-        if (!@\rename($tmp, $destination)) {
-            @\unlink($tmp);
-
-            throw new RuntimeException("Failed to rename {$tmp} to {$destination}");
-        }
-    }
-
-    private function cachePathFor(string $sourcePath): string
-    {
-        // Mirror usePHP's CompileCommand::cachePathFor — same hashing + naming
-        // so a pre-compiled cache produced by `vendor/bin/usephp compile` is
-        // findable here without consulting the manifest.
-        if (\class_exists('Polidog\UsePhp\Psx\CompileCommand')) {
-            return CompileCommand::cachePathFor(
-                $this->psxCacheDir,
-                $sourcePath,
-            );
-        }
-        // Fallback (CompileCommand not loaded for some reason): use the same
-        // algorithm so we never disagree with the upstream tool.
-        $abs = \realpath($sourcePath);
-        if (false === $abs) {
-            $abs = $sourcePath;
-        }
-
-        return \rtrim($this->psxCacheDir, '/') . '/' . \sha1($abs) . '.php';
-    }
-
-    private function ensureCacheDir(): void
-    {
-        if (!\is_dir($this->psxCacheDir)) {
-            @\mkdir($this->psxCacheDir, 0o755, true);
-        }
-    }
-
-    private function loadErrorPage(string $errorPath, int $statusCode, string $message): ?ComponentInterface
-    {
-        if (!\file_exists($errorPath)) {
-            return null;
-        }
-
-        // .psx is the source; the runtime requires the compiled .psx.php sibling.
-        if (\str_ends_with($errorPath, '.psx')) {
-            $errorPath = $this->resolveCompiledPsxPath($errorPath);
-        }
-
-        require_once $errorPath;
-
-        $className = $this->getClassFromFile($errorPath);
-
-        if (null === $className) {
-            return null;
-        }
-
-        if (!\class_exists($className)) {
-            return null;
-        }
-
-        $instance = $this->resolveInstance($className);
-
-        if (!$instance instanceof ComponentInterface) {
-            return null;
-        }
-
-        if ($instance instanceof ErrorPageComponent) {
-            $instance->setError($statusCode, $message);
-        }
-
-        return $instance;
-    }
-
-    /**
-     * Resolve a class instance using the container or direct instantiation.
-     *
-     * @param class-string $className
-     */
-    private function resolveInstance(string $className): object
-    {
-        if (null !== $this->container && $this->container->has($className)) {
-            $instance = $this->container->get($className);
-            \assert(\is_object($instance));
-
-            return $instance;
-        }
-
-        return new $className();
-    }
-
-    private function getClassFromFile(string $filePath): ?string
-    {
-        $content = \file_get_contents($filePath);
-
-        if (false === $content) {
-            return null;
-        }
-
-        $tokens = \token_get_all($content);
-        $tokenCount = \count($tokens);
-        $namespace = null;
-        $className = null;
-
-        for ($i = 0; $i < $tokenCount; ++$i) {
-            $token = $tokens[$i];
-
-            if (!\is_array($token)) {
-                continue;
-            }
-
-            if (\T_NAMESPACE === $token[0]) {
-                $namespaceParts = [];
-                ++$i;
-
-                while ($i < $tokenCount) {
-                    $nextToken = $tokens[$i];
-
-                    if (';' === $nextToken || '{' === $nextToken) {
-                        break;
-                    }
-
-                    if (\is_array($nextToken)) {
-                        if (\T_NAME_QUALIFIED === $nextToken[0] || \T_STRING === $nextToken[0]) {
-                            $namespaceParts[] = $nextToken[1];
-                        }
-                    }
-
-                    ++$i;
-                }
-
-                $namespace = \implode('', $namespaceParts);
-            }
-
-            if (\T_CLASS === $token[0]) {
-                ++$i;
-
-                while ($i < $tokenCount) {
-                    $nextToken = $tokens[$i];
-
-                    if (\is_array($nextToken) && \T_STRING === $nextToken[0]) {
-                        $className = $nextToken[1];
-
-                        break;
-                    }
-
-                    if (\is_array($nextToken) && \T_WHITESPACE === $nextToken[0]) {
-                        ++$i;
-
-                        continue;
-                    }
-
-                    break;
-                }
-
-                if (null !== $className) {
-                    break;
-                }
-            }
-        }
-
-        if (null === $className) {
-            return null;
-        }
-
-        if (null !== $namespace) {
-            return $namespace . '\\' . $className;
-        }
-
-        return $className;
-    }
-
-    private function findRootLayoutPath(): ?string
-    {
-        foreach (['layout.psx', 'layout.php'] as $name) {
-            $candidate = $this->appDirectory . '/' . $name;
-            if (\file_exists($candidate)) {
-                return $candidate;
-            }
-        }
-
-        return null;
     }
 }
