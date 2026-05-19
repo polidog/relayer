@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 final class EnumSchema extends Schema
 {
     /** @var list<string> */
@@ -33,9 +35,9 @@ final class EnumSchema extends Schema
     protected function parseDefined(mixed $input, string $path, array &$errors): mixed
     {
         if (!\is_string($input) || !\in_array($input, $this->values, true)) {
-            $errors[$path] = \sprintf(
-                'Must be one of: %s.',
-                \implode(', ', $this->values),
+            $errors[$path] = Translators::default()->trans(
+                'relayer.validation.enum',
+                ['values' => \implode(', ', $this->values)],
             );
 
             return null;

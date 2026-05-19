@@ -155,10 +155,19 @@ APP_ENV=dev
 DATABASE_DSN=mysql:host=127.0.0.1;dbname=app;charset=utf8mb4
 DATABASE_USER=app
 DATABASE_PASSWORD=secret
+
+# i18n (all optional — see Internationalization)
+APP_LOCALE=en
+APP_LOCALES=en,ja
+LOCALE_COOKIE=locale
+LOCALE_PATH_PREFIX=true
 ```
 
 `DATABASE_*` is optional — the database layer is wired only when
-`DATABASE_DSN` is set (see [Database](#database)).
+`DATABASE_DSN` is set (see [Database](#database)). `APP_LOCALE` /
+`APP_LOCALES` / `LOCALE_COOKIE` / `LOCALE_PATH_PREFIX` are optional too —
+an app that sets none stays single-locale English at no cost (see
+[Internationalization](#internationalization-i18n)).
 
 `.env` files are loaded through [`symfony/dotenv`](https://symfony.com/doc/current/configuration.html#configuring-environment-variables-in-env-files)
 with the standard Symfony cascade:
@@ -1685,6 +1694,90 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
     // $result->data is coerced
 });
 ```
+
+## Internationalization (i18n)
+
+A dependency-free translator with file-based catalogs, automatic locale
+resolution, and localized framework messages. **Opt-in by configuration:**
+an app that sets no i18n env var stays single-locale English and pays
+nothing — every framework string is byte-identical to the pre-i18n
+output.
+
+### Configure
+
+```
+APP_LOCALE=en            # default / fallback locale (default: en)
+APP_LOCALES=en,ja        # supported locales (default: just APP_LOCALE)
+LOCALE_COOKIE=locale     # cookie name for the cookie source (default: locale)
+LOCALE_PATH_PREFIX=true  # enable /{locale}/... routing (default: true)
+```
+
+`Translator` and `LocaleResolver` are always registered in the container
+(autowired, public), so once `APP_LOCALES` lists more than one locale the
+whole pipeline is active.
+
+### Locale resolution order
+
+For each request `LocaleResolver` picks the locale from, highest priority
+first:
+
+1. **URL path prefix** — `/{locale}/...` when the first segment is a
+   supported locale. This is also the only source that rewrites the path
+   the router matches on, so `/ja/about` and `/about` hit the same
+   `src/Pages/about/page.psx`.
+2. **Session** — read **only when a session is already active**. Starting
+   a session purely to detect a locale would emit a per-request
+   `Set-Cookie` and break CDN caching of anonymous pages, so the resolver
+   never does that; logged-in flows that already have a session get their
+   stored `_locale` honored.
+3. **Cookie** — `LOCALE_COOKIE` (CDN-safe; no session).
+4. **`Accept-Language`** — q-value negotiated against the supported list.
+5. **Default** — `APP_LOCALE`.
+
+Matching is on the primary subtag (`ja-JP` matches a supported `ja`); the
+resolved value is the canonical spelling from `APP_LOCALES`. The chosen
+locale is also written to `<html lang="…">` and exposed as
+`$request->locale()`.
+
+### Translating your own content
+
+Drop PHP catalogs in `<projectRoot>/translations/{locale}.php` — flat or
+nested, merged over (and overriding) the framework catalogs:
+
+```php
+// translations/ja.php
+return [
+    'home.title'   => 'ようこそ',
+    'cart.items'   => '{count}点|{count}点', // pipe = plural forms
+    'user'         => ['greeting' => 'こんにちは、{name}さん'],
+];
+```
+
+Inject the `Translator` into any page, layout, or service:
+
+```php
+use Polidog\Relayer\I18n\Translator;
+
+return static fn (Translator $t) => h('h1', [], $t->trans('home.title'));
+// placeholders:  $t->trans('user.greeting', ['name' => $name])
+// plural:        $t->transChoice('cart.items', $count)
+```
+
+`transChoice()` selects a form from a `one|other` pipe message via a
+simplified CLDR rule (English-like one/other; single-form for Japanese,
+Chinese, Korean, …). A missing key degrades to the key itself (after
+placeholder substitution) — visible, never fatal.
+
+### Localized framework messages
+
+Validation messages and HTTP error reason phrases (the HTML error page and
+the JSON `{"error": …}` body for API routes) are resolved through the same
+catalogs under the `relayer.*` namespace, with `en` and `ja` shipped. The
+Validation schemas are built outside the container, so they reach the
+active translator through a process-wide ambient holder
+(`Polidog\Relayer\I18n\Translators`) that AppRouter sets per request; a
+custom `refine()` / `required('…')` message is always passed through
+verbatim. CLI output (`relayer …`) is intentionally English-only for now.
 
 ## Logger
 

@@ -17,6 +17,11 @@ final readonly class Request
      * @param array<string, mixed>  $query   parsed query parameters
      * @param array<string, mixed>  $post    parsed form body
      * @param array<string, string> $headers header names lowercased
+     * @param array<string, string> $cookies request cookies
+     * @param null|string           $locale  locale resolved for this request
+     *                                       (set by the framework once the
+     *                                       LocaleResolver has run; null when
+     *                                       i18n is not configured)
      */
     public function __construct(
         public string $method,
@@ -24,6 +29,8 @@ final readonly class Request
         private array $query = [],
         private array $post = [],
         private array $headers = [],
+        private array $cookies = [],
+        private readonly ?string $locale = null,
     ) {}
 
     public static function fromGlobals(): self
@@ -50,12 +57,20 @@ final readonly class Request
             }
         }
 
+        $cookies = [];
+        foreach ($_COOKIE as $key => $value) {
+            if (\is_string($key) && \is_string($value)) {
+                $cookies[$key] = $value;
+            }
+        }
+
         return new self(
             method: $method,
             path: $path,
             query: self::filterStringKeys($_GET),
             post: self::filterStringKeys($_POST),
             headers: $headers,
+            cookies: $cookies,
         );
     }
 
@@ -102,6 +117,59 @@ final readonly class Request
     public function header(string $name): ?string
     {
         return $this->headers[\strtolower($name)] ?? null;
+    }
+
+    /**
+     * Look up a request cookie. Cookie names are case-sensitive (RFC 6265),
+     * so this is an exact-name lookup unlike {@see header()}.
+     */
+    public function cookie(string $name): ?string
+    {
+        return $this->cookies[$name] ?? null;
+    }
+
+    /**
+     * The locale resolved for this request, or null when i18n is not
+     * configured. Set by the framework's LocaleResolver during dispatch;
+     * pages can also reach it by injecting the Translator.
+     */
+    public function locale(): ?string
+    {
+        return $this->locale;
+    }
+
+    /**
+     * A copy routed on a different path. The framework uses this to strip a
+     * `/{locale}` prefix before route matching while keeping every other
+     * field intact.
+     */
+    public function withPath(string $path): self
+    {
+        return new self(
+            method: $this->method,
+            path: $path,
+            query: $this->query,
+            post: $this->post,
+            headers: $this->headers,
+            cookies: $this->cookies,
+            locale: $this->locale,
+        );
+    }
+
+    /**
+     * A copy carrying the resolved locale.
+     */
+    public function withLocale(string $locale): self
+    {
+        return new self(
+            method: $this->method,
+            path: $this->path,
+            query: $this->query,
+            post: $this->post,
+            headers: $this->headers,
+            cookies: $this->cookies,
+            locale: $locale,
+        );
     }
 
     /**

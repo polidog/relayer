@@ -32,6 +32,8 @@ use Polidog\Relayer\Http\Client\TraceableHttpClient;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\FileEtagStore;
 use Polidog\Relayer\Http\TraceableEtagStore;
+use Polidog\Relayer\I18n\LocaleResolver;
+use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\Log\TraceableLogger;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\NullProfiler;
@@ -404,6 +406,66 @@ final class ContainerFactory
                 ->setPublic(true)
             ;
         }
+
+        self::registerI18n($container, $projectRoot);
+    }
+
+    /**
+     * i18n defaults. Always registered (like the HTTP client / logger):
+     * both services are cheap, and a single-locale app simply resolves to
+     * its one locale with the framework's English catalog — so an app that
+     * never configures i18n keeps the pre-i18n English output at no cost.
+     *
+     * Knobs (all optional, read from the `.env` cascade):
+     *  - `APP_LOCALE`         default/active locale (default `en`)
+     *  - `APP_LOCALES`        comma list of supported locales
+     *                         (default: just `APP_LOCALE`)
+     *  - `LOCALE_COOKIE`      cookie name for the cookie source
+     *                         (default `locale`)
+     *  - `LOCALE_PATH_PREFIX` enable `/{locale}/...` routing
+     *                         (default `true`)
+     *
+     * `LocaleResolver` takes the always-bound `SessionStorage`, but only
+     * reads it when a session is already active, so registering it here
+     * never eagerly starts a session.
+     */
+    private static function registerI18n(ContainerBuilder $container, string $projectRoot): void
+    {
+        $defaultLocale = self::readEnv('APP_LOCALE') ?: 'en';
+
+        $supported = [];
+        foreach (\explode(',', self::readEnv('APP_LOCALES')) as $entry) {
+            $entry = \trim($entry);
+            if ('' !== $entry) {
+                $supported[] = $entry;
+            }
+        }
+        if ([] === $supported) {
+            $supported = [$defaultLocale];
+        } elseif (!\in_array($defaultLocale, $supported, true)) {
+            // Keep the default resolvable to its canonical spelling.
+            \array_unshift($supported, $defaultLocale);
+        }
+
+        $cookieName = self::readEnv('LOCALE_COOKIE') ?: 'locale';
+        $pathPrefix = self::readEnvBool('LOCALE_PATH_PREFIX', true);
+
+        $container->register(Translator::class)
+            ->setFactory([Translator::class, 'createForProject'])
+            ->setArguments([$projectRoot, $defaultLocale, 'en'])
+            ->setPublic(true)
+        ;
+
+        $container->register(LocaleResolver::class)
+            ->setArguments([
+                $supported,
+                $defaultLocale,
+                $pathPrefix,
+                $cookieName,
+                new Reference(SessionStorage::class),
+            ])
+            ->setPublic(true)
+        ;
     }
 
     /**
@@ -484,5 +546,20 @@ final class ContainerFactory
         $raw = self::readEnv($name);
 
         return \ctype_digit($raw) ? (int) $raw : null;
+    }
+
+    /**
+     * Read a boolean-ish env var. Unset/blank → `$default`; `0`, `false`,
+     * `off`, `no` (case-insensitive) → false; anything else → true.
+     */
+    private static function readEnvBool(string $name, bool $default): bool
+    {
+        $raw = \strtolower(self::readEnv($name));
+
+        if ('' === $raw) {
+            return $default;
+        }
+
+        return !\in_array($raw, ['0', 'false', 'off', 'no'], true);
     }
 }

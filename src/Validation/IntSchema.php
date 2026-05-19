@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Validation;
 
+use Polidog\Relayer\I18n\Translators;
+
 final class IntSchema extends Schema
 {
     public function min(int $value, ?string $message = null): static
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_int($v) && $v >= $value,
-            $message ?? \sprintf('Must be %d or greater.', $value),
+            $message ?? Translators::default()->trans('relayer.validation.int.min', ['value' => $value]),
         );
     }
 
@@ -18,7 +20,7 @@ final class IntSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_int($v) && $v <= $value,
-            $message ?? \sprintf('Must be %d or less.', $value),
+            $message ?? Translators::default()->trans('relayer.validation.int.max', ['value' => $value]),
         );
     }
 
@@ -26,7 +28,7 @@ final class IntSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_int($v) && $v > 0,
-            $message ?? 'Must be greater than 0.',
+            $message ?? Translators::default()->trans('relayer.validation.int.positive'),
         );
     }
 
@@ -34,7 +36,7 @@ final class IntSchema extends Schema
     {
         return $this->refine(
             static fn (mixed $v): bool => \is_int($v) && $v >= 0,
-            $message ?? 'Must be 0 or greater.',
+            $message ?? Translators::default()->trans('relayer.validation.int.non_negative'),
         );
     }
 
@@ -64,7 +66,7 @@ final class IntSchema extends Schema
             }
         }
 
-        $errors[$path] = 'Must be an integer.';
+        $errors[$path] = Translators::default()->trans('relayer.validation.int.type');
 
         return null;
     }

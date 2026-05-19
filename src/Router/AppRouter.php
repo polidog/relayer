@@ -16,6 +16,9 @@ use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Http\Response;
+use Polidog\Relayer\I18n\LocaleResolver;
+use Polidog\Relayer\I18n\Translator;
+use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Router\Api\RouteHandlers;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
@@ -205,6 +208,7 @@ class AppRouter
                 // it so the documented contract is real — route by its path
                 // and let the rest of dispatch see it as the current request
                 // (handleApiMatch reads currentRequest->method).
+                $request = $this->resolveLocale($request);
                 $this->currentRequest = $request;
 
                 $match = $this->router->match($request->path);
@@ -318,7 +322,7 @@ class AppRouter
         if (!\file_exists($file)) {
             // Scanned but gone by dispatch (deleted mid-process). Keep the
             // API surface JSON instead of falling back to the HTML 404.
-            Response::json(['error' => 'Not Found'], 404)->send();
+            Response::json(['error' => $this->tr('relayer.http.404', 'Not Found')], 404)->send();
 
             return;
         }
@@ -355,7 +359,7 @@ class AppRouter
         }
 
         if (null === $handler) {
-            Response::json(['error' => 'Method Not Allowed'], 405)
+            Response::json(['error' => $this->tr('relayer.http.405', 'Method Not Allowed')], 405)
                 ->withHeader('Allow', \implode(', ', $handlers->effectiveAllowedMethods()))
                 ->send()
             ;
@@ -375,7 +379,10 @@ class AppRouter
             $result = $handler(...$args);
         } catch (AuthorizationException $exception) {
             $status = AuthGuard::DECISION_FORBIDDEN === $exception->decision ? 403 : 401;
-            $response = Response::json(['error' => 403 === $status ? 'Forbidden' : 'Unauthorized'], $status);
+            $error = 403 === $status
+                ? $this->tr('relayer.http.403', 'Forbidden')
+                : $this->tr('relayer.http.401', 'Unauthorized');
+            $response = Response::json(['error' => $error], $status);
             ($omitBody ? $response->withoutBody() : $response)->send();
 
             return;
@@ -384,7 +391,7 @@ class AppRouter
             // surface JSON instead of letting it bubble to run() and render
             // the HTML error page (same API/HTML boundary the
             // AuthorizationException translation above maintains).
-            $response = Response::json(['error' => $exception->reason], $exception->status);
+            $response = Response::json(['error' => $this->localizedReason($exception)], $exception->status);
             ($omitBody ? $response->withoutBody() : $response)->send();
 
             return;
@@ -524,7 +531,55 @@ class AppRouter
 
     protected function handleNotFound(): void
     {
-        $this->handleErrorResponse(404, 'Page not found');
+        $this->handleErrorResponse(404, $this->tr('relayer.http.page_not_found', 'Page not found'));
+    }
+
+    /**
+     * Resolve the request's locale via the container-bound
+     * {@see LocaleResolver} (when one is registered), then thread the
+     * decision everywhere it must be visible: a `/{locale}` path prefix is
+     * stripped for route matching, the container's current Request is
+     * swapped for the locale-aware copy (so pages inject it), the
+     * Translator's active locale is set and published as the ambient one
+     * for DI-less validation, and the HTML document's `lang` is updated.
+     *
+     * Fully gated on the container exposing a `LocaleResolver`: an app that
+     * never configures i18n (or a test with a stub container) keeps the
+     * exact pre-i18n behavior at no cost.
+     */
+    protected function resolveLocale(Request $request): Request
+    {
+        if (null === $this->container || !$this->container->has(LocaleResolver::class)) {
+            return $request;
+        }
+
+        $resolver = $this->container->get(LocaleResolver::class);
+        if (!$resolver instanceof LocaleResolver) {
+            return $request;
+        }
+
+        $resolved = $resolver->resolve($request);
+
+        $request = $request->withLocale($resolved->locale);
+        if ($resolved->path !== $request->path) {
+            $request = $request->withPath($resolved->path);
+        }
+
+        if ($this->container instanceof InjectorContainer) {
+            $this->container->setCurrentRequest($request);
+        }
+
+        $translator = $this->translator();
+        if (null !== $translator) {
+            $translator->setLocale($resolved->locale);
+            Translators::setDefault($translator);
+        }
+
+        if ($this->document instanceof HtmlDocument) {
+            $this->document->setLang($resolved->locale);
+        }
+
+        return $request;
     }
 
     /**
@@ -545,7 +600,7 @@ class AppRouter
             return;
         }
 
-        $this->handleErrorResponse($exception->status, $exception->reason);
+        $this->handleErrorResponse($exception->status, $this->localizedReason($exception));
     }
 
     /**
@@ -922,6 +977,66 @@ class AppRouter
         }
 
         return $compiledPath;
+    }
+
+    private function translator(): ?Translator
+    {
+        if (null === $this->container || !$this->container->has(Translator::class)) {
+            return null;
+        }
+
+        $translator = $this->container->get(Translator::class);
+
+        return $translator instanceof Translator ? $translator : null;
+    }
+
+    /**
+     * Translate a framework key, falling back to the verbatim English
+     * string when no Translator is bound or the key is absent — so the
+     * output is byte-identical to the pre-i18n behavior for an
+     * unconfigured / English app.
+     *
+     * @param array<string, float|int|string> $params
+     */
+    private function tr(string $key, string $fallback, array $params = []): string
+    {
+        $translator = $this->translator();
+        if (null === $translator || !$translator->has($key)) {
+            return $fallback;
+        }
+
+        return $translator->trans($key, $params);
+    }
+
+    /**
+     * The error message for an {@see HttpException}: a custom reason
+     * (`abort($status, 'msg')`) is passed through untouched; only the
+     * standard reason phrase is localized (by status, then by a generic
+     * client/server-error key, then English).
+     */
+    private function localizedReason(HttpException $exception): string
+    {
+        $reason = $exception->reason;
+
+        if ($reason !== HttpException::reasonPhrase($exception->status)) {
+            return $reason;
+        }
+
+        $translator = $this->translator();
+        if (null === $translator) {
+            return $reason;
+        }
+
+        $key = 'relayer.http.' . $exception->status;
+        if ($translator->has($key)) {
+            return $translator->trans($key);
+        }
+
+        $generic = $exception->status >= 500
+            ? 'relayer.http.server_error'
+            : 'relayer.http.client_error';
+
+        return $translator->has($generic) ? $translator->trans($generic) : $reason;
     }
 
     private function resolveAuthenticator(): ?AuthenticatorInterface
