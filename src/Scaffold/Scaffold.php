@@ -114,9 +114,9 @@ final class Scaffold
      * these files exist" — `upgrade` writes them skip-if-exists, pulling the
      * contents from {@see files()} (the single source of truth; this map
      * only groups paths by the version that added them). The v1 baseline
-     * files ({@see files()} minus every path here — `.env`, `public/index
-     * .php`, …) need no step: any project carrying the
-     * `structure_version` marker was scaffolded with them.
+     * files ({@see files()} minus every path here — `.env`, the `src/`
+     * tree, `public/index.php`, …) need no step: any project carrying
+     * the `structure_version` marker was scaffolded with them.
      *
      * `upgrade` applies the steps for `recorded + 1 .. STRUCTURE_VERSION`
      * in order. A future non-additive delta gets its own version key here

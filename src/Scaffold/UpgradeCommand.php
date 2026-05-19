@@ -250,9 +250,15 @@ final class UpgradeCommand
         $write(\sprintf('Upgraded structure version %d -> %d.', $recorded, $target));
         $write('');
         $write('Next steps:');
-        // `composer install` (not dump-autoload) so any newly added
-        // post-*-cmd / autoload entry a project still lacks is picked up
-        // and the usePHP asset publisher runs.
+        // upgrade ships the structure deltas + marker only — it does NOT
+        // reconcile composer scripts/autoload, so a project from a very
+        // old layout can still lack `post-*-cmd` / the App\ autoload.
+        // `relayer init` is idempotent + additive (it never advances the
+        // marker we just stamped), so re-running it backfills exactly
+        // those without side effects; `composer install` then applies
+        // the autoload and runs the usePHP asset publisher. A project
+        // that already has them sees `init` report nothing to change.
+        $write('  relayer init       # backfill composer scripts/autoload if missing (idempotent)');
         $write('  composer install');
 
         return 0;
