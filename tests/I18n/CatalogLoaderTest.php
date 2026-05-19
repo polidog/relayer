@@ -71,8 +71,13 @@ final class CatalogLoaderTest extends TestCase
             "<?php\n\nreturn 'oops, not an array';\n",
         );
 
+        // Assert the whole message format — the "Translation catalog "
+        // prefix and the absolute path included — so the contract is
+        // unambiguous (expectExceptionMessage() is only a substring match).
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('translations/ja.php must return an array, string returned.');
+        $this->expectExceptionMessageMatches(
+            '#^Translation catalog .+/translations/ja\.php must return an array, string returned\.$#',
+        );
 
         CatalogLoader::forProject($this->workDir);
     }
