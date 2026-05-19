@@ -261,6 +261,44 @@ scaffolded `php.ini` carries the production block). Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
 
+**Runtime secrets vs `container:compile`.** `container:compile` runs
+`AppConfigurator::configure()` once, at deploy, and **bakes** whatever
+value the configurator passes to `setParameter()` into the dumped class.
+Production boot only `require`s the dump — the configurator never re-runs.
+So code that reads env vars directly and hands the resolved string to the
+container will freeze whatever value the env had at compile time:
+
+```php
+// trap: bakes "" if API_TOKEN is unset at compile time
+$container->setParameter('app.api_token', $_ENV['API_TOKEN'] ?? '');
+```
+
+Under deployments that inject secrets only at boot (Fly secrets, Cloud
+Run env, sidecar injectors, …), the build environment legitimately has
+those vars unset, so the dump ships with empty strings — and downstream
+"is this configured?" checks silently take their fallback branch in
+production.
+
+Use Symfony DI's `%env(VAR)%` placeholder instead. `PhpDumper` emits it
+as a `getEnv('VAR')` call in the dumped class, so the value resolves at
+**load time** against the live env:
+
+```php
+// resolves at boot, not at compile — runtime-injected secrets work
+$container->setParameter('app.api_token', '%env(API_TOKEN)%');
+```
+
+Typed / fallback resolution is available via `%env(int:DB_PORT)%`,
+`%env(bool:FEATURE_FLAG)%`, `%env(default::API_TOKEN)%`, etc. The same
+placeholders work in `config/services.yaml` (the bundled
+`Polidog\Relayer\Auth\Token\TokenVerifier` example already uses them).
+
+`routes:compile` is unaffected — it only scans `src/Pages/` and reads no
+env. Only `container:compile` carries the env coupling. If a deployment
+model can't accommodate the `%env(...)%` rewrite, dropping
+`container:compile` while keeping `routes:compile` and accepting the
+per-request `ContainerBuilder::compile()` cost is a valid fallback.
+
 ### Class-style page
 
 ```php

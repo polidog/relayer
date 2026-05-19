@@ -30,6 +30,34 @@ use Throwable;
  * the container is built with `isDev: false` (no Traceable* decorators —
  * dev never reads the dump anyway). A build or dump failure is reported
  * here, at deploy, rather than on the first production request.
+ *
+ * ## Env-derived parameters are baked at build time
+ *
+ * The compile runs the configurator once, at deploy. Anything an
+ * `AppConfigurator::configure()` reads from `$_ENV` / `$_SERVER` /
+ * `getenv()` and passes to `setParameter()` as a plain string is **frozen
+ * into the dumped class**. The dump never re-runs the configurator, so an
+ * env var that is only injected **at runtime** (Fly secrets, Cloud Run env,
+ * sidecar injectors, …) and was absent or empty during compile will
+ * resolve to that build-time value in prod — typically an empty string,
+ * which then silently falls through downstream "is this configured?"
+ * checks.
+ *
+ * For secrets that exist only at runtime, hand Symfony the placeholder
+ * itself instead of the resolved value:
+ *
+ * ```php
+ * // bakes "" if the env is empty at compile time — the trap
+ * $container->setParameter('app.api_token', $_ENV['API_TOKEN'] ?? '');
+ *
+ * // dumped as a getEnv('API_TOKEN') call — resolves at load time
+ * $container->setParameter('app.api_token', '%env(API_TOKEN)%');
+ * ```
+ *
+ * `%env(int:…)%`, `%env(bool:…)%`, `%env(default::…)%` etc. give typed /
+ * fallback resolution. See README "Runtime secrets vs container:compile".
+ * `routes:compile` is unaffected — it only scans `src/Pages/` and has no
+ * env coupling.
  */
 final class ContainerCompileCommand
 {
@@ -98,6 +126,10 @@ final class ContainerCompileCommand
 
         $write('Compiled DI container to ' . Relayer::COMPILED_CONTAINER_FILE);
         $write('Prod boot will use it; `relayer container:compile` again after changing services.');
+        // Visible at deploy, where the deployer sees it before the silent
+        // failure ever has a chance to happen in prod. The class docblock
+        // explains the trap in full.
+        $write('Note: env values bake at build time. Use %env(VAR)% in AppConfigurator for runtime-injected secrets (Fly/CloudRun/…).');
 
         return 0;
     }
