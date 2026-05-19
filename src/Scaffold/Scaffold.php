@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 4;
+    public const int STRUCTURE_VERSION = 5;
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -48,11 +48,13 @@ final class Scaffold
             'README.md' => self::readme(),
             // Co-versioned agent conventions: ships with this framework
             // version so it cannot drift. RELAYER.md is the substance;
-            // AGENTS.md is a 2-line pointer because that is the filename
-            // agent tools auto-read. Both are skip-if-exists, so a project's
-            // own AGENTS.md is never clobbered.
+            // AGENTS.md and CLAUDE.md are 2-line pointers to it, because
+            // those are the filenames agent tools / Claude Code auto-read.
+            // All are skip-if-exists, so a project's own AGENTS.md /
+            // CLAUDE.md is never clobbered.
             'RELAYER.md' => self::relayerMd(),
             'AGENTS.md' => self::agentsPointer(),
+            'CLAUDE.md' => self::claudeMdPointer(),
             // Claude Code task tooling, co-versioned exactly like
             // RELAYER.md (ships in the framework, skip-if-exists, cannot
             // drift). RELAYER.md stays the single source of truth; these
@@ -167,6 +169,7 @@ final class Scaffold
             composer.json
             RELAYER.md             agent/LLM coding conventions (co-versioned)
             AGENTS.md              auto-read pointer → RELAYER.md
+            CLAUDE.md              auto-read pointer → RELAYER.md
             .claude/               Claude Code skill + reviewer agent (co-versioned)
             Dockerfile             FrankenPHP (PHP 8.5) image
             php.ini                PHP overrides (loaded via conf.d)
@@ -313,8 +316,25 @@ final class Scaffold
 
     private static function agentsPointer(): string
     {
-        return <<<'MD'
-            # AGENTS.md
+        return self::pointerMd('AGENTS.md');
+    }
+
+    private static function claudeMdPointer(): string
+    {
+        return self::pointerMd('CLAUDE.md');
+    }
+
+    /**
+     * A thin convention pointer. `AGENTS.md` and `CLAUDE.md` are the
+     * filenames agent tools / Claude Code auto-read; each only points at
+     * the substantive {@see relayerMd()} so the conventions actually reach
+     * the agent without forking them — and so the two pointers cannot
+     * drift from each other.
+     */
+    private static function pointerMd(string $heading): string
+    {
+        return <<<MD
+            # {$heading}
 
             This is a Relayer project. The authoritative coding conventions
             for agents/LLMs live in **[RELAYER.md](./RELAYER.md)** — read it

@@ -83,10 +83,11 @@ generated against, so structure migrations can be applied later.
 `init` also scaffolds **`RELAYER.md`** — concise, authoritative coding
 conventions for agents/LLMs working in the project (file conventions, the
 `route.php` / `middleware.php` / `Island` contracts, the minimal-design
-philosophy, a "do not" list) — plus a 2-line **`AGENTS.md`** that points at
-it (the filename agent tools auto-read). Both ship inside `polidog/relayer`,
-so they are **co-versioned with the framework and cannot drift**, and both
-are skip-if-exists, so a project's own `AGENTS.md` is never overwritten.
+philosophy, a "do not" list) — plus 2-line **`AGENTS.md`** and
+**`CLAUDE.md`** pointers to it (the filenames agent tools / Claude Code
+auto-read). All ship inside `polidog/relayer`, so they are **co-versioned
+with the framework and cannot drift**, and all are skip-if-exists, so a
+project's own `AGENTS.md` / `CLAUDE.md` is never overwritten.
 It additionally scaffolds Claude Code tooling under **`.claude/`** — a
 `relayer-routing` **skill** (the routing / `Response` / CSRF contracts,
 trigger-scoped) and a `relayer-reviewer` **subagent** that reviews changes
