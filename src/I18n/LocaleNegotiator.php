@@ -21,14 +21,27 @@ final class LocaleNegotiator
      */
     public static function normalize(string $tag): string
     {
-        $tag = \str_replace('_', '-', \strtolower(\trim($tag)));
+        // Whitespace-trim, lowercase, fold the `_` region separator to `-`,
+        // then strip surrounding `-`. The outer hyphen-trim is what makes a
+        // delimiter-only tag — reachable unauthenticated via
+        // `Accept-Language: -`, a `locale=-` cookie, or a `/-/…` path —
+        // collapse to '' here instead of slipping through as a malformed
+        // primary subtag (and it preserves strtok's old "skip leading
+        // delimiters" behaviour for inputs like `-ja`).
+        $tag = \trim(\str_replace('_', '-', \strtolower(\trim($tag))), '-');
 
         if ('' === $tag) {
             return '';
         }
 
-        // $tag is non-empty here, so strtok cannot return false.
-        return \strtok($tag, '-');
+        // First subtag only. `$tag` has no leading/trailing `-`, so strpos
+        // cleanly splits `ja-jp` → `ja` and leaves a bare `ja` intact.
+        // (Using strpos/substr rather than strtok: strtok returns false for
+        // a tokenless string, which the `: string` return type would reject
+        // as a TypeError — a one-byte unauthenticated 500.)
+        $dash = \strpos($tag, '-');
+
+        return false === $dash ? $tag : \substr($tag, 0, $dash);
     }
 
     /**

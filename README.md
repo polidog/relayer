@@ -1750,6 +1750,15 @@ resolved value is the canonical spelling from `APP_LOCALES`. The chosen
 locale is also written to `<html lang="…">` and exposed as
 `$request->locale()`.
 
+> **Deferred fragments and path-prefix routing.** A `<X defer />`
+> sub-request is fetched from a root-absolute `/_defer/{name}` URL with no
+> `/{locale}` segment (usePHP roots it), so it never carries the parent
+> page's path prefix. Its locale therefore resolves from the cookie /
+> `Accept-Language` / default — not from the URL path. If you localize
+> purely via `/{locale}/…` prefixes and want deferred fragments in the same
+> language, also set the `LOCALE_COOKIE` (or rely on `Accept-Language`); the
+> cookie is CDN-safe and is the intended carrier for this case.
+
 ### Translating your own content
 
 Drop PHP catalogs in `<projectRoot>/translations/{locale}.php` — flat or

@@ -1742,6 +1742,16 @@ public）。ただしロケールの*切り替え*（Cookie / `Accept-Language` 
 解決値は `APP_LOCALES` の正規表記です。決定したロケールは
 `<html lang="…">` にも反映され、`$request->locale()` で取得できます。
 
+> **defer フラグメントとパスプレフィックスルーティング。** `<X defer />`
+> のサブリクエストは `/{locale}` を含まないルート絶対の `/_defer/{name}`
+> URL で取得されます（usePHP がルートに固定するため）。よって親ページの
+> パスプレフィックスは伝わらず、フラグメントのロケールは URL パスでは
+> なく Cookie / `Accept-Language` / デフォルトから解決されます。
+> `/{locale}/…` プレフィックスだけでロケールを切り替えていて defer
+> フラグメントも同じ言語にしたい場合は、`LOCALE_COOKIE` も設定して
+> ください（または `Accept-Language` に委ねる）。Cookie は CDN セーフで、
+> このケースの想定キャリアです。
+
 ### 自分のコンテンツを翻訳する
 
 `<projectRoot>/translations/{locale}.php` に PHP カタログを置きます。

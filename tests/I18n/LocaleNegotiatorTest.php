@@ -34,6 +34,29 @@ final class LocaleNegotiatorTest extends TestCase
         yield 'empty' => ['', ''];
 
         yield 'whitespace only' => ['   ', ''];
+
+        // Delimiter-only tags are non-empty but tokenless: strtok returns
+        // false there. These must normalize to '' (not throw a TypeError):
+        // they are reachable from an unauthenticated Accept-Language header,
+        // a `locale` cookie, or a `/-/…` URL path.
+        yield 'single hyphen' => ['-', ''];
+
+        yield 'double hyphen' => ['--', ''];
+
+        yield 'single underscore' => ['_', ''];
+
+        yield 'double underscore' => ['__', ''];
+
+        yield 'padded hyphen' => ['  -  ', ''];
+    }
+
+    public function testNegotiateDoesNotThrowOnDelimiterOnlyHeader(): void
+    {
+        // Regression: a `Accept-Language: -` (or `-,en`) request must not
+        // surface LocaleNegotiator::normalize()'s strtok-returns-false as an
+        // unauthenticated 500.
+        self::assertSame('en', LocaleNegotiator::negotiate('-', ['en', 'ja'], 'en'));
+        self::assertSame('en', LocaleNegotiator::negotiate('-, en', ['en', 'ja'], 'en'));
     }
 
     public function testParseOrdersByDescendingQValueStableForTies(): void

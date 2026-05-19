@@ -124,6 +124,25 @@ final class LocaleResolverTest extends TestCase
         self::assertSame('default', $resolved->source);
     }
 
+    public function testDelimiterOnlyInputsResolveToDefaultWithoutThrowing(): void
+    {
+        // Every user-controlled source feeding LocaleNegotiator::normalize()
+        // — path first segment, cookie, Accept-Language — with a
+        // delimiter-only value must degrade to the default, never raise a
+        // TypeError (unauthenticated one-byte 500 regression guard).
+        $resolver = $this->resolver();
+
+        self::assertSame('en', $resolver->resolve($this->request('/-/about'))->locale);
+        self::assertSame(
+            'en',
+            $resolver->resolve($this->request('/about', cookies: ['locale' => '-']))->locale,
+        );
+        self::assertSame(
+            'en',
+            $resolver->resolve($this->request('/about', ['accept-language' => '-']))->locale,
+        );
+    }
+
     /**
      * @param array<string, string> $headers
      * @param array<string, string> $cookies

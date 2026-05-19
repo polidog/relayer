@@ -206,6 +206,14 @@ class AppRouter
             // Deferred component GETs (under `/_defer/{name}`) are dispatched
             // before route matching: usePHP owns that URL space, and we never
             // want layout/page rendering on that path.
+            //
+            // No `$_SERVER['REQUEST_URI']` rewrite is needed for a stripped
+            // locale prefix here: usePHP roots the defer fetch URL at
+            // `/_defer/{name}` (Renderer::renderDeferred), so a
+            // `/{locale}/_defer/...` request never occurs. The fragment's
+            // locale was already resolved above from cookie / Accept-Language
+            // / default (the rooted defer URL carries no path prefix) — see
+            // the i18n "Deferred fragments" note in README.md.
             if (null !== $this->usephp) {
                 $deferred = $this->usephp->handleDeferred();
                 if (null !== $deferred) {
@@ -224,6 +232,16 @@ class AppRouter
                 // (handleApiMatch reads currentRequest->method).
                 $request = $this->resolveLocale($request);
                 $this->currentRequest = $request;
+                // resolveLocale() is idempotent and early-returns for an
+                // already-resolved Request, so it will NOT have refreshed the
+                // container's injected Request when middleware substituted one
+                // (e.g. `$next($request->withPath(...))`, which preserves
+                // locale()). Push it here so pages injected with `Request`
+                // observe the actually-routed request, not the pre-middleware
+                // one. Idempotent no-op on the normal path.
+                if ($this->container instanceof InjectorContainer) {
+                    $this->container->setCurrentRequest($request);
+                }
 
                 $match = $this->router->match($request->path);
 

@@ -5,12 +5,12 @@ declare(strict_types=1);
 namespace Polidog\Relayer\I18n;
 
 use Polidog\Relayer\Di\ContainerFactory;
-use Polidog\Relayer\Validation;
+use Polidog\Relayer\Validation\Validator;
 
 /**
  * Process-wide holder for the "ambient" {@see Translator}.
  *
- * The {@see Validation} schemas are value objects
+ * The {@see Validator} schemas are value objects
  * constructed by user code with `Validator::string()->min(3)` — outside the
  * DI container — so they cannot take a Translator dependency. They reach
  * the active translator through {@see default()} instead.
