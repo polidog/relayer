@@ -32,12 +32,12 @@ final class InitCommand
         Relayer scaffolder
 
         Usage:
-          relayer init             scaffold the project structure in the current directory
-          relayer upgrade          migrate the project structure up to this framework version
-          relayer routes           list the routes discovered under src/Pages
-          relayer routes:compile   write the precompiled route artifact (run at deploy)
-          relayer container:compile dump the DI container to PHP (run at deploy)
-          relayer profiler:clear   delete cached dev profiler data (var/cache/profiler)
+          relayer init               scaffold the project structure in the current directory
+          relayer upgrade            migrate the project structure up to this framework version
+          relayer routes             list the routes discovered under src/Pages
+          relayer routes:compile     write the precompiled route artifact (run at deploy)
+          relayer container:compile  dump the DI container to PHP (run at deploy)
+          relayer profiler:clear     delete cached dev profiler data (var/cache/profiler)
 
         Run inside a project that has already required the framework
         (`composer require polidog/relayer`). Existing files are left

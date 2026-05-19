@@ -78,6 +78,22 @@ final class Relayer
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
      *                                           Defaults to a bare AppConfigurator with no extra services.
+     *
+     *                                           Contract: in prod, a dumped container
+     *                                           ({@see COMPILED_CONTAINER_FILE}, written by
+     *                                           `relayer container:compile`) is authoritative and
+     *                                           this argument is NOT applied — the dump was baked
+     *                                           from whatever `container:compile` discovered (the
+     *                                           `App\AppConfigurator` convention, or none). The
+     *                                           scaffolded `public/index.php` passes `new
+     *                                           App\AppConfigurator($root)`, which matches. An
+     *                                           entry point that builds a custom/parameterized
+     *                                           configurator (e.g. extra constructor args) must
+     *                                           keep `App\AppConfigurator` parity with what
+     *                                           `container:compile` builds, or not precompile the
+     *                                           container (delete the dump ⇒ live build applies
+     *                                           this argument again). Dev always live-builds and
+     *                                           always honors it.
      */
     public static function boot(string $projectRoot, ?AppConfigurator $configurator = null): AppRouter
     {
