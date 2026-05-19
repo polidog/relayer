@@ -51,10 +51,47 @@ final class Relayer
     public const COMPILED_ROUTES_FILE = 'var/cache/routes/routes.php';
 
     /**
+     * Project-root-relative path of the dumped DI container artifact.
+     * Same presence-gated, single-source-of-truth contract as
+     * {@see COMPILED_ROUTES_FILE}: prod boot below `require`s this file
+     * and instantiates {@see COMPILED_CONTAINER_CLASS} when it exists
+     * (skipping the full ContainerBuilder build + compile() that
+     * {@see ContainerFactory::create()} runs per request), and `relayer
+     * container:compile` writes the same path off this constant so the
+     * two cannot drift. Dev never reads it, so a live container build
+     * always wins there and config edits are picked up immediately.
+     */
+    public const COMPILED_CONTAINER_FILE = 'var/cache/container/CompiledContainer.php';
+
+    /**
+     * Fully-qualified class name `relayer container:compile` dumps into
+     * {@see COMPILED_CONTAINER_FILE} and that prod boot instantiates.
+     * Namespaced under a dedicated `Generated\` segment so the dumped
+     * artifact can never collide with a hand-written framework class.
+     */
+    public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
+
+    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
      *                                           Defaults to a bare AppConfigurator with no extra services.
+     *
+     *                                           Contract: in prod, a dumped container
+     *                                           ({@see COMPILED_CONTAINER_FILE}, written by
+     *                                           `relayer container:compile`) is authoritative and
+     *                                           this argument is NOT applied — the dump was baked
+     *                                           from whatever `container:compile` discovered (the
+     *                                           `App\AppConfigurator` convention, or none). The
+     *                                           scaffolded `public/index.php` passes `new
+     *                                           App\AppConfigurator($root)`, which matches. An
+     *                                           entry point that builds a custom/parameterized
+     *                                           configurator (e.g. extra constructor args) must
+     *                                           keep `App\AppConfigurator` parity with what
+     *                                           `container:compile` builds, or not precompile the
+     *                                           container (delete the dump ⇒ live build applies
+     *                                           this argument again). Dev always live-builds and
+     *                                           always honors it.
      */
     public static function boot(string $projectRoot, ?AppConfigurator $configurator = null): AppRouter
     {
@@ -67,7 +104,17 @@ final class Relayer
         // itself mid-boot.
         $isDev = self::isDev();
 
-        $container = ContainerFactory::create($projectRoot, $configurator, $isDev);
+        // ContainerFactory owns the "load the dump if present, else live
+        // build" decision (mirrors AppRouter::create's presence-gated
+        // artifact contract). Dev passes null so config edits never read
+        // a stale dump; prod points at COMPILED_CONTAINER_FILE.
+        $container = ContainerFactory::create(
+            $projectRoot,
+            $configurator,
+            $isDev,
+            $isDev ? null : $projectRoot . '/' . self::COMPILED_CONTAINER_FILE,
+        );
+
         $psr = new InjectorContainer($container);
 
         $appDir = $projectRoot . '/src/Pages';

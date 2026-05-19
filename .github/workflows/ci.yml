@@ -31,6 +31,10 @@ jobs:
           php-version: ${{ matrix.php }}
           coverage: none
           tools: composer:v2
+          # PHPStan parallel workers inherit this; the default cap OOMs as
+          # the analyzed tree grows. Unlimited keeps the bare `phpstan
+          # analyse` (run verbatim below) robust without a CLI flag.
+          ini-values: memory_limit=-1
 
       - name: Get composer cache directory
         id: composer-cache

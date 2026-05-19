@@ -43,8 +43,10 @@ use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Relayer;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
+use RuntimeException;
 use Symfony\Component\Config\FileLocator;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
+use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Definition;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
@@ -67,18 +69,61 @@ use Symfony\Component\DependencyInjection\Reference;
 final class ContainerFactory
 {
     /**
-     * Build the container: framework defaults, convention configs, the
-     * caller's AppConfigurator, the deferred Auth wiring, then
-     * autowire-by-default normalization, then compile.
+     * Build the container — or, when a precompiled dump is supplied and
+     * present, load it without rebuilding.
      *
-     * @param string               $projectRoot  Absolute project root
-     * @param null|AppConfigurator $configurator Caller bindings; a bare
-     *                                           default when null
-     * @param bool                 $isDev        Resolved once by
-     *                                           {@see Relayer::boot()}
+     * The "build vs. load" decision lives here so {@see Relayer::boot()}
+     * stays a thin orchestrator. Mirrors {@see
+     * \Polidog\Relayer\Router\AppRouter::create()}'s presence-gated
+     * artifact contract: the caller decides *whether* to point the
+     * factory at a compiled file; the factory decides whether to *use*
+     * it (file exists ⇒ require + instantiate + guard; otherwise live
+     * build). Dev callers pass null so config edits never go through a
+     * stale dump; prod passes the {@see Relayer::COMPILED_CONTAINER_FILE}
+     * absolute path. When a dump is loaded, `$configurator` is ignored —
+     * the dump's wiring is authoritative (see {@see Relayer::boot()}'s
+     * contract docblock).
+     *
+     * @param string               $projectRoot           Absolute project root
+     * @param null|AppConfigurator $configurator          Caller bindings; a bare
+     *                                                    default when null. Ignored on
+     *                                                    the load path.
+     * @param bool                 $isDev                 Resolved once by
+     *                                                    {@see Relayer::boot()}
+     * @param null|string          $compiledContainerFile Absolute path to a PhpDumper
+     *                                                    artifact, or null to always
+     *                                                    live-build
+     *
+     * @return ($compiledContainerFile is null ? ContainerBuilder : ContainerInterface)
      */
-    public static function create(string $projectRoot, ?AppConfigurator $configurator, bool $isDev): ContainerBuilder
-    {
+    public static function create(
+        string $projectRoot,
+        ?AppConfigurator $configurator,
+        bool $isDev,
+        ?string $compiledContainerFile = null,
+    ): ContainerInterface {
+        if (null !== $compiledContainerFile && \is_file($compiledContainerFile)) {
+            require_once $compiledContainerFile;
+
+            // The dumped class only exists after `container:compile`
+            // generated it, so it is opaque to static analysis — treat
+            // the FQCN as a plain string and prove the contract at
+            // runtime via the instanceof guard below.
+            /** @var string $dumpedClass */
+            $dumpedClass = Relayer::COMPILED_CONTAINER_CLASS;
+            $container = new $dumpedClass();
+
+            if (!$container instanceof ContainerInterface) {
+                throw new RuntimeException(\sprintf(
+                    'Dumped container %s did not produce a %s — re-run `relayer container:compile`.',
+                    $compiledContainerFile,
+                    ContainerInterface::class,
+                ));
+            }
+
+            return $container;
+        }
+
         $container = new ContainerBuilder();
         $container->setParameter('app.project_root', $projectRoot);
 
