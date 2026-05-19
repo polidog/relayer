@@ -236,6 +236,31 @@ reflects the current tree and never goes stale. Scan-time ambiguities
 (page/`route.php` clashes, route-group URL collisions) fail the compile at
 deploy rather than on the first request.
 
+**Compiled DI container (production).** Otherwise `Relayer::boot()` builds
+and `compile()`s the Symfony DI container on *every* request — typically
+the largest avoidable per-request cost. `vendor/bin/relayer
+container:compile` dumps it to a plain PHP class at
+`var/cache/container/CompiledContainer.php`; production `require`s that
+instead of rebuilding. Same presence-gated, dev-excluded contract as
+compiled routes (no file ⇒ live build; dev always reflects current
+config). A bad service definition fails the dump at deploy, not on the
+first request.
+
+**Deploy checklist.** Build the three artifacts and ship an OPcache-warm,
+scan-free image:
+
+```bash
+composer install --no-dev --classmap-authoritative
+vendor/bin/usephp compile src/Pages      # .psx  -> compiled PHP
+vendor/bin/relayer routes:compile         # route map -> PHP
+vendor/bin/relayer container:compile      # DI container -> PHP
+```
+
+Then run with `APP_ENV` unset and OPcache `validate_timestamps=0` (the
+scaffolded `php.ini` carries the production block). Each step is
+presence-gated, so a missing artifact degrades to the live path rather
+than breaking.
+
 ### Class-style page
 
 ```php

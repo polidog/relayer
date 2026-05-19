@@ -10,6 +10,8 @@ use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\TraceableAppRouter;
 use Polidog\UsePhp\UsePHP;
+use RuntimeException;
+use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -51,6 +53,27 @@ final class Relayer
     public const COMPILED_ROUTES_FILE = 'var/cache/routes/routes.php';
 
     /**
+     * Project-root-relative path of the dumped DI container artifact.
+     * Same presence-gated, single-source-of-truth contract as
+     * {@see COMPILED_ROUTES_FILE}: prod boot below `require`s this file
+     * and instantiates {@see COMPILED_CONTAINER_CLASS} when it exists
+     * (skipping the full ContainerBuilder build + compile() that
+     * {@see ContainerFactory::create()} runs per request), and `relayer
+     * container:compile` writes the same path off this constant so the
+     * two cannot drift. Dev never reads it, so a live container build
+     * always wins there and config edits are picked up immediately.
+     */
+    public const COMPILED_CONTAINER_FILE = 'var/cache/container/CompiledContainer.php';
+
+    /**
+     * Fully-qualified class name `relayer container:compile` dumps into
+     * {@see COMPILED_CONTAINER_FILE} and that prod boot instantiates.
+     * Namespaced under a dedicated `Generated\` segment so the dumped
+     * artifact can never collide with a hand-written framework class.
+     */
+    public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
+
+    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
@@ -67,7 +90,38 @@ final class Relayer
         // itself mid-boot.
         $isDev = self::isDev();
 
-        $container = ContainerFactory::create($projectRoot, $configurator, $isDev);
+        // Prod: load the dumped DI container when `relayer
+        // container:compile` produced one, skipping the full
+        // ContainerBuilder build + compile() per request. Presence-gated
+        // and dev-excluded exactly like the compiled-routes artifact, so
+        // a missing dump simply falls back to a live build and dev always
+        // reflects current config. The dumped class extends
+        // Symfony\...\Container, so InjectorContainer (which only needs a
+        // Symfony ContainerInterface) wraps it unchanged.
+        $dumpFile = $projectRoot . '/' . self::COMPILED_CONTAINER_FILE;
+
+        if (!$isDev && \is_file($dumpFile)) {
+            require_once $dumpFile;
+
+            // The dumped class only exists after `container:compile`
+            // generated it, so it is opaque to static analysis — treat
+            // the FQCN as a plain string and prove the contract at
+            // runtime via the instanceof guard below.
+            /** @var string $dumpedClass */
+            $dumpedClass = self::COMPILED_CONTAINER_CLASS;
+            $container = new $dumpedClass();
+
+            if (!$container instanceof SymfonyContainerInterface) {
+                throw new RuntimeException(\sprintf(
+                    'Dumped container %s did not produce a %s — re-run `relayer container:compile`.',
+                    self::COMPILED_CONTAINER_FILE,
+                    SymfonyContainerInterface::class,
+                ));
+            }
+        } else {
+            $container = ContainerFactory::create($projectRoot, $configurator, $isDev);
+        }
+
         $psr = new InjectorContainer($container);
 
         $appDir = $projectRoot . '/src/Pages';

@@ -225,12 +225,21 @@ final class Scaffold
 
             ## Production
 
-            `APP_ENV=dev` compiles `.psx` on the fly. For deploys, unset (or
-            change) `APP_ENV` and pre-compile once:
+            `APP_ENV=dev` compiles `.psx`, scans routes, and rebuilds the
+            DI container on the fly. For deploys, unset (or change)
+            `APP_ENV` and precompile all three once:
 
             ```bash
-            vendor/bin/usephp compile src/Pages
+            composer install --no-dev --classmap-authoritative
+            vendor/bin/usephp compile src/Pages      # .psx  -> compiled PHP
+            vendor/bin/relayer routes:compile         # route map -> PHP
+            vendor/bin/relayer container:compile      # DI container -> PHP
             ```
+
+            Each step is presence-gated: a missing artifact degrades to
+            the live path rather than breaking. In production also set
+            OPcache `validate_timestamps=0` — the production block in
+            `php.ini` documents this.
 
             README;
     }
@@ -641,8 +650,9 @@ final class Scaffold
             # precompile once:
             #   vendor/bin/usephp compile src/Pages   # .psx -> .psx.php
             #   vendor/bin/relayer routes:compile      # route artifact
-            # Both are pure build steps; prod then reads the artifacts
-            # instead of scanning/compiling per request.
+            #   vendor/bin/relayer container:compile   # DI container
+            # All are pure build steps; prod then reads the artifacts
+            # instead of scanning/compiling/rebuilding per request.
             #
             # FrankenPHP serves /app/public through its bundled Caddy in
             # classic (per-request) mode, so Relayer's public/index.php
@@ -702,9 +712,25 @@ final class Scaffold
             upload_max_filesize = 16M
             post_max_size = 16M
 
-            ; OPcache. In production (APP_ENV unset + precompiled .psx)
-            ; raise this and set opcache.validate_timestamps=0:
+            ; OPcache. The defaults below are dev-safe (timestamps are
+            ; validated, so edited files reload). For production, run the
+            ; three precompile steps so there is nothing to compile per
+            ; request:
+            ;   vendor/bin/usephp compile src/Pages    ; .psx  -> PHP cache
+            ;   vendor/bin/relayer routes:compile       ; route map -> PHP
+            ;   vendor/bin/relayer container:compile     ; DI container -> PHP
+            ; then uncomment the production block.
             opcache.memory_consumption = 128
+            opcache.interned_strings_buffer = 16
+            ; Must exceed the app's total PHP file count (vendor tree +
+            ; one compiled file per .psx page). PHP rounds up to a prime.
+            opcache.max_accelerated_files = 16000
+
+            ; --- Production (uncomment; needs the precompile steps above) ---
+            ; Everything is precompiled to PHP, so stop stat()-ing files
+            ; and never expire the cache — revalidation = redeploy.
+            ;opcache.validate_timestamps = 0
+            ;opcache.memory_consumption = 256
 
             INI;
     }

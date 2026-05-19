@@ -239,6 +239,31 @@ dev では自動コンパイル（`APP_ENV=dev`）、本番では
 による URL 衝突）は初回リクエストではなくデプロイ時のコンパイルで
 失敗します。
 
+**DI コンテナのコンパイル（本番）。** 既定では `Relayer::boot()` は
+Symfony DI コンテナを*毎リクエスト*ビルドして `compile()` します — 通常
+これが回避可能なリクエストコストの最大要因です。`vendor/bin/relayer
+container:compile` がそれを素の PHP クラス
+`var/cache/container/CompiledContainer.php` にダンプし、本番は再ビルド
+せずそれを `require` します。ルートのコンパイルと同じく有無だけが
+ゲートで dev は対象外（無ければライブビルド、dev は常に最新設定を反映）。
+不正なサービス定義は初回リクエストではなくデプロイ時のダンプで失敗
+します。
+
+**デプロイ手順。** 3 つのアーティファクトを生成し、OPcache 済み・
+走査ゼロのイメージを配布します:
+
+```bash
+composer install --no-dev --classmap-authoritative
+vendor/bin/usephp compile src/Pages      # .psx  -> コンパイル済み PHP
+vendor/bin/relayer routes:compile         # ルートマップ -> PHP
+vendor/bin/relayer container:compile      # DI コンテナ -> PHP
+```
+
+あとは `APP_ENV` を未設定にし、OPcache の `validate_timestamps=0`
+（雛形の `php.ini` に本番ブロックを同梱）で起動します。各ステップは
+有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
+だけで壊れません。
+
 ### クラス型ページ
 
 ```php
