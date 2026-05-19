@@ -79,7 +79,7 @@ php -S 127.0.0.1:8000 -t public
   マーカーを追加するだけで、他は一切変更しません
 
 `structure_version` マーカーはプロジェクトがどの雛形バージョンで生成されたかを
-記録します。これにより後から構造マイグレーションを適用できます。
+記録します。これにより後述の `relayer upgrade` で構造を前進させられます。
 
 `init` は **`RELAYER.md`** も生成します — エージェント/LLM 向けの簡潔で
 権威ある実装規約（ファイル規約、`route.php` / `middleware.php` / `Island`
@@ -95,6 +95,28 @@ Claude Code 向けツールも生成します — ルーティング / `Response
 2 つです。どちらも `RELAYER.md` を唯一の正とし、同じ理由で
 co-version + skip-if-exists です。実ルートは
 `vendor/bin/relayer routes` で確認できます。
+
+### プロジェクト構造のアップグレード
+
+`polidog/relayer` を上げると、新しいフレームワークバージョンが生成雛形に
+ファイルを追加することがあります。`relayer upgrade` は既存プロジェクトを
+インストール済みフレームワークの構造まで前進させます。
+
+```bash
+composer update polidog/relayer
+vendor/bin/relayer upgrade
+composer install
+```
+
+`extra.relayer.structure_version` マーカーを読み、マーカー値から現行
+バージョンまでの間に追加されたファイルだけを書き出し、最後にマーカーを
+前進させます（`init` が決して行わない唯一の変更）。各ステップは
+**skip-if-exists** なので、編集済みファイルは保持され skip として報告
+されます。対象は構造差分とマーカーのみで、composer の scripts や
+autoload には触れません（それらは加算的で安全なので `relayer init` を
+再実行してください）。冪等で、現行バージョンに達していれば「何もする
+ことがない」と報告します。マーカーが無いプロジェクトは `relayer init`
+で生成されていないので、まず `init` で現行構造を刻印してください。
 
 ## プロジェクト構成
 

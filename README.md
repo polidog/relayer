@@ -78,7 +78,7 @@ It is idempotent and non-destructive:
   untouched.
 
 The `structure_version` marker records which skeleton shape the project was
-generated against, so structure migrations can be applied later.
+generated against, so `relayer upgrade` (below) can migrate it forward.
 
 `init` also scaffolds **`RELAYER.md`** — concise, authoritative coding
 conventions for agents/LLMs working in the project (file conventions, the
@@ -94,6 +94,28 @@ trigger-scoped) and a `relayer-reviewer` **subagent** that reviews changes
 against `RELAYER.md`. Both defer to `RELAYER.md` as the single source of
 truth and are co-versioned + skip-if-exists for the same reason.
 Run `vendor/bin/relayer routes` for the project's actual route map.
+
+### Upgrading the project structure
+
+When you bump `polidog/relayer`, newer framework versions may add files to
+the generated skeleton. `relayer upgrade` brings an existing project up to
+the installed framework's structure:
+
+```bash
+composer update polidog/relayer
+vendor/bin/relayer upgrade
+composer install
+```
+
+It reads the `extra.relayer.structure_version` marker, writes only the
+files added in the versions between it and the current one, then advances
+the marker (the one mutation `init` deliberately never makes). Every step
+is **skip-if-exists**, so files you have edited are kept and reported as
+skipped; the scope is exactly the structure deltas plus the marker — it
+does not touch composer scripts or autoload (re-run `relayer init` for
+those — it is additive and safe). It is idempotent: once at the current
+version it reports nothing to do. If the project has no marker it was not
+created by `relayer init`; run `init` first to stamp the current shape.
 
 ## Project Layout
 

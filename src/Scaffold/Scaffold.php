@@ -105,6 +105,43 @@ final class Scaffold
         ];
     }
 
+    /**
+     * The structure migration map: the version at which each skeleton file
+     * was *introduced* => the relative paths added at that version.
+     *
+     * Every layout change so far has been purely additive (new files, never
+     * a move/rename/rewrite/delete), so a migration step is just "ensure
+     * these files exist" — `upgrade` writes them skip-if-exists, pulling the
+     * contents from {@see files()} (the single source of truth; this map
+     * only groups paths by the version that added them). The v1 baseline
+     * files ({@see files()} minus every path here — `.env`, `public/index
+     * .php`, …) need no step: any project carrying the
+     * `structure_version` marker was scaffolded with them.
+     *
+     * `upgrade` applies the steps for `recorded + 1 .. STRUCTURE_VERSION`
+     * in order. A future non-additive delta gets its own version key here
+     * and the writer learns that one shape — the ordered-step structure is
+     * the seam for it.
+     *
+     * Invariant (asserted in tests): keys are exactly `2 ..
+     * STRUCTURE_VERSION`, every path is a {@see files()} key, and no path
+     * repeats across versions.
+     *
+     * @return array<int, list<string>>
+     */
+    public static function migrations(): array
+    {
+        return [
+            2 => ['RELAYER.md', 'AGENTS.md'],
+            3 => ['Dockerfile', 'php.ini', 'compose.yaml', '.dockerignore'],
+            4 => [
+                '.claude/skills/relayer-routing/SKILL.md',
+                '.claude/agents/relayer-reviewer.md',
+            ],
+            5 => ['CLAUDE.md'],
+        ];
+    }
+
     private static function env(): string
     {
         return <<<'ENV'

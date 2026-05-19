@@ -33,6 +33,7 @@ final class InitCommand
 
         Usage:
           relayer init             scaffold the project structure in the current directory
+          relayer upgrade          migrate the project structure up to this framework version
           relayer routes           list the routes discovered under src/Pages
           relayer routes:compile   write the precompiled route artifact (run at deploy)
           relayer profiler:clear   delete cached dev profiler data (var/cache/profiler)
@@ -61,6 +62,10 @@ final class InitCommand
             $write(self::USAGE);
 
             return null === $command ? 2 : 0;
+        }
+
+        if ('upgrade' === $command) {
+            return UpgradeCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('routes' === $command) {
