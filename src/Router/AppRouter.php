@@ -987,9 +987,17 @@ final class AppRouter
 
     /**
      * Unwrapped render path; {@see renderPage()} is the profiler-aware
-     * facade. Split so the profiler's span brackets the entire
-     * render — including the `dispatchStateAction` PRG `exit` path —
-     * via the surrounding try/finally.
+     * facade. Split so the profiler's `page.render` span is wrapped by
+     * a try/finally on the normal-return path.
+     *
+     * Caveat: the `dispatchStateAction` PRG path calls `exit` mid-render,
+     * which bypasses both `finally` blocks here, so no `page.render`
+     * timing event is recorded on that branch. The Profile itself is
+     * still finalized — `register_shutdown_function` in {@see run()}
+     * triggers `RecordingProfiler::endProfile()` so the saved JSON has
+     * the request's status code and end timestamp; only the inner span
+     * is lost. Acceptable today because PRG is the only `exit` site in
+     * the render path; revisit if more exit sites accumulate.
      *
      * @param array<string, string> $params
      */
