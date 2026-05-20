@@ -81,10 +81,23 @@ final class Relayer
      * {@see RoutesCompileCommand} reads tagged
      * services in registration order to dump
      * {@see COMPILED_DISPATCHER_FILE}; {@see Relayer::boot()}
-     * reads the same tag at runtime when no compiled artifact exists, so
-     * dev and prod share the discovery mechanism.
+     * reads the resolved list (via {@see DISPATCH_LISTENERS_PARAMETER}) at
+     * runtime when no compiled artifact exists, so dev and prod share the
+     * discovery mechanism.
      */
     public const DISPATCH_LISTENER_TAG = 'relayer.dispatch_listener';
+
+    /**
+     * Container parameter that holds the resolved list of
+     * `relayer.dispatch_listener` service IDs (class-strings), in
+     * registration order. Set by {@see ContainerFactory} just before
+     * `compile()` so the value survives a {@see PhpDumper} round-trip —
+     * dumped containers expose `getParameter()` but lose the tag index,
+     * so a plain `findTaggedServiceIds()` call would not work at runtime
+     * under the compiled container. The parameter is the
+     * runtime-portable mirror of that lookup.
+     */
+    public const DISPATCH_LISTENERS_PARAMETER = 'relayer.dispatch_listeners';
 
     /**
      * Project-root-relative path of the compiled-dispatcher artifact —

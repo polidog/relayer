@@ -235,6 +235,17 @@ final class ContainerFactory
             self::applyDefaults($definition);
         }
 
+        // Resolve the `relayer.dispatch_listener` tag NOW and stash the
+        // service-ID list as a parameter so it survives the PhpDumper
+        // round-trip. A dumped container exposes `getParameter()` but
+        // drops the tag index, so `findTaggedServiceIds()` only works
+        // here on the live ContainerBuilder — not later at runtime under
+        // the compiled container. The parameter is the runtime-portable
+        // mirror of the lookup, read by {@see Relayer::boot()} when no
+        // compiled-dispatcher artifact exists.
+        $listenerIds = \array_keys($container->findTaggedServiceIds(Relayer::DISPATCH_LISTENER_TAG));
+        $container->setParameter(Relayer::DISPATCH_LISTENERS_PARAMETER, $listenerIds);
+
         // Two env-placeholder modes, picked by `$forDump`. A
         // `ContainerBuilder` used directly (dev boot, or the prod
         // missing-dump fallback) must resolve `%env(VAR)%` at compile
