@@ -128,13 +128,11 @@ final class AppRouter
 
     /**
      * Wire a {@see DispatchListener} that receives every dispatch
-     * lifecycle event the router emits. Replaces the older subclass-
-     * based extension point ({@see TraceableAppRouter}'s inheritance
-     * chain) with composition — the listener may be a single concrete
-     * implementation, a polymorphic
-     * {@see RuntimeDispatcher} fan-out,
-     * or the statically-visible
-     * {@see CompiledDispatcher} dumped by
+     * lifecycle event the router emits — replaces the older inheritance-
+     * based extension point (a `Traceable*` subclass overriding protected
+     * hooks) with composition. The listener may be a single concrete
+     * implementation, a polymorphic {@see RuntimeDispatcher} fan-out, or
+     * the statically-visible {@see CompiledDispatcher} dumped by
      * `routes:compile`.
      *
      * The current container and document are pushed into the listener
