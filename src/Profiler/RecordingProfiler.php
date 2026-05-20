@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Profiler;
 
-use Polidog\Relayer\Router\Dispatch\ProfilingListener;
+use Polidog\Relayer\Router\AppRouter;
 use Throwable;
 
 /**
@@ -12,9 +12,9 @@ use Throwable;
  * hands it to a {@see ProfilerStorage} on completion.
  *
  * Lifecycle:
- * - {@see beginProfile()} is called by {@see ProfilingListener::beforeDispatch()}
- *   at the start of dispatch (the listener is attached to AppRouter via
- *   the dispatch composition seam).
+ * - {@see beginProfile()} is called by {@see AppRouter::run()} at the
+ *   start of dispatch when a recording profiler has been wired in via
+ *   {@see AppRouter::setProfiler()}.
  * - During dispatch, framework code and user code call {@see collect()} /
  *   {@see start()} which mutate the in-flight Profile.
  * - {@see endProfile()} stamps the status code + endedAt and persists.

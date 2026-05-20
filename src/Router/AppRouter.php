@@ -20,13 +20,14 @@ use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\InjectorContainer;
+use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\Profiler\ProfilerStorage;
+use Polidog\Relayer\Profiler\ProfilerWebView;
+use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Router\Api\RouteHandlers;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
-use Polidog\Relayer\Router\Dispatch\DispatchListener;
-use Polidog\Relayer\Router\Dispatch\NullDispatchListener;
-use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
@@ -57,15 +58,40 @@ use Throwable;
  * `src/Pages/` tree, matches a URL to a page or `route.php` handler,
  * and renders through the document/layout stack.
  *
- * `final` by design: behavior extensions go through the
- * {@see DispatchListener} composition seam (profiling, custom telemetry,
- * framework-owned URLs) so dispatch stays one auditable code path
- * instead of a chain of `parent::` overrides. The seam is unconditional
- * — the default {@see NullDispatchListener} makes every callsite a
- * single virtual call with no `?->` null-checks at the hooks.
+ * `final` by design. Dev-time profiling is wired in directly via
+ * {@see setProfiler()} (a {@see Profiler} for recording events plus an
+ * optional {@see ProfilerStorage} for the `/_profiler` viewer). Prod
+ * leaves both null and every profiler branch in dispatch collapses to a
+ * single null check — no virtual call, no allocation.
  */
 final class AppRouter
 {
+    /**
+     * URL prefix the dev profiler viewer owns. Matched as exact path or
+     * as `prefix + '/'` so `/foo.txt` does not match `/foo`.
+     */
+    private const PROFILER_PREFIX = '/_profiler';
+
+    /**
+     * Framework-managed prefixes that never produce a profile. Covers
+     * the profiler viewer itself plus browser/devtools probe noise
+     * (`/.well-known/appspecific/com.chrome.devtools.json` and similar).
+     *
+     * @var list<string>
+     */
+    private const FRAMEWORK_EXCLUDED_PROFILER_PREFIXES = [
+        self::PROFILER_PREFIX,
+        '/.well-known',
+    ];
+
+    /**
+     * Token shape used by {@see RecordingProfiler::beginProfile()}: 16
+     * lowercase hex chars (`bin2hex(random_bytes(8))`). Validated against
+     * this pattern before the parent-token header is accepted — protects
+     * the file storage from a crafted value smuggling path separators.
+     */
+    private const PROFILER_TOKEN_PATTERN = '/^[a-f0-9]{16}$/';
+
     private string $appDirectory;
     private ?ContainerInterface $container;
     private RouterInterface $router;
@@ -74,7 +100,12 @@ final class AppRouter
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
     private ?UsePHP $usephp = null;
-    private DispatchListener $listener;
+    private ?Profiler $profiler = null;
+    private ?RecordingProfiler $recording = null;
+    private ?ProfilerStorage $profilerStorage = null;
+
+    /** @var list<string> */
+    private array $userExcludedProfilerPrefixes = [];
 
     public function __construct(
         string $appDirectory,
@@ -88,10 +119,6 @@ final class AppRouter
         $this->router = Router::create($this->appDirectory, $compiledRoutesFile);
         $this->document = new HtmlDocument();
         $this->autoCompilePsx = $autoCompilePsx;
-        // Default to a no-op listener so dispatch's `$this->listener->onXxx()`
-        // callsites stay unconditional — apps that bind no listener pay
-        // only the cost of a virtual call per hook.
-        $this->listener = new NullDispatchListener();
         // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
         // is the parent of the appDirectory. This matches the usePHP CLI's
         // default of <cwd>/var/cache/psx for the typical layout where the
@@ -117,32 +144,53 @@ final class AppRouter
     public function setContainer(ContainerInterface $container): self
     {
         $this->container = $container;
-        // Push to the listener so a listener that needs the container
-        // (currently none of the framework's listeners, but the contract
-        // is symmetric with setDocument) sees the live binding.
-        $this->listener->setContainer($container);
 
         return $this;
     }
 
     /**
-     * Wire a {@see DispatchListener} that receives every dispatch
-     * lifecycle event the router emits — replaces the older inheritance-
-     * based extension point (a `Traceable*` subclass overriding protected
-     * hooks) with composition. The listener may be a single concrete
-     * implementation or a polymorphic {@see RuntimeDispatcher} fan-out
-     * over multiple listeners.
-     *
-     * The current container and document are pushed into the listener
-     * synchronously so the listener observes whatever state was
-     * established before this call. Subsequent `setContainer` /
-     * `setDocument` updates also fan out automatically.
+     * Wire dev-time profiling. Pass a {@see RecordingProfiler} to record
+     * dispatch events into the in-flight profile; pass a
+     * {@see ProfilerStorage} to additionally surface the `/_profiler`
+     * viewer at `/_profiler` and `/_profiler/<token>`. Prod leaves both
+     * null and every profiler branch in dispatch collapses to a single
+     * null check.
      */
-    public function setListener(DispatchListener $listener): self
+    public function setProfiler(Profiler $profiler, ?ProfilerStorage $storage = null): self
     {
-        $this->listener = $listener;
-        $listener->setContainer($this->container);
-        $listener->setDocument($this->document);
+        $this->profiler = $profiler;
+        // Narrow once: RecordingProfiler-only lifecycle calls
+        // (beginProfile / endProfile) route through `$this->recording`,
+        // so the hot path doesn't redo the `instanceof` per hook.
+        $this->recording = $profiler instanceof RecordingProfiler ? $profiler : null;
+        $this->profilerStorage = $storage;
+
+        return $this;
+    }
+
+    /**
+     * Add app-specific path prefixes to skip when recording profiles —
+     * health checks, metrics scrapers, static probes that would otherwise
+     * clutter the index. Framework defaults (`/_profiler`, `/.well-known`)
+     * remain in effect; this list is additive.
+     *
+     * @param list<string> $prefixes
+     */
+    public function setProfilerExcludedPrefixes(array $prefixes): self
+    {
+        $cleaned = [];
+        foreach ($prefixes as $prefix) {
+            if ('' === $prefix) {
+                continue;
+            }
+            // Normalize: leading slash required, no trailing slash so the
+            // match logic stays uniform with the framework list.
+            if (!\str_starts_with($prefix, '/')) {
+                $prefix = '/' . $prefix;
+            }
+            $cleaned[] = \rtrim($prefix, '/');
+        }
+        $this->userExcludedProfilerPrefixes = $cleaned;
 
         return $this;
     }
@@ -168,10 +216,6 @@ final class AppRouter
     public function setDocument(DocumentInterface $document): self
     {
         $this->document = $document;
-        // Push to the listener so e.g. ProfilingListener's debug-bridge
-        // script injection lands on the new document rather than the
-        // pre-swap one.
-        $this->listener->setDocument($document);
 
         return $this;
     }
@@ -204,21 +248,34 @@ final class AppRouter
 
     public function run(): void
     {
-        // Framework-owned URL hand-off — runs before any dispatch work so
-        // a listener like the dev profiler viewer can claim its prefix
-        // (`/_profiler`) without producing a profile of itself, and
-        // before middleware so locale/dispatch closure setup doesn't run
-        // for a hijacked URL. The listener returning `true` means it has
-        // already produced a response.
-        if ($this->listener->handleFrameworkRequest(self::readPath())) {
+        $path = self::readPath();
+
+        // Dev profiler viewer — only when storage is bound (dev only).
+        // Intercepted BEFORE beginProfile so visiting the viewer does
+        // not create a profile of itself (which would clutter the index
+        // and recurse the storage).
+        if (null !== $this->profilerStorage
+            && (self::PROFILER_PREFIX === $path || \str_starts_with($path, self::PROFILER_PREFIX . '/'))
+        ) {
+            $this->buildProfilerView($path)->send();
+
             return;
         }
 
-        // Begin dispatch lifecycle — pairs with afterDispatch() in both
-        // the `finally` (normal path) and the shutdown handler (exit/die
-        // paths). The listener's afterDispatch is idempotent by contract,
-        // so both can fire without double-recording.
-        $this->listener->beforeDispatch(self::readUrl(), self::readMethod());
+        // Begin a profile when a recording profiler is bound and the
+        // path isn't excluded. Surface the token as `X-Debug-Token` so
+        // the inline fetch wrapper on the parent page can forward it
+        // back on any `<X defer />` fetch (and so HTTP-inspector tooling
+        // can deep-link to /_profiler/<token>).
+        if (null !== $this->recording && !$this->isProfilerExcluded($path)) {
+            $profile = $this->recording->beginProfile(self::readUrl(), self::readMethod(), $this->readProfilerParentToken());
+            if (!\headers_sent()) {
+                \header('X-Debug-Token: ' . $profile->token);
+            }
+            if ($this->document instanceof HtmlDocument) {
+                $this->document->addHeadHtml(self::buildDebugBridgeScript($profile->token));
+            }
+        }
 
         // Build a snapshot of the request once per dispatch and stash it so
         // page factories / page constructors can be injected with it by type
@@ -255,8 +312,8 @@ final class AppRouter
         // first on the normal path.
         $container = $this->container;
         $hasUsephp = null !== $this->usephp;
-        $listener = $this->listener;
-        \register_shutdown_function(static function () use ($container, $hasUsephp, $listener): void {
+        $recording = $this->recording;
+        \register_shutdown_function(static function () use ($container, $hasUsephp, $recording): void {
             if ($container instanceof InjectorContainer) {
                 $container->setCurrentRequest(null);
             }
@@ -267,13 +324,15 @@ final class AppRouter
             // cannot bleed into the next request's pre-dispatch code (e.g.
             // validation) under a long-running worker.
             Translators::reset();
-            // Idempotent counterpart to beforeDispatch — covers the exit
-            // paths (304 short-circuit, PRG redirect) the `finally` block
-            // below cannot reach. Listener guards against double-firing
-            // so the normal path's finally + this shutdown both running
-            // is safe.
-            $status = \http_response_code();
-            $listener->afterDispatch(\is_int($status) ? $status : 200);
+            // Idempotent profile finalize — covers the exit paths (304
+            // short-circuit, PRG redirect) the `finally` block below
+            // cannot reach. RecordingProfiler::endProfile guards against
+            // double-firing so the normal path's finally + this shutdown
+            // both running is safe.
+            if (null !== $recording) {
+                $status = \http_response_code();
+                $recording->endProfile(\is_int($status) ? $status : 200);
+            }
         });
 
         try {
@@ -356,10 +415,12 @@ final class AppRouter
                 RenderContext::clearApp();
             }
             Translators::reset();
-            // Normal-path counterpart to the shutdown handler above. The
-            // listener guards against double-firing.
-            $status = \http_response_code();
-            $this->listener->afterDispatch(\is_int($status) ? $status : 200);
+            // Normal-path counterpart to the shutdown handler above —
+            // idempotent so a later shutdown call is a no-op.
+            if (null !== $this->recording) {
+                $status = \http_response_code();
+                $this->recording->endProfile(\is_int($status) ? $status : 200);
+            }
         }
     }
 
@@ -371,7 +432,12 @@ final class AppRouter
             return;
         }
 
-        $this->listener->onRouteMatch($match);
+        $this->profiler?->collect('route', 'match', [
+            'pattern' => $match->route->pattern,
+            'params' => $match->getParams(),
+            'pagePath' => $match->getPagePath(),
+            'layoutPaths' => $match->getLayoutPaths(),
+        ]);
 
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());
 
@@ -425,7 +491,12 @@ final class AppRouter
      */
     private function handleApiMatch(RouteMatch $match): void
     {
-        $this->listener->onApiMatch($match);
+        $this->profiler?->collect('route', 'api', [
+            'pattern' => $match->route->pattern,
+            'method' => self::readMethod(),
+            'params' => $match->getParams(),
+            'routePath' => $match->getPagePath(),
+        ]);
 
         $file = $match->getPagePath();
 
@@ -570,16 +641,26 @@ final class AppRouter
         }
 
         $effective = CachePolicy::applyCache($cache, $this->resolveEtagStore());
-        $this->listener->onCacheApplied($effective);
+        $this->profiler?->collect('cache', 'apply', [
+            'source' => 'context',
+            'etag' => $effective->etag,
+            'etagKey' => $effective->etagKey,
+            'lastModified' => $effective->lastModified,
+            'maxAge' => $effective->maxAge,
+            'sMaxAge' => $effective->sMaxAge,
+            'directives' => CachePolicy::buildDirectives($effective),
+        ]);
 
         if (CachePolicy::isNotModified($effective)) {
-            // Fire the not-modified hook BEFORE exit so a recording
-            // listener (e.g. ProfilingListener) gets its last chance to
-            // persist the profile — PHP's `finally` doesn't run on exit.
-            // The shutdown handler registered in run() catches anything
-            // the listener didn't already flush, but emitting here makes
-            // the 304 path visible to non-profiler listeners too.
-            $this->listener->onCacheNotModified($effective);
+            // Persist the 304 path BEFORE exit so the saved profile
+            // reflects it — PHP's `finally` doesn't run on exit. The
+            // shutdown handler registered in run() catches anything
+            // endProfile didn't already flush; endProfile is idempotent
+            // so calling it here is safe.
+            $this->profiler?->collect('cache', 'hit_304', [
+                'etag' => $effective->etag,
+            ]);
+            $this->recording?->endProfile(304);
 
             CachePolicy::sendNotModified();
 
@@ -606,7 +687,10 @@ final class AppRouter
      */
     private function handleAuthorizationFailure(AuthorizationException $exception): void
     {
-        $this->listener->onAuthorizationFailure($exception);
+        $this->profiler?->collect('auth', 'exception', [
+            'decision' => $exception->decision,
+            'redirectTo' => $exception->redirectTo,
+        ]);
 
         if (\headers_sent()) {
             return;
@@ -653,7 +737,9 @@ final class AppRouter
 
     private function handleNotFound(): void
     {
-        $this->listener->onNotFound();
+        $this->profiler?->collect('route', 'not_found', [
+            'path' => self::readUrl(),
+        ]);
         $this->handleErrorResponse(404, $this->tr('relayer.http.page_not_found', 'Page not found'));
     }
 
@@ -735,10 +821,13 @@ final class AppRouter
             return;
         }
 
-        // 404 is recorded by onNotFound (above); only explicit non-404
-        // aborts need their own listener event so the listener can keep
-        // the two cases distinct.
-        $this->listener->onAbort($exception);
+        // 404 is recorded by the not-found branch above; only explicit
+        // non-404 aborts need their own profiler event so the two cases
+        // stay distinct on the timeline.
+        $this->profiler?->collect('route', 'abort', [
+            'path' => self::readUrl(),
+            'status' => $exception->status,
+        ]);
 
         $this->handleErrorResponse($exception->status, $this->localizedReason($exception));
     }
@@ -803,14 +892,25 @@ final class AppRouter
     private function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
         $result = $this->loadPageInternal($pagePath, $params);
-        $this->listener->onPageLoaded($pagePath, $result);
+
+        if (null !== $this->profiler) {
+            $kind = match (true) {
+                $result instanceof FunctionPage => 'function',
+                $result instanceof ComponentInterface => 'class',
+                default => 'null',
+            };
+            $this->profiler->collect('page', 'load', [
+                'pagePath' => $pagePath,
+                'kind' => $kind,
+            ]);
+        }
 
         return $result;
     }
 
     /**
-     * The unwrapped loader; {@see loadPage()} is the listener-aware
-     * facade. Split so the listener event fires once per attempted load
+     * The unwrapped loader; {@see loadPage()} is the profiler-aware
+     * facade. Split so the profile event fires once per attempted load
      * with the final result (function / class / null), not at every
      * intermediate return.
      *
@@ -862,28 +962,42 @@ final class AppRouter
      */
     private function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
     {
-        // Start the page-render span BEFORE the action sniffs / state
-        // setup so it captures everything renderPage does. Listener may
-        // also emit action.dispatch / state.action events as a side
-        // effect of the start* call (the form-action and useState
-        // POST sniffs live in ProfilingListener::startPageRender).
-        $span = $this->listener->startPageRender($page);
+        $componentId = $page instanceof FunctionPage
+            ? $page->getComponentId()
+            : 'page:' . $page::class;
+
+        // Surface server-action (form POST hitting `$ctx->action()` or a
+        // class-style `actionXyz` handler) and useState setState as
+        // profiler events. Both detect the dispatch by sniffing $_POST
+        // here (the token shape is the same across page kinds) instead
+        // of duplicating the dispatcher logic. No-op when no profiler
+        // is bound — guarded at the single call site.
+        if (null !== $this->profiler) {
+            $this->recordProfilerPostDispatches($page, $componentId);
+        }
+
+        $span = $this->profiler?->start('page', 'render');
 
         try {
             $this->renderPageInternal($page, $layouts, $params);
         } finally {
-            $componentIdForSpan = $page instanceof FunctionPage
-                ? $page->getComponentId()
-                : 'page:' . $page::class;
-            $span?->stop(['componentId' => $componentIdForSpan]);
+            $span?->stop(['componentId' => $componentId]);
         }
     }
 
     /**
-     * Unwrapped render path; {@see renderPage()} is the listener-aware
-     * facade. Split so the listener's span brackets the entire
-     * render — including the `dispatchStateAction` PRG `exit` path —
-     * via the surrounding try/finally.
+     * Unwrapped render path; {@see renderPage()} is the profiler-aware
+     * facade. Split so the profiler's `page.render` span is wrapped by
+     * a try/finally on the normal-return path.
+     *
+     * Caveat: the `dispatchStateAction` PRG path calls `exit` mid-render,
+     * which bypasses both `finally` blocks here, so no `page.render`
+     * timing event is recorded on that branch. The Profile itself is
+     * still finalized — `register_shutdown_function` in {@see run()}
+     * triggers `RecordingProfiler::endProfile()` so the saved JSON has
+     * the request's status code and end timestamp; only the inner span
+     * is lost. Acceptable today because PRG is the only `exit` site in
+     * the render path; revisit if more exit sites accumulate.
      *
      * @param array<string, string> $params
      */
@@ -1040,14 +1154,17 @@ final class AppRouter
     private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
     {
         $layout = $this->loadLayoutFromFileInternal($filePath, $params);
-        $this->listener->onLayoutLoaded($filePath, $layout);
+        $this->profiler?->collect('layout', 'load', [
+            'filePath' => $filePath,
+            'loaded' => null !== $layout,
+        ]);
 
         return $layout;
     }
 
     /**
      * The unwrapped loader; {@see loadLayoutFromFile()} is the
-     * listener-aware facade. Same split as
+     * profiler-aware facade. Same split as
      * {@see loadPage()}/{@see loadPageInternal()}.
      *
      * @param array<string, string> $params
@@ -1107,7 +1224,7 @@ final class AppRouter
     {
         // Time the resolution because in dev it may trigger an in-process
         // PSX compile — a noticeable spike on first hit of a touched page.
-        $span = $this->listener->startPsxCompile($psxPath);
+        $span = $this->profiler?->start('psx', 'compile');
 
         try {
             $compiledPath = $this->cachePathForResolved($psxPath);
@@ -1123,7 +1240,7 @@ final class AppRouter
 
     /**
      * Unwrapped PSX-resolution path; {@see resolveCompiledPsxPath()} is
-     * the listener-aware facade that adds the timing span around it.
+     * the profiler-aware facade that adds the timing span around it.
      */
     private function cachePathForResolved(string $psxPath): string
     {
@@ -1565,9 +1682,121 @@ final class AppRouter
     }
 
     /**
-     * The request path (no query string) — what
-     * {@see DispatchListener::handleFrameworkRequest()} receives. Kept
-     * separate from {@see readUrl()} so callers don't have to re-parse.
+     * Render the dev profiler view (`/_profiler` or `/_profiler/<token>`)
+     * as a {@see Response} so the framework's single response emission
+     * path (`Response::send`) handles headers and body. Returns a 503
+     * when no storage is bound — typically only happens if a user
+     * manually clears the dev defaults.
+     */
+    private function buildProfilerView(string $path): Response
+    {
+        $storage = $this->profilerStorage;
+        if (null === $storage) {
+            return Response::text('Profiler storage is not configured.', 503);
+        }
+
+        $view = new ProfilerWebView($storage);
+
+        // Trim trailing slash so `/_profiler` and `/_profiler/` both hit the index.
+        $suffix = \substr($path, \strlen(self::PROFILER_PREFIX));
+        $suffix = \rtrim($suffix, '/');
+
+        if ('' === $suffix) {
+            return Response::make($view->renderIndex(), 200, ['Content-Type' => 'text/html; charset=utf-8']);
+        }
+
+        $token = \ltrim($suffix, '/');
+        // Defensive: reject anything that smells like path traversal — the
+        // storage layer also rejects unknown tokens, but this keeps the
+        // string we render in error pages constrained.
+        if (!\preg_match('/^[a-zA-Z0-9_-]+$/', $token)) {
+            return Response::make($view->renderDetail($token), 404, ['Content-Type' => 'text/html; charset=utf-8']);
+        }
+
+        // Pre-resolve so the HTTP status matches the rendered body.
+        // `ProfilerWebView::renderDetail()` already paints a "Profile
+        // not found" page when the storage returns null; this just
+        // aligns the response status with that content so tools / curl
+        // scripts can tell the two cases apart.
+        $status = null !== $storage->load($token) ? 200 : 404;
+
+        return Response::make($view->renderDetail($token), $status, ['Content-Type' => 'text/html; charset=utf-8']);
+    }
+
+    /**
+     * Sniff the `_usephp_action` form field and emit the matching profiler
+     * event(s). `usephp-action:` prefix is the form-action token shape
+     * (`action.dispatch`); raw JSON is the useState setState dispatch
+     * (`state.action`). The caller has already guarded against a null
+     * profiler so this method assumes one is bound.
+     */
+    private function recordProfilerPostDispatches(ComponentInterface|FunctionPage $page, string $componentId): void
+    {
+        \assert(null !== $this->profiler);
+
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            return;
+        }
+
+        $token = $_POST['_usephp_action'] ?? null;
+        if (!\is_string($token)) {
+            return;
+        }
+
+        if (\str_starts_with($token, 'usephp-action:')) {
+            $this->profiler->collect('action', 'dispatch', [
+                'kind' => $page instanceof FunctionPage ? 'function' : 'class',
+                'page' => $componentId,
+            ]);
+
+            return;
+        }
+
+        // Match the dispatchStateAction gating: same-component, JSON shape.
+        $postComponentId = $_POST['_usephp_component'] ?? null;
+        if (\is_string($postComponentId) && $postComponentId === $componentId) {
+            $this->profiler->collect('state', 'action', [
+                'componentId' => $componentId,
+            ]);
+        }
+    }
+
+    private function isProfilerExcluded(string $path): bool
+    {
+        foreach (self::FRAMEWORK_EXCLUDED_PROFILER_PREFIXES as $prefix) {
+            if ($path === $prefix || \str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
+        }
+        foreach ($this->userExcludedProfilerPrefixes as $prefix) {
+            if ($path === $prefix || \str_starts_with($path, $prefix . '/')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Read the parent-token header that the in-page fetch wrapper attaches
+     * to defer (and partial) sub-requests. Strictly validated against the
+     * RecordingProfiler token shape so a crafted header can never reach
+     * the storage layer as a filename component.
+     */
+    private function readProfilerParentToken(): ?string
+    {
+        $raw = $_SERVER['HTTP_X_DEBUG_PARENT_TOKEN'] ?? null;
+        if (!\is_string($raw) || '' === $raw) {
+            return null;
+        }
+
+        return \preg_match(self::PROFILER_TOKEN_PATTERN, $raw) ? $raw : null;
+    }
+
+    /**
+     * The request path (no query string) — what the `/_profiler` viewer
+     * gate matches against, and what the profiler excluded-prefix list
+     * compares.
      */
     private static function readPath(): string
     {
@@ -1577,9 +1806,8 @@ final class AppRouter
     }
 
     /**
-     * The verbatim REQUEST_URI — what
-     * {@see DispatchListener::beforeDispatch()} receives so a listener can
-     * record the full URL (including query string) on the profile.
+     * The verbatim REQUEST_URI — what the profiler records as the
+     * request's full URL (including query string).
      */
     private static function readUrl(): string
     {
@@ -1593,5 +1821,59 @@ final class AppRouter
         $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
         return \is_string($method) ? $method : 'GET';
+    }
+
+    /**
+     * Inline JS that wraps `window.fetch` so any usePHP sub-request
+     * (defer fetch identified by `X-UsePHP-Defer`) forwards the parent
+     * profile's token. The wrapper is idempotent — if a previously
+     * recorded profile already patched fetch, the second wrap simply
+     * overrides the captured token while still chaining to the original.
+     */
+    private static function buildDebugBridgeScript(string $token): string
+    {
+        // Token is 16 hex chars per the RecordingProfiler contract, but
+        // json_encode is the right gate regardless of source — it keeps
+        // the script safe even if the contract ever loosens.
+        $jsToken = \json_encode($token, \JSON_UNESCAPED_SLASHES | \JSON_HEX_TAG | \JSON_HEX_APOS | \JSON_HEX_QUOT | \JSON_HEX_AMP);
+        if (false === $jsToken) {
+            return '';
+        }
+
+        return <<<HTML
+            <script data-relayer-debug-bridge>
+            (function (t) {
+                if (!window.fetch) return;
+                var orig = window.__relayerDebugBridgeOrigFetch || window.fetch;
+                window.__relayerDebugBridgeOrigFetch = orig;
+                window.fetch = function (input, init) {
+                    init = init || {};
+                    var h = init.headers;
+                    var isDefer = false;
+                    if (h instanceof Headers) {
+                        isDefer = !!h.get('X-UsePHP-Defer');
+                    } else if (Array.isArray(h)) {
+                        for (var i = 0; i < h.length; i++) {
+                            if (h[i][0] && h[i][0].toLowerCase() === 'x-usephp-defer') { isDefer = true; break; }
+                        }
+                    } else if (h && typeof h === 'object') {
+                        isDefer = !!(h['X-UsePHP-Defer'] || h['x-usephp-defer']);
+                    }
+                    if (isDefer) {
+                        if (h instanceof Headers) {
+                            h.set('X-Debug-Parent-Token', t);
+                        } else if (Array.isArray(h)) {
+                            h.push(['X-Debug-Parent-Token', t]);
+                        } else if (h && typeof h === 'object') {
+                            h['X-Debug-Parent-Token'] = t;
+                        } else {
+                            init.headers = { 'X-Debug-Parent-Token': t };
+                        }
+                    }
+                    return orig.call(this, input, init);
+                };
+            })({$jsToken});
+            </script>
+            HTML;
     }
 }

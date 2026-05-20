@@ -6,13 +6,11 @@ namespace Polidog\Relayer;
 
 use Polidog\Relayer\Di\ContainerFactory;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
+use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
-use Polidog\Relayer\Router\Dispatch\DispatchListener;
-use Polidog\Relayer\Router\Dispatch\ProfilingListener;
-use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
 use Polidog\UsePhp\UsePHP;
-use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -75,29 +73,6 @@ final class Relayer
     public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
 
     /**
-     * Symfony service tag the DI container marks
-     * {@see DispatchListener} services with.
-     * {@see Relayer::boot()} reads the resolved list (via
-     * {@see DISPATCH_LISTENERS_PARAMETER}) at runtime, so the dispatch
-     * chain is discovered the same way in dev and prod. `relayer
-     * dispatch:list` prints that chain so an operator can audit it
-     * without running the app.
-     */
-    public const DISPATCH_LISTENER_TAG = 'relayer.dispatch_listener';
-
-    /**
-     * Container parameter that holds the resolved list of
-     * `relayer.dispatch_listener` service IDs (class-strings), in
-     * registration order. Set by {@see ContainerFactory} just before
-     * `compile()` so the value survives a {@see PhpDumper} round-trip —
-     * dumped containers expose `getParameter()` but lose the tag index,
-     * so a plain `findTaggedServiceIds()` call would not work at runtime
-     * under the compiled container. The parameter is the
-     * runtime-portable mirror of that lookup.
-     */
-    public const DISPATCH_LISTENERS_PARAMETER = 'relayer.dispatch_listeners';
-
-    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
@@ -156,11 +131,12 @@ final class Relayer
         // place. See https://github.com/polidog/relayer/issues/21
         $psxCacheDir = $projectRoot . '/var/cache/psx';
 
-        // Single router class for dev and prod — the recording / framework
-        // behavior the previous TraceableAppRouter subclass carried now
-        // lives in {@see ProfilingListener}, attached below. Prod points
-        // at the precompiled route artifact when it exists; dev passes
-        // null so config edits never read a stale dump.
+        // Single router class for dev and prod. Profiling (dev only) is
+        // wired in directly below — in prod neither `Profiler` nor
+        // `ProfilerStorage` is bound on AppRouter, so every profiler
+        // branch collapses to a null check. Prod points at the
+        // precompiled route artifact when it exists; dev passes null so
+        // config edits never read a stale dump.
         $router = AppRouter::create(
             $appDir,
             autoCompilePsx: $isDev,
@@ -172,100 +148,61 @@ final class Relayer
         $usephp = self::buildUsePhp($projectRoot, $isDev);
         $router->setUsePhp($usephp);
 
-        // Attach the dispatch listener — a polymorphic RuntimeDispatcher
-        // over the tag-discovered listeners (singleton bypass when the
-        // chain has exactly one listener, the typical case). `relayer
-        // dispatch:list` prints the same chain for offline audit.
-        $listener = self::resolveListener($container, $psr);
-        if (null !== $listener) {
-            // Apps configure extra profile-excluded paths via
-            // PROFILER_EXCLUDED_PATHS env — only the framework's own
-            // ProfilingListener knows what to do with the list, so look
-            // it up by service id on the underlying container (the PSR
-            // wrapper exposes the same `has`/`get` semantics).
-            self::applyProfilerExcludedPrefixes($psr);
+        // Wire dev-time profiling when the container exposes a Profiler.
+        // Prod's container binds NullProfiler (a no-op) — we deliberately
+        // do NOT wire that into AppRouter so the dispatch hot path skips
+        // the virtual call entirely. Storage is optional and only
+        // surfaces the `/_profiler` viewer; the actual event recording
+        // works without it.
+        $profiler = self::resolveProfiler($psr);
+        if (null !== $profiler) {
+            $router->setProfiler($profiler, self::resolveProfilerStorage($psr));
 
-            $router->setListener($listener);
+            $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
+            if ([] !== $extraExcludes) {
+                $router->setProfilerExcludedPrefixes($extraExcludes);
+            }
         }
 
         return $router;
     }
 
     /**
-     * Resolve the {@see DispatchListener} to install on the router as a
-     * {@see RuntimeDispatcher} over the {@see DISPATCH_LISTENERS_PARAMETER}
-     * service IDs. Returns null only when the container exposes no
-     * listeners at all — e.g. an app explicitly overrode the framework's
-     * ProfilingListener registration to untag it; in that case the
-     * router runs against its default {@see NullDispatchListener}.
+     * Resolve the dev {@see Profiler} the container exposes, or null
+     * when only the prod no-op is bound. Skipping `NullProfiler` here
+     * keeps the dispatch hot path free of virtual calls in prod.
      */
-    private static function resolveListener(
-        SymfonyContainerInterface $container,
-        InjectorContainer $psr,
-    ): ?DispatchListener {
-        $listeners = self::discoverListeners($container, $psr);
-        if ([] === $listeners) {
+    private static function resolveProfiler(InjectorContainer $psr): ?Profiler
+    {
+        if (!$psr->has(Profiler::class)) {
             return null;
         }
-        if (1 === \count($listeners)) {
-            // Pass the singleton through directly so the router's
-            // setListener can dispatch hooks without the polymorphic
-            // foreach fan-out.
-            return $listeners[0];
+
+        $profiler = $psr->get(Profiler::class);
+        if (!$profiler instanceof Profiler) {
+            return null;
         }
 
-        return new RuntimeDispatcher($listeners);
+        // isEnabled() differentiates RecordingProfiler (true) from
+        // NullProfiler (false). The router's profiler hooks short-circuit
+        // on null anyway, but skipping the wire-up entirely keeps the
+        // intent explicit and avoids any per-hook overhead in prod.
+        return $profiler->isEnabled() ? $profiler : null;
     }
 
     /**
-     * Read the tag-resolved listener service IDs off the container
-     * parameter {@see ContainerFactory} stashed before compile, fetch
-     * each one through the PSR adapter, and assert each implements
-     * {@see DispatchListener}.
-     *
-     * @return list<DispatchListener>
+     * Resolve the dev {@see ProfilerStorage} when bound — powers the
+     * `/_profiler` viewer. Returns null in prod (only dev binds it).
      */
-    private static function discoverListeners(SymfonyContainerInterface $container, InjectorContainer $psr): array
+    private static function resolveProfilerStorage(InjectorContainer $psr): ?ProfilerStorage
     {
-        if (!$container->hasParameter(self::DISPATCH_LISTENERS_PARAMETER)) {
-            return [];
-        }
-        $ids = $container->getParameter(self::DISPATCH_LISTENERS_PARAMETER);
-        if (!\is_array($ids)) {
-            return [];
+        if (!$psr->has(ProfilerStorage::class)) {
+            return null;
         }
 
-        $listeners = [];
-        foreach ($ids as $id) {
-            if (!\is_string($id) || !$psr->has($id)) {
-                continue;
-            }
-            $service = $psr->get($id);
-            if ($service instanceof DispatchListener) {
-                $listeners[] = $service;
-            }
-        }
+        $storage = $psr->get(ProfilerStorage::class);
 
-        return $listeners;
-    }
-
-    /**
-     * Apply the `PROFILER_EXCLUDED_PATHS` env list to the framework's
-     * own {@see ProfilingListener} when the container exposes one. No-op
-     * when the listener was overridden away (apps can disable framework
-     * profiling without disabling the env handling for other listeners).
-     */
-    private static function applyProfilerExcludedPrefixes(InjectorContainer $psr): void
-    {
-        $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
-        if ([] === $extraExcludes || !$psr->has(ProfilingListener::class)) {
-            return;
-        }
-
-        $profiling = $psr->get(ProfilingListener::class);
-        if ($profiling instanceof ProfilingListener) {
-            $profiling->setExcludedPrefixes($extraExcludes);
-        }
+        return $storage instanceof ProfilerStorage ? $storage : null;
     }
 
     /**

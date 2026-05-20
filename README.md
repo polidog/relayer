@@ -236,18 +236,6 @@ reflects the current tree and never goes stale. Scan-time ambiguities
 (page/`route.php` clashes, route-group URL collisions) fail the compile at
 deploy rather than on the first request.
 
-**Dispatch listeners.** `Relayer::boot()` wires every service tagged
-`relayer.dispatch_listener` through a polymorphic `RuntimeDispatcher`
-that fan-outs each lifecycle event (route match, page loaded, cache
-applied, …) to every listener in registration order. Apps that need
-their own listener register a service implementing
-`Polidog\Relayer\Router\Dispatch\DispatchListener` with that tag —
-discovery is automatic in dev and prod.
-
-`vendor/bin/relayer dispatch:list` prints the resolved chain so an
-operator can audit which listeners are wired, in what order, and which
-events each one receives, without running the application.
-
 **Compiled DI container (production).** Otherwise `Relayer::boot()` builds
 and `compile()`s the Symfony DI container on *every* request — typically
 the largest avoidable per-request cost. `vendor/bin/relayer
@@ -1979,9 +1967,9 @@ SessionStorage / Authenticator and feed spans like `db.query`,
 
 ### Web view
 
-`ProfilingListener` (the framework's built-in `DispatchListener`)
-intercepts `/_profiler` *before* normal dispatch — so the profiler never
-profiles itself:
+`AppRouter` intercepts `/_profiler` *before* normal dispatch (when a
+`ProfilerStorage` has been wired in via `setProfiler()` — dev only) — so
+the profiler never profiles itself:
 
 | URL                  | Content                                                 |
 | -------------------- | ------------------------------------------------------- |
