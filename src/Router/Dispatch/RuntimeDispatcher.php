@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Dispatch;
 
 use Polidog\Relayer\Auth\AuthorizationException;
-use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Profiler\TraceSpan;
-use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\HttpException;
@@ -21,22 +19,16 @@ use Psr\Container\ContainerInterface;
  * Polymorphic {@see DispatchListener} fan-out. Composes a list of concrete
  * listeners and forwards every hook to each one in registration order.
  *
- * Boot uses this when there is no compiled dispatcher artifact
- * ({@see Relayer::COMPILED_DISPATCHER_FILE}) — i.e. dev,
- * or prod between a config change and the next `routes:compile`. The
- * dumped {@see CompiledDispatcher} is the
- * statically-visible counterpart: its source spells out exactly which
- * listener each hook forwards to and in what order (the primary
- * acceptance criterion for the composition refactor), so an operator can
- * audit the chain by reading one file. This class is the runtime
- * fallback with the same behavior.
- *
  * `handleFrameworkRequest` short-circuits at the first listener that
  * claims the request — matching the "framework-owned URL" contract: only
  * one listener can consume the URL. `beforeDispatch` ORs the booleans so
  * "any listener started recording" surfaces, though AppRouter does not
  * act on the result (informational only — `afterDispatch` is
  * unconditional).
+ *
+ * `relayer dispatch:list` prints the listener chain this dispatcher will
+ * wrap, so an operator can audit the configured fan-out without running
+ * the app.
  */
 final class RuntimeDispatcher implements DispatchListener
 {

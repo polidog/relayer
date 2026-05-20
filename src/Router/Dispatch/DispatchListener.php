@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Dispatch;
 
 use Polidog\Relayer\Auth\AuthorizationException;
-use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Profiler\TraceSpan;
 use Polidog\Relayer\Router\AppRouter;
@@ -26,10 +25,9 @@ use Psr\Container\ContainerInterface;
  * Default binding is {@see NullDispatchListener} — every method a no-op —
  * so AppRouter never needs `?->` null-checks at the callsites. Production
  * boot wraps one or more concrete listeners (typically just
- * {@see ProfilingListener}) in {@see RuntimeDispatcher} (dev / un-compiled)
- * or the {@see CompiledDispatcher} dumped by
- * `routes:compile` (prod), both of which implement this interface and
- * fan-out to each underlying listener in registration order.
+ * {@see ProfilingListener}) in {@see RuntimeDispatcher}, which fan-outs
+ * to each underlying listener in registration order. `relayer
+ * dispatch:list` prints that chain for offline audit.
  *
  * ## Contract
  *

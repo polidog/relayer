@@ -18,8 +18,8 @@ use Psr\Container\ContainerInterface;
 
 /**
  * Pair to {@see \Polidog\Relayer\Tests\Fixtures\Dispatch\Alpha\MetricsListener}.
- * Distinct namespace, same short name — used to exercise the dispatcher
- * generator's collision-aliasing path.
+ * Distinct namespace, same short name — used by the dispatch:list test
+ * to confirm full FQCNs are printed even when listener short names collide.
  */
 final class MetricsListener implements DispatchListener
 {

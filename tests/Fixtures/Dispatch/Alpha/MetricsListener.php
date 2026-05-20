@@ -18,9 +18,9 @@ use Psr\Container\ContainerInterface;
 
 /**
  * Fixture: a custom listener whose short name collides with a sibling
- * listener in a different namespace. Used by the dispatcher-compile
- * regression test to assert the generated CompiledDispatcher uses
- * `use ... as Alias` to disambiguate.
+ * listener in a different namespace. Used by the dispatch:list
+ * command test to assert listener ordering is preserved and full
+ * FQCNs are printed even when short names collide.
  */
 final class MetricsListener implements DispatchListener
 {

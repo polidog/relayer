@@ -12,7 +12,6 @@ use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\UserProvider;
-use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
@@ -131,9 +130,8 @@ final class AppRouter
      * lifecycle event the router emits — replaces the older inheritance-
      * based extension point (a `Traceable*` subclass overriding protected
      * hooks) with composition. The listener may be a single concrete
-     * implementation, a polymorphic {@see RuntimeDispatcher} fan-out, or
-     * the statically-visible {@see CompiledDispatcher} dumped by
-     * `routes:compile`.
+     * implementation or a polymorphic {@see RuntimeDispatcher} fan-out
+     * over multiple listeners.
      *
      * The current container and document are pushed into the listener
      * synchronously so the listener observes whatever state was
