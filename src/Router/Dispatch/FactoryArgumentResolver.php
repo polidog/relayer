@@ -109,8 +109,12 @@ final class FactoryArgumentResolver
                 continue;
             }
 
+            // Neutral wording — this resolver autowires both function-style
+            // pages and API route handlers, so naming "page" in the message
+            // would mislead deployers when an API handler is the failing
+            // callable. The path in $pagePath identifies which file.
             throw new RuntimeException(\sprintf(
-                'Cannot autowire parameter $%s of function-style page %s: no type, default, or container binding.',
+                'Cannot autowire parameter $%s in %s: no type, default, or container binding.',
                 $parameter->getName(),
                 $pagePath,
             ));

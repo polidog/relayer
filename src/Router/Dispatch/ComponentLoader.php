@@ -40,6 +40,16 @@ final class ComponentLoader
     private readonly Closure $compilePsxPath;
 
     /**
+     * Memoised factory closures returned by function-style page files,
+     * keyed by their compiled (post-`.psx` resolution) path. See
+     * {@see loadPage()} for the long-running-runtime contract this caches
+     * around.
+     *
+     * @var array<string, Closure>
+     */
+    private array $factoryCache = [];
+
+    /**
      * @param Closure(string): string $compilePsxPath given a `.psx` source
      *                                                path, return its compiled `.psx.php` path
      */
@@ -78,10 +88,28 @@ final class ComponentLoader
             $pagePath = ($this->compilePsxPath)($pagePath);
         }
 
+        // require_once returns the file's return value the first time it
+        // sees a path and `true` on every subsequent call — so a function-
+        // style page would lose its factory closure from the second request
+        // onward under a long-running runtime (PHP-FPM worker, swoole, …).
+        // Cache the factory by compiled path so repeats keep working; the
+        // class-style fallback below doesn't need this because it recovers
+        // its class via the autoloader / class_exists.
+        if (isset($this->factoryCache[$pagePath])) {
+            return $this->functionPageBuilder->build(
+                $this->factoryCache[$pagePath],
+                $originalPagePath,
+                $params,
+                $currentRequest,
+            );
+        }
+
         $result = require_once $pagePath;
 
         // Closure return: function-based page.
         if ($result instanceof Closure) {
+            $this->factoryCache[$pagePath] = $result;
+
             return $this->functionPageBuilder->build($result, $originalPagePath, $params, $currentRequest);
         }
 

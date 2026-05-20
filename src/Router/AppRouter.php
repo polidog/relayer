@@ -93,10 +93,16 @@ class AppRouter
         $this->container = $container;
         $this->router = Router::create($this->appDirectory, $compiledRoutesFile);
         $this->document = new HtmlDocument();
-        // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
-        // is the parent of the appDirectory. This matches the usePHP CLI's
-        // default of <cwd>/var/cache/psx for the typical layout where the
-        // app dir is `src/Pages` (so cache lands beside src/, not inside it).
+        // Default cache dir: `<dirname(appDirectory)>/var/cache/psx`. For
+        // the typical layout where the app dir is `src/Pages`, dirname()
+        // resolves to `<projectRoot>/src`, so the default lands at
+        // `<projectRoot>/src/var/cache/psx` — *inside* src/. That splits
+        // the cache from the project-root `<projectRoot>/var/cache/psx`
+        // the usePHP CLI (`vendor/bin/usephp compile`) writes to and would
+        // defeat precompilation; `Relayer::boot()` passes an explicit
+        // `psxCacheDir = <projectRoot>/var/cache/psx` to keep the two
+        // caches in sync (issue #21). The default exists for callers that
+        // construct AppRouter directly without going through `boot()`.
         $cacheDir = $psxCacheDir ?? \dirname($this->appDirectory) . '/var/cache/psx';
 
         // Collaborators are wired once. Per-request state (currentRequest,
