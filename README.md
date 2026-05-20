@@ -236,6 +236,27 @@ reflects the current tree and never goes stale. Scan-time ambiguities
 (page/`route.php` clashes, route-group URL collisions) fail the compile at
 deploy rather than on the first request.
 
+**Compiled dispatch pipeline.** `routes:compile` also emits a sibling
+artifact at `var/cache/routes/dispatcher.php`: a
+`final class CompiledDispatcher implements DispatchListener` whose
+constructor takes each registered listener in registration order and
+whose every method body forwards to those listeners in the same order.
+Opening the file answers "which listener fires at which hook in what
+order?" without running anything — the static-visibility goal of the
+composition refactor.
+
+`Relayer::boot()` presence-gates the load: dispatcher dump present ⇒
+load it and wire it into the router; absent ⇒ fall back to a polymorphic
+`RuntimeDispatcher` over the same service IDs (resolved from a container
+parameter that survives the `container:compile` round-trip). Apps that
+need their own listener register a service implementing
+`Polidog\Relayer\Router\Dispatch\DispatchListener` with the
+`relayer.dispatch_listener` tag — both paths discover it automatically.
+
+The dispatcher dump bakes only the listener service IDs (class names),
+not their constructor arguments, so env-derived listener config still
+resolves at runtime through the live container.
+
 **Compiled DI container (production).** Otherwise `Relayer::boot()` builds
 and `compile()`s the Symfony DI container on *every* request — typically
 the largest avoidable per-request cost. `vendor/bin/relayer
@@ -252,7 +273,7 @@ scan-free image:
 ```bash
 composer install --no-dev --classmap-authoritative
 vendor/bin/usephp compile src/Pages      # .psx  -> compiled PHP
-vendor/bin/relayer routes:compile         # route map -> PHP
+vendor/bin/relayer routes:compile         # route map + dispatcher -> PHP
 vendor/bin/relayer container:compile      # DI container -> PHP
 ```
 
@@ -1967,8 +1988,9 @@ SessionStorage / Authenticator and feed spans like `db.query`,
 
 ### Web view
 
-`TraceableAppRouter` intercepts `/_profiler` *before* normal dispatch (so
-the profiler never profiles itself):
+`ProfilingListener` (the framework's built-in `DispatchListener`)
+intercepts `/_profiler` *before* normal dispatch — so the profiler never
+profiles itself:
 
 | URL                  | Content                                                 |
 | -------------------- | ------------------------------------------------------- |

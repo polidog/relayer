@@ -5,11 +5,19 @@ declare(strict_types=1);
 namespace Polidog\Relayer;
 
 use Polidog\Relayer\Di\ContainerFactory;
+use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
-use Polidog\Relayer\Router\TraceableAppRouter;
+use Polidog\Relayer\Router\Dispatch\DispatchListener;
+use Polidog\Relayer\Router\Dispatch\ProfilingListener;
+use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
+use Polidog\Relayer\Scaffold\RoutesCompileCommand;
 use Polidog\UsePhp\UsePHP;
+use ReflectionMethod;
+use ReflectionNamedType;
+use RuntimeException;
+use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -72,6 +80,50 @@ final class Relayer
     public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
 
     /**
+     * Symfony service tag the DI container marks
+     * {@see DispatchListener} services with.
+     * {@see RoutesCompileCommand} reads tagged
+     * services in registration order to dump
+     * {@see COMPILED_DISPATCHER_FILE}; {@see Relayer::boot()}
+     * reads the resolved list (via {@see DISPATCH_LISTENERS_PARAMETER}) at
+     * runtime when no compiled artifact exists, so dev and prod share the
+     * discovery mechanism.
+     */
+    public const DISPATCH_LISTENER_TAG = 'relayer.dispatch_listener';
+
+    /**
+     * Container parameter that holds the resolved list of
+     * `relayer.dispatch_listener` service IDs (class-strings), in
+     * registration order. Set by {@see ContainerFactory} just before
+     * `compile()` so the value survives a {@see PhpDumper} round-trip —
+     * dumped containers expose `getParameter()` but lose the tag index,
+     * so a plain `findTaggedServiceIds()` call would not work at runtime
+     * under the compiled container. The parameter is the
+     * runtime-portable mirror of that lookup.
+     */
+    public const DISPATCH_LISTENERS_PARAMETER = 'relayer.dispatch_listeners';
+
+    /**
+     * Project-root-relative path of the compiled-dispatcher artifact —
+     * a {@see CompiledDispatcher} `final class`
+     * `routes:compile` emits next to the routes dump. Boot loads it when
+     * present and wires the resulting dispatcher into the router; absent,
+     * boot falls back to a polymorphic
+     * {@see RuntimeDispatcher} over the
+     * tag-discovered listeners. Same presence-gated, single-source-of-truth
+     * contract as {@see COMPILED_ROUTES_FILE} and {@see COMPILED_CONTAINER_FILE}.
+     */
+    public const COMPILED_DISPATCHER_FILE = 'var/cache/routes/dispatcher.php';
+
+    /**
+     * Fully-qualified class name `relayer routes:compile` dumps into
+     * {@see COMPILED_DISPATCHER_FILE}. Same `Generated\` namespacing as
+     * the container dump so the two artifacts cannot collide with any
+     * hand-written framework class.
+     */
+    public const COMPILED_DISPATCHER_CLASS = 'Polidog\Relayer\Generated\CompiledDispatcher';
+
+    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
@@ -130,33 +182,173 @@ final class Relayer
         // place. See https://github.com/polidog/relayer/issues/21
         $psxCacheDir = $projectRoot . '/var/cache/psx';
 
-        // Dev: swap in TraceableAppRouter so dispatch lifecycle events
-        // land in the container-bound Profiler. Prod stays on the plain
-        // AppRouter and the Traceable* class is never autoloaded.
-        if ($isDev) {
-            $traceable = new TraceableAppRouter($appDir, autoCompilePsx: true, psxCacheDir: $psxCacheDir);
-            $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
-            if ([] !== $extraExcludes) {
-                $traceable->setExcludedPrefixes($extraExcludes);
-            }
-            $router = $traceable;
-        } else {
-            // Prod: read the precompiled route artifact when it exists
-            // (`relayer routes:compile` at deploy), otherwise fall back to
-            // a live scan. Dev deliberately gets no path so it always
-            // reflects the current tree.
-            $router = AppRouter::create(
-                $appDir,
-                psxCacheDir: $psxCacheDir,
-                compiledRoutesFile: $projectRoot . '/' . self::COMPILED_ROUTES_FILE,
-            );
-        }
+        // Single router class for dev and prod — the recording / framework
+        // behavior the previous TraceableAppRouter subclass carried now
+        // lives in {@see ProfilingListener}, attached below. Prod points
+        // at the precompiled route artifact when it exists; dev passes
+        // null so config edits never read a stale dump.
+        $router = AppRouter::create(
+            $appDir,
+            autoCompilePsx: $isDev,
+            psxCacheDir: $psxCacheDir,
+            compiledRoutesFile: $isDev ? null : $projectRoot . '/' . self::COMPILED_ROUTES_FILE,
+        );
         $router->setContainer($psr);
 
         $usephp = self::buildUsePhp($projectRoot, $isDev);
         $router->setUsePhp($usephp);
 
+        // Attach the dispatch listener — preferring the precompiled
+        // CompiledDispatcher (statically-visible chain) when present,
+        // falling back to a polymorphic RuntimeDispatcher over the same
+        // service IDs otherwise. The two paths are observationally
+        // identical; the compiled form lets an operator audit the chain
+        // by opening one file.
+        $listener = self::resolveListener($container, $psr, $projectRoot);
+        if (null !== $listener) {
+            // Apps configure extra profile-excluded paths via
+            // PROFILER_EXCLUDED_PATHS env — only the framework's own
+            // ProfilingListener knows what to do with the list, so look
+            // it up by service id on the underlying container (the PSR
+            // wrapper exposes the same `has`/`get` semantics).
+            self::applyProfilerExcludedPrefixes($psr);
+
+            $router->setListener($listener);
+        }
+
         return $router;
+    }
+
+    /**
+     * Resolve the {@see DispatchListener} to install on the router:
+     * either the {@see CompiledDispatcher} dump (when present) or a
+     * {@see RuntimeDispatcher} over the {@see DISPATCH_LISTENERS_PARAMETER}
+     * service IDs. Returns null only when the container exposes no
+     * listeners at all — e.g. an app explicitly overrode the framework's
+     * ProfilingListener registration to untag it; in that case the
+     * router runs against its default {@see NullDispatchListener}.
+     */
+    private static function resolveListener(
+        SymfonyContainerInterface $container,
+        InjectorContainer $psr,
+        string $projectRoot,
+    ): ?DispatchListener {
+        $dispatcherFile = $projectRoot . '/' . self::COMPILED_DISPATCHER_FILE;
+        if (\is_file($dispatcherFile)) {
+            return self::instantiateCompiledDispatcher($dispatcherFile, $psr);
+        }
+
+        $listeners = self::discoverListeners($container, $psr);
+        if ([] === $listeners) {
+            return null;
+        }
+        if (1 === \count($listeners)) {
+            // Pass the singleton through directly so the router's
+            // setListener can dispatch hooks without the polymorphic
+            // foreach fan-out — the runtime equivalent of the
+            // CompiledDispatcher's single-listener forwarding shape.
+            return $listeners[0];
+        }
+
+        return new RuntimeDispatcher($listeners);
+    }
+
+    /**
+     * Load the dumped CompiledDispatcher and wire its constructor
+     * arguments by reflecting the parameter types against the live
+     * container. Mirrors how Symfony's autowire fills the same params
+     * at container-build time — except here we do it at boot for one
+     * specific class, post-dump, with no compile pass available.
+     */
+    private static function instantiateCompiledDispatcher(string $dispatcherFile, InjectorContainer $psr): DispatchListener
+    {
+        require_once $dispatcherFile;
+
+        /** @var string $cls */
+        $cls = self::COMPILED_DISPATCHER_CLASS;
+        if (!\class_exists($cls, false)) {
+            throw new RuntimeException(\sprintf(
+                'Compiled dispatcher %s did not declare expected class %s — re-run `relayer routes:compile`.',
+                $dispatcherFile,
+                $cls,
+            ));
+        }
+
+        $ctor = new ReflectionMethod($cls, '__construct');
+        $args = [];
+        foreach ($ctor->getParameters() as $parameter) {
+            $type = $parameter->getType();
+            if (!$type instanceof ReflectionNamedType || $type->isBuiltin()) {
+                throw new RuntimeException(\sprintf(
+                    'Compiled dispatcher %s parameter $%s lacks a class type — re-run `relayer routes:compile`.',
+                    $cls,
+                    $parameter->getName(),
+                ));
+            }
+            $args[] = $psr->get($type->getName());
+        }
+
+        $instance = new $cls(...$args);
+        if (!$instance instanceof DispatchListener) {
+            throw new RuntimeException(\sprintf(
+                'Compiled dispatcher %s did not produce a %s — re-run `relayer routes:compile`.',
+                $dispatcherFile,
+                DispatchListener::class,
+            ));
+        }
+
+        return $instance;
+    }
+
+    /**
+     * Read the tag-resolved listener service IDs off the container
+     * parameter {@see ContainerFactory} stashed before compile, fetch
+     * each one through the PSR adapter, and assert each implements
+     * {@see DispatchListener}.
+     *
+     * @return list<DispatchListener>
+     */
+    private static function discoverListeners(SymfonyContainerInterface $container, InjectorContainer $psr): array
+    {
+        if (!$container->hasParameter(self::DISPATCH_LISTENERS_PARAMETER)) {
+            return [];
+        }
+        $ids = $container->getParameter(self::DISPATCH_LISTENERS_PARAMETER);
+        if (!\is_array($ids)) {
+            return [];
+        }
+
+        $listeners = [];
+        foreach ($ids as $id) {
+            if (!\is_string($id) || !$psr->has($id)) {
+                continue;
+            }
+            $service = $psr->get($id);
+            if ($service instanceof DispatchListener) {
+                $listeners[] = $service;
+            }
+        }
+
+        return $listeners;
+    }
+
+    /**
+     * Apply the `PROFILER_EXCLUDED_PATHS` env list to the framework's
+     * own {@see ProfilingListener} when the container exposes one. No-op
+     * when the listener was overridden away (apps can disable framework
+     * profiling without disabling the env handling for other listeners).
+     */
+    private static function applyProfilerExcludedPrefixes(InjectorContainer $psr): void
+    {
+        $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
+        if ([] === $extraExcludes || !$psr->has(ProfilingListener::class)) {
+            return;
+        }
+
+        $profiling = $psr->get(ProfilingListener::class);
+        if ($profiling instanceof ProfilingListener) {
+            $profiling->setExcludedPrefixes($extraExcludes);
+        }
     }
 
     /**
