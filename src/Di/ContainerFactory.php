@@ -41,6 +41,7 @@ use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Relayer;
+use Polidog\Relayer\Router\Dispatch\ProfilingListener;
 use Polidog\Relayer\Scaffold\ContainerCompileCommand;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
@@ -309,6 +310,22 @@ final class ContainerFactory
         ;
         $container->setAlias(Profiler::class, NullProfiler::class)
             ->setPublic(true)
+        ;
+
+        // Dispatch listener — registered unconditionally so the same boot
+        // path works in dev and prod. Autowired against the `Profiler`
+        // alias (NullProfiler in prod / RecordingProfiler in dev) and the
+        // optional `ProfilerStorage` (only bound in dev — autowire resolves
+        // the constructor's nullable default to null when absent).
+        //
+        // The tag is the discovery mechanism `routes:compile` reads to dump
+        // a {@see \Polidog\Relayer\Generated\CompiledDispatcher} whose
+        // constructor signature mirrors registration order — so an operator
+        // can audit the dispatch chain by reading one file.
+        $container->register(ProfilingListener::class)
+            ->setAutowired(true)
+            ->setPublic(true)
+            ->addTag(Relayer::DISPATCH_LISTENER_TAG)
         ;
 
         if ($isDev) {

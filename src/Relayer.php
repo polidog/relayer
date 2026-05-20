@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace Polidog\Relayer;
 
 use Polidog\Relayer\Di\ContainerFactory;
+use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Router\Dispatch\DispatchListener;
+use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
 use Polidog\Relayer\Router\TraceableAppRouter;
+use Polidog\Relayer\Scaffold\RoutesCompileCommand;
 use Polidog\UsePhp\UsePHP;
 use Symfony\Component\Dotenv\Dotenv;
 
@@ -70,6 +74,37 @@ final class Relayer
      * artifact can never collide with a hand-written framework class.
      */
     public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
+
+    /**
+     * Symfony service tag the DI container marks
+     * {@see DispatchListener} services with.
+     * {@see RoutesCompileCommand} reads tagged
+     * services in registration order to dump
+     * {@see COMPILED_DISPATCHER_FILE}; {@see Relayer::boot()}
+     * reads the same tag at runtime when no compiled artifact exists, so
+     * dev and prod share the discovery mechanism.
+     */
+    public const DISPATCH_LISTENER_TAG = 'relayer.dispatch_listener';
+
+    /**
+     * Project-root-relative path of the compiled-dispatcher artifact —
+     * a {@see CompiledDispatcher} `final class`
+     * `routes:compile` emits next to the routes dump. Boot loads it when
+     * present and wires the resulting dispatcher into the router; absent,
+     * boot falls back to a polymorphic
+     * {@see RuntimeDispatcher} over the
+     * tag-discovered listeners. Same presence-gated, single-source-of-truth
+     * contract as {@see COMPILED_ROUTES_FILE} and {@see COMPILED_CONTAINER_FILE}.
+     */
+    public const COMPILED_DISPATCHER_FILE = 'var/cache/routes/dispatcher.php';
+
+    /**
+     * Fully-qualified class name `relayer routes:compile` dumps into
+     * {@see COMPILED_DISPATCHER_FILE}. Same `Generated\` namespacing as
+     * the container dump so the two artifacts cannot collide with any
+     * hand-written framework class.
+     */
+    public const COMPILED_DISPATCHER_CLASS = 'Polidog\Relayer\Generated\CompiledDispatcher';
 
     /**
      * @param string               $projectRoot  Absolute path to the project root (the
