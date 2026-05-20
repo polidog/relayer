@@ -264,6 +264,41 @@ vendor/bin/relayer container:compile      # DI コンテナ -> PHP
 有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
 だけで壊れません。
 
+**ランタイム secret と `container:compile`。** `container:compile` は
+デプロイ時に `AppConfigurator::configure()` を 1 回だけ走らせ、その
+時点の値をダンプ済みクラスに**焼き込みます**。本番ブート時はダンプを
+`require` するだけで `AppConfigurator` は再実行されません。したがって
+`$_ENV['API_TOKEN']` のように env を**直読み**して `setParameter()` に
+渡しているコードは、`API_TOKEN` がビルド時に未設定なら空文字でベイク
+されたまま本番でも空文字を返します — Fly secrets / Cloud Run env /
+サイドカー injector のように **ランタイムにしか secret が来ない**
+構成では、コンテナがその secret に到達できず "なぜか空文字" の静かな
+障害になります。
+
+回避策は Symfony DI の `%env(VAR)%` プレースホルダを使うこと。
+`PhpDumper` は `%env()%` を `getEnv('VAR')` 呼び出しとしてダンプする
+ので、**ダンプを読み込んだ時点で**現在の env を見にいきます:
+
+```php
+// アンチパターン — ビルド時に空ならベイクされて空のまま
+$container->setParameter('app.api_token', $_ENV['API_TOKEN'] ?? '');
+
+// 推奨 — ダンプは getEnv('API_TOKEN') を発行し、ブート時に解決
+$container->setParameter('app.api_token', '%env(API_TOKEN)%');
+```
+
+型変換 / フォールバックが必要なら `%env(int:DB_PORT)%`,
+`%env(bool:FEATURE_FLAG)%`, `%env(default::API_TOKEN)%` などのプリ
+フィックスが使えます。`config/services.yaml` で `%env(...)%` を使う
+場合も同じ仕組みです（既に `Polidog\Relayer\Auth\Token\TokenVerifier`
+の例で使っています）。
+
+`routes:compile` はこの問題と無関係です（`src/Pages/` を走査するだけで
+env を読まない）。`container:compile` だけが env を巻き込みます — どう
+してもランタイム secret を扱えない場合は **`container:compile` を外し、
+`routes:compile` のみ採用**して per-request の `compile()` コストを
+受け入れる、という選択も妥当な現実解です。
+
 ### クラス型ページ
 
 ```php
