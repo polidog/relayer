@@ -195,18 +195,14 @@ final class ProfilingListener implements DispatchListener
             $this->document->addHeadHtml(self::buildDebugBridgeScript($profile->token));
         }
 
-        // PHP's `finally` blocks do NOT run when control leaves via
-        // `exit/die` — and dispatch has several `exit` paths (304 short-
-        // circuit on class-style #[Cache], PRG redirect after useState
-        // setState, etc.). A shutdown handler is the only reliable hook
-        // for those, since it fires after exit. `endProfile()` is
-        // idempotent, so the normal `finally` path (afterDispatch) + the
-        // shutdown handler can both run without double-persisting.
-        $recording = $this->recording;
-        \register_shutdown_function(static function () use ($recording): void {
-            $status = \http_response_code();
-            $recording->endProfile(\is_int($status) ? $status : 200);
-        });
+        // No shutdown handler here: AppRouter::run() registers one that
+        // fans out to `afterDispatch()` on every listener, which calls
+        // `endProfile()` below. Registering a second handler would
+        // double-fire endProfile per request — harmless thanks to its
+        // idempotency guard, but wasteful and would make listener
+        // behavior depend on register_shutdown_function order. The
+        // single dispatcher-level handler covers every `exit/die` path
+        // (304 short-circuit, PRG redirect, etc.) for every listener.
 
         return true;
     }

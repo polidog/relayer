@@ -178,6 +178,59 @@ final class RoutesCompileDispatcherTest extends TestCase
         self::assertFileExists($this->project . '/' . Relayer::COMPILED_ROUTES_FILE);
     }
 
+    public function testShortNameCollisionsAliasImportsInDispatcherDump(): void
+    {
+        // Two listeners in different namespaces with the same leaf class
+        // name (`MetricsListener`) — without aliasing the dump would
+        // emit two `use ... \MetricsListener;` lines and two properties
+        // typed `MetricsListener`, both of which collide at parse time.
+        // The generator must alias the second one and keep the dump
+        // valid PHP.
+        \mkdir($this->project . '/config', 0o755, true);
+        \file_put_contents(
+            $this->project . '/config/services.yaml',
+            <<<'YAML'
+                services:
+                  Polidog\Relayer\Tests\Fixtures\Dispatch\Alpha\MetricsListener:
+                    public: true
+                    autowire: true
+                    tags: [relayer.dispatch_listener]
+                  Polidog\Relayer\Tests\Fixtures\Dispatch\Beta\MetricsListener:
+                    public: true
+                    autowire: true
+                    tags: [relayer.dispatch_listener]
+                YAML,
+        );
+
+        $status = RoutesCompileCommand::run([], $this->capture(), $this->project);
+        self::assertSame(0, $status, $this->captured());
+
+        $php = (string) \file_get_contents($this->project . '/' . Relayer::COMPILED_DISPATCHER_FILE);
+
+        // Parses as valid PHP — the collision-aliasing must not produce
+        // a duplicate-symbol parse error.
+        self::assertNotSame([], \token_get_all($php, \TOKEN_PARSE));
+
+        // ProfilingListener (framework default) is also tagged, so the
+        // dump has three listeners. The two `MetricsListener`s must
+        // appear under distinct aliases (`MetricsListener` and
+        // `MetricsListener2`).
+        self::assertStringContainsString(
+            'use Polidog\Relayer\Tests\Fixtures\Dispatch\Alpha\MetricsListener;',
+            $php,
+        );
+        self::assertStringContainsString(
+            'use Polidog\Relayer\Tests\Fixtures\Dispatch\Beta\MetricsListener as MetricsListener2;',
+            $php,
+        );
+
+        // Type hints + property declarations use the two aliases.
+        self::assertStringContainsString('MetricsListener $metrics', $php);
+        self::assertStringContainsString('MetricsListener2 $metrics2', $php);
+        self::assertStringContainsString('private MetricsListener $metrics;', $php);
+        self::assertStringContainsString('private MetricsListener2 $metrics2;', $php);
+    }
+
     public function testContainerBuildFailureDoesNotRegressRoutesDump(): void
     {
         // `routes:compile`'s contract is "no env coupling" — routes.php

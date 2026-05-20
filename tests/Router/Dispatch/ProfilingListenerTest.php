@@ -249,11 +249,16 @@ final class ProfilingListenerTest extends TestCase
         $storage = new InMemoryProfilerStorage();
         $listener = new ProfilingListener(new RecordingProfiler($storage), $storage);
 
-        // A path that merely starts with the prefix string but has no
-        // trailing slash boundary must NOT be claimed — `/_profilerish`
-        // is an app path, not the profiler viewer.
         self::assertFalse($listener->handleFrameworkRequest('/'));
         self::assertFalse($listener->handleFrameworkRequest('/blog/post'));
+
+        // Boundary check: a path that merely starts with the prefix
+        // string but has no trailing slash boundary must NOT be claimed
+        // — `/_profilerish` is an app path, not the profiler viewer.
+        // The prefix-match logic explicitly anchors on `prefix + '/'`
+        // so this stays an app-owned URL.
+        self::assertFalse($listener->handleFrameworkRequest('/_profilerish'));
+        self::assertFalse($listener->handleFrameworkRequest('/_profiler-extra'));
     }
 
     public function testWellKnownProbesAreExcludedFromProfiling(): void

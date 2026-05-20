@@ -260,7 +260,7 @@ final class RoutesCompileCommand
         $namespace = false === $sep ? '' : \substr($cls, 0, $sep);
         $shortName = false === $sep ? $cls : \substr($cls, $sep + 1);
 
-        $imports = [
+        $frameworkImports = [
             'Polidog\Relayer\Auth\AuthorizationException',
             'Polidog\Relayer\Http\Cache',
             'Polidog\Relayer\Profiler\TraceSpan',
@@ -273,41 +273,62 @@ final class RoutesCompileCommand
             'Polidog\UsePhp\Component\ComponentInterface',
             'Psr\Container\ContainerInterface',
         ];
-        // Include each listener so the dispatcher's typed parameters can
-        // reference the short class name — this is the readability
-        // payoff: a reader sees `ProfilingListener $profiling` in the
-        // constructor signature, not the FQCN.
-        foreach ($listenerClasses as $class) {
-            $imports[] = $class;
+
+        // Reserve framework short names so a listener whose short name
+        // collides with one (e.g. an app's own `Cache` listener vs
+        // `Polidog\Relayer\Http\Cache`) gets aliased instead of
+        // producing an invalid dumped class.
+        $usedShortNames = [];
+        foreach ($frameworkImports as $fqcn) {
+            $short = self::shortName($fqcn);
+            $usedShortNames[$short] = $fqcn;
         }
-        $imports = \array_values(\array_unique($imports));
-        \sort($imports);
 
-        $useLines = \implode("\n", \array_map(static fn (string $i): string => "use {$i};", $imports));
-
-        // For each listener: stash on a property named after the short
-        // class name in camelCase (e.g. ProfilingListener → $profiling).
-        // Two listeners with the same short name fall back to a
-        // disambiguating suffix.
+        // For each listener: resolve a unique short type alias and a
+        // unique property name. Two listeners with the same short class
+        // name (e.g. `App\Foo\Listener` and `App\Bar\Listener`) get
+        // aliased imports (`use App\Bar\Listener as Listener2`) and
+        // their type hints/property names use those aliases so the
+        // dumped class stays valid PHP. The dispatch chain remains
+        // statically readable — the FQCN is one short scroll above on
+        // the `use` line.
         $properties = [];
+        $listenerImports = [];
         $ctorParams = [];
         $ctorAssign = [];
-        $shortNames = [];
-        foreach ($listenerClasses as $i => $class) {
-            $listenerShort = (string) (\strrchr($class, '\\') ?: $class);
-            $listenerShort = \ltrim($listenerShort, '\\');
-            $base = self::camelize($listenerShort);
-            $name = $base;
-            $suffix = 2;
-            while (isset($shortNames[$name])) {
-                $name = $base . $suffix++;
-            }
-            $shortNames[$name] = true;
-            $properties[] = ['name' => $name, 'short' => $listenerShort];
+        $usedPropertyNames = [];
+        foreach ($listenerClasses as $class) {
+            $rawShort = self::shortName($class);
 
-            $ctorParams[] = "        {$listenerShort} \${$name}";
-            $ctorAssign[] = "        \$this->{$name} = \${$name};";
+            // Resolve the type alias used inside the class body.
+            $typeAlias = self::resolveUnique($rawShort, $usedShortNames, $class);
+            $usedShortNames[$typeAlias] = $class;
+            $listenerImports[] = $class === $typeAlias || $rawShort === $typeAlias
+                ? "use {$class};"
+                : "use {$class} as {$typeAlias};";
+
+            // Resolve the property/parameter name. Built from rawShort
+            // (the original short name) so the camelization stays
+            // intuitive regardless of how the import was aliased.
+            $propertyBase = self::camelize($rawShort);
+            $propertyName = $propertyBase;
+            $suffix = 2;
+            while (isset($usedPropertyNames[$propertyName])) {
+                $propertyName = $propertyBase . $suffix++;
+            }
+            $usedPropertyNames[$propertyName] = true;
+
+            $properties[] = ['name' => $propertyName, 'short' => $typeAlias];
+            $ctorParams[] = "        {$typeAlias} \${$propertyName}";
+            $ctorAssign[] = "        \$this->{$propertyName} = \${$propertyName};";
         }
+
+        $imports = \array_merge(
+            \array_map(static fn (string $fqcn): string => "use {$fqcn};", $frameworkImports),
+            $listenerImports,
+        );
+        \sort($imports);
+        $useLines = \implode("\n", $imports);
 
         $propertyDecls = \implode("\n", \array_map(
             static fn (array $p): string => "    private {$p['short']} \${$p['name']};",
@@ -447,6 +468,48 @@ final class RoutesCompileCommand
             }
 
             PHP;
+    }
+
+    /**
+     * The leaf segment of a FQCN — `Foo\Bar\Baz` → `Baz`. Equivalent to
+     * `(new \ReflectionClass($fqcn))->getShortName()` without paying for
+     * a reflection lookup the compile step doesn't otherwise need.
+     */
+    private static function shortName(string $fqcn): string
+    {
+        $sep = \strrpos($fqcn, '\\');
+
+        return false === $sep ? $fqcn : \substr($fqcn, $sep + 1);
+    }
+
+    /**
+     * Pick a unique short name for a new import: return `$preferred` if
+     * unused, otherwise append a 2/3/4… suffix until free.
+     *
+     * `$alreadyUsed` maps the chosen short name back to the FQCN that
+     * claims it; an exact-FQCN re-import returns the same alias so
+     * deduplication still works. Two distinct FQCNs sharing a short
+     * name produce `Foo`, `Foo2`, `Foo3` etc.
+     *
+     * @param array<string, string> $alreadyUsed shortName => FQCN claiming it
+     */
+    private static function resolveUnique(string $preferred, array $alreadyUsed, string $fqcn): string
+    {
+        if (!isset($alreadyUsed[$preferred])) {
+            return $preferred;
+        }
+        if ($alreadyUsed[$preferred] === $fqcn) {
+            return $preferred;
+        }
+
+        $suffix = 2;
+        while (isset($alreadyUsed[$preferred . $suffix])
+            && $alreadyUsed[$preferred . $suffix] !== $fqcn
+        ) {
+            ++$suffix;
+        }
+
+        return $preferred . $suffix;
     }
 
     /**
