@@ -12,6 +12,7 @@ use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\UserProvider;
+use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
@@ -24,13 +25,16 @@ use Polidog\Relayer\Router\Api\RouteHandlers;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
+use Polidog\Relayer\Router\Dispatch\DispatchListener;
+use Polidog\Relayer\Router\Dispatch\NullDispatchListener;
+use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
-use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
+use Polidog\Relayer\Router\Layout\ScriptCollection;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
@@ -49,7 +53,19 @@ use ReflectionNamedType;
 use RuntimeException;
 use Throwable;
 
-class AppRouter
+/**
+ * The router's dispatch entrypoint. Walks a Next.js App Router-style
+ * `src/Pages/` tree, matches a URL to a page or `route.php` handler,
+ * and renders through the document/layout stack.
+ *
+ * `final` by design: behavior extensions go through the
+ * {@see DispatchListener} composition seam (profiling, custom telemetry,
+ * framework-owned URLs) so dispatch stays one auditable code path
+ * instead of a chain of `parent::` overrides. The seam is unconditional
+ * — the default {@see NullDispatchListener} makes every callsite a
+ * single virtual call with no `?->` null-checks at the hooks.
+ */
+final class AppRouter
 {
     private string $appDirectory;
     private ?ContainerInterface $container;
@@ -59,6 +75,7 @@ class AppRouter
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
     private ?UsePHP $usephp = null;
+    private DispatchListener $listener;
 
     public function __construct(
         string $appDirectory,
@@ -72,6 +89,10 @@ class AppRouter
         $this->router = Router::create($this->appDirectory, $compiledRoutesFile);
         $this->document = new HtmlDocument();
         $this->autoCompilePsx = $autoCompilePsx;
+        // Default to a no-op listener so dispatch's `$this->listener->onXxx()`
+        // callsites stay unconditional — apps that bind no listener pay
+        // only the cost of a virtual call per hook.
+        $this->listener = new NullDispatchListener();
         // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
         // is the parent of the appDirectory. This matches the usePHP CLI's
         // default of <cwd>/var/cache/psx for the typical layout where the
@@ -97,6 +118,35 @@ class AppRouter
     public function setContainer(ContainerInterface $container): self
     {
         $this->container = $container;
+        // Push to the listener so a listener that needs the container
+        // (currently none of the framework's listeners, but the contract
+        // is symmetric with setDocument) sees the live binding.
+        $this->listener->setContainer($container);
+
+        return $this;
+    }
+
+    /**
+     * Wire a {@see DispatchListener} that receives every dispatch
+     * lifecycle event the router emits. Replaces the older subclass-
+     * based extension point ({@see TraceableAppRouter}'s inheritance
+     * chain) with composition — the listener may be a single concrete
+     * implementation, a polymorphic
+     * {@see RuntimeDispatcher} fan-out,
+     * or the statically-visible
+     * {@see CompiledDispatcher} dumped by
+     * `routes:compile`.
+     *
+     * The current container and document are pushed into the listener
+     * synchronously so the listener observes whatever state was
+     * established before this call. Subsequent `setContainer` /
+     * `setDocument` updates also fan out automatically.
+     */
+    public function setListener(DispatchListener $listener): self
+    {
+        $this->listener = $listener;
+        $listener->setContainer($this->container);
+        $listener->setDocument($this->document);
 
         return $this;
     }
@@ -122,6 +172,10 @@ class AppRouter
     public function setDocument(DocumentInterface $document): self
     {
         $this->document = $document;
+        // Push to the listener so e.g. ProfilingListener's debug-bridge
+        // script injection lands on the new document rather than the
+        // pre-swap one.
+        $this->listener->setDocument($document);
 
         return $this;
     }
@@ -154,6 +208,22 @@ class AppRouter
 
     public function run(): void
     {
+        // Framework-owned URL hand-off — runs before any dispatch work so
+        // a listener like the dev profiler viewer can claim its prefix
+        // (`/_profiler`) without producing a profile of itself, and
+        // before middleware so locale/dispatch closure setup doesn't run
+        // for a hijacked URL. The listener returning `true` means it has
+        // already produced a response.
+        if ($this->listener->handleFrameworkRequest(self::readPath())) {
+            return;
+        }
+
+        // Begin dispatch lifecycle — pairs with afterDispatch() in both
+        // the `finally` (normal path) and the shutdown handler (exit/die
+        // paths). The listener's afterDispatch is idempotent by contract,
+        // so both can fire without double-recording.
+        $this->listener->beforeDispatch(self::readUrl(), self::readMethod());
+
         // Build a snapshot of the request once per dispatch and stash it so
         // page factories / page constructors can be injected with it by type
         // — pages should never read $_GET / $_POST / $_SERVER directly.
@@ -189,7 +259,8 @@ class AppRouter
         // first on the normal path.
         $container = $this->container;
         $hasUsephp = null !== $this->usephp;
-        \register_shutdown_function(static function () use ($container, $hasUsephp): void {
+        $listener = $this->listener;
+        \register_shutdown_function(static function () use ($container, $hasUsephp, $listener): void {
             if ($container instanceof InjectorContainer) {
                 $container->setCurrentRequest(null);
             }
@@ -200,6 +271,13 @@ class AppRouter
             // cannot bleed into the next request's pre-dispatch code (e.g.
             // validation) under a long-running worker.
             Translators::reset();
+            // Idempotent counterpart to beforeDispatch — covers the exit
+            // paths (304 short-circuit, PRG redirect) the `finally` block
+            // below cannot reach. Listener guards against double-firing
+            // so the normal path's finally + this shutdown both running
+            // is safe.
+            $status = \http_response_code();
+            $listener->afterDispatch(\is_int($status) ? $status : 200);
         });
 
         try {
@@ -282,21 +360,22 @@ class AppRouter
                 RenderContext::clearApp();
             }
             Translators::reset();
+            // Normal-path counterpart to the shutdown handler above. The
+            // listener guards against double-firing.
+            $status = \http_response_code();
+            $this->listener->afterDispatch(\is_int($status) ? $status : 200);
         }
     }
 
-    protected function getDocument(): DocumentInterface
-    {
-        return $this->document;
-    }
-
-    protected function handleMatch(RouteMatch $match): void
+    private function handleMatch(RouteMatch $match): void
     {
         if ($match->route->isApi) {
             $this->handleApiMatch($match);
 
             return;
         }
+
+        $this->listener->onRouteMatch($match);
 
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());
 
@@ -348,8 +427,10 @@ class AppRouter
      * deliberate, content-type-neutral handler action, not an error gate, so
      * it bubbles to `run()` unchanged.
      */
-    protected function handleApiMatch(RouteMatch $match): void
+    private function handleApiMatch(RouteMatch $match): void
     {
+        $this->listener->onApiMatch($match);
+
         $file = $match->getPagePath();
 
         if (!\file_exists($file)) {
@@ -452,7 +533,7 @@ class AppRouter
      *
      * @return null|Closure(Request, Closure): void
      */
-    protected function loadMiddleware(): ?Closure
+    private function loadMiddleware(): ?Closure
     {
         $file = $this->appDirectory . '/middleware.php';
 
@@ -485,7 +566,7 @@ class AppRouter
         return $returned;
     }
 
-    protected function applyFunctionPageCache(FunctionPage $page): void
+    private function applyFunctionPageCache(FunctionPage $page): void
     {
         $cache = $page->getCache();
         if (null === $cache) {
@@ -493,14 +574,24 @@ class AppRouter
         }
 
         $effective = CachePolicy::applyCache($cache, $this->resolveEtagStore());
+        $this->listener->onCacheApplied($effective);
+
         if (CachePolicy::isNotModified($effective)) {
+            // Fire the not-modified hook BEFORE exit so a recording
+            // listener (e.g. ProfilingListener) gets its last chance to
+            // persist the profile — PHP's `finally` doesn't run on exit.
+            // The shutdown handler registered in run() catches anything
+            // the listener didn't already flush, but emitting here makes
+            // the 304 path visible to non-profiler listeners too.
+            $this->listener->onCacheNotModified($effective);
+
             CachePolicy::sendNotModified();
 
             exit;
         }
     }
 
-    protected function resolveEtagStore(): ?EtagStore
+    private function resolveEtagStore(): ?EtagStore
     {
         if (null === $this->container || !$this->container->has(EtagStore::class)) {
             return null;
@@ -517,8 +608,10 @@ class AppRouter
      * an anonymous request) into the same 302 / 401 / 403 response the
      * class-style `#[Auth]` attribute produces.
      */
-    protected function handleAuthorizationFailure(AuthorizationException $exception): void
+    private function handleAuthorizationFailure(AuthorizationException $exception): void
     {
+        $this->listener->onAuthorizationFailure($exception);
+
         if (\headers_sent()) {
             return;
         }
@@ -553,7 +646,7 @@ class AppRouter
      * auth redirect, the target is taken verbatim — the handler chose it
      * deliberately, so no `?next=` is appended.
      */
-    protected function handleRedirect(RedirectException $exception): void
+    private function handleRedirect(RedirectException $exception): void
     {
         if (\headers_sent()) {
             return;
@@ -562,8 +655,9 @@ class AppRouter
         \header('Location: ' . $exception->location, true, $exception->status);
     }
 
-    protected function handleNotFound(): void
+    private function handleNotFound(): void
     {
+        $this->listener->onNotFound();
         $this->handleErrorResponse(404, $this->tr('relayer.http.page_not_found', 'Page not found'));
     }
 
@@ -588,7 +682,7 @@ class AppRouter
      * back to the default. A middleware that hands `$next` a brand-new
      * Request (`locale() === null`) still gets it fully resolved.
      */
-    protected function resolveLocale(Request $request): Request
+    private function resolveLocale(Request $request): Request
     {
         if (null === $this->container || !$this->container->has(LocaleResolver::class)) {
             return $request;
@@ -637,13 +731,18 @@ class AppRouter
      * APIs expose no custom-message parameter. Every other status goes
      * straight to the shared error renderer with its standard reason phrase.
      */
-    protected function handleHttpException(HttpException $exception): void
+    private function handleHttpException(HttpException $exception): void
     {
         if (404 === $exception->status) {
             $this->handleNotFound();
 
             return;
         }
+
+        // 404 is recorded by onNotFound (above); only explicit non-404
+        // aborts need their own listener event so the listener can keep
+        // the two cases distinct.
+        $this->listener->onAbort($exception);
 
         $this->handleErrorResponse($exception->status, $this->localizedReason($exception));
     }
@@ -655,7 +754,7 @@ class AppRouter
      * document. This is the only place the page side touches
      * `http_response_code()` — `abort()` keeps it out of user code.
      */
-    protected function handleErrorResponse(int $status, string $message): void
+    private function handleErrorResponse(int $status, string $message): void
     {
         \http_response_code($status);
 
@@ -688,7 +787,7 @@ class AppRouter
      * @param array<string>         $layoutPaths
      * @param array<string, string> $params
      */
-    protected function loadLayouts(array $layoutPaths, array $params): LayoutStack
+    private function loadLayouts(array $layoutPaths, array $params): LayoutStack
     {
         $stack = new LayoutStack();
 
@@ -705,7 +804,23 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    protected function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
+    private function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
+    {
+        $result = $this->loadPageInternal($pagePath, $params);
+        $this->listener->onPageLoaded($pagePath, $result);
+
+        return $result;
+    }
+
+    /**
+     * The unwrapped loader; {@see loadPage()} is the listener-aware
+     * facade. Split so the listener event fires once per attempted load
+     * with the final result (function / class / null), not at every
+     * intermediate return.
+     *
+     * @param array<string, string> $params
+     */
+    private function loadPageInternal(string $pagePath, array $params): ComponentInterface|FunctionPage|null
     {
         if (!\file_exists($pagePath)) {
             return null;
@@ -749,7 +864,34 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    protected function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    private function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    {
+        // Start the page-render span BEFORE the action sniffs / state
+        // setup so it captures everything renderPage does. Listener may
+        // also emit action.dispatch / state.action events as a side
+        // effect of the start* call (the form-action and useState
+        // POST sniffs live in ProfilingListener::startPageRender).
+        $span = $this->listener->startPageRender($page);
+
+        try {
+            $this->renderPageInternal($page, $layouts, $params);
+        } finally {
+            $componentIdForSpan = $page instanceof FunctionPage
+                ? $page->getComponentId()
+                : 'page:' . $page::class;
+            $span?->stop(['componentId' => $componentIdForSpan]);
+        }
+    }
+
+    /**
+     * Unwrapped render path; {@see renderPage()} is the listener-aware
+     * facade. Split so the listener's span brackets the entire
+     * render — including the `dispatchStateAction` PRG `exit` path —
+     * via the surrounding try/finally.
+     *
+     * @param array<string, string> $params
+     */
+    private function renderPageInternal(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
@@ -824,7 +966,7 @@ class AppRouter
         // missed. Past the partial early-return too — partial responses
         // bypass the document, so they must not mutate its script queue.
         if ($this->document instanceof HtmlDocument) {
-            foreach ($this->collectScripts($page, $layouts) as $script) {
+            foreach (ScriptCollection::gather($page, $layouts) as $script) {
                 $this->document->addScript($script);
             }
         }
@@ -841,40 +983,9 @@ class AppRouter
     }
 
     /**
-     * Gather declared scripts in emission order: outer (root) layout first,
-     * inner layouts next, page last. Only LayoutComponent / PageComponent /
-     * FunctionPage carry scripts — the same instanceof asymmetry setParams()
-     * and metadata already have for raw LayoutInterface implementers. No
-     * deduplication: a layout and a page both declaring the same src is two
-     * tags by design.
-     *
-     * @return array<int, Script>
-     */
-    protected function collectScripts(ComponentInterface|FunctionPage $page, LayoutStack $layouts): array
-    {
-        $scripts = [];
-
-        foreach ($layouts->all() as $layout) {
-            if ($layout instanceof LayoutComponent) {
-                foreach ($layout->getScripts() as $script) {
-                    $scripts[] = $script;
-                }
-            }
-        }
-
-        if ($page instanceof FunctionPage || $page instanceof PageComponent) {
-            foreach ($page->getScripts() as $script) {
-                $scripts[] = $script;
-            }
-        }
-
-        return $scripts;
-    }
-
-    /**
      * Handle useState setState actions from POST (onClick, onChange, etc.).
      */
-    protected function dispatchStateAction(string $componentId, ComponentState $state): void
+    private function dispatchStateAction(string $componentId, ComponentState $state): void
     {
         if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
             return;
@@ -930,7 +1041,22 @@ class AppRouter
     /**
      * @param array<string, string> $params
      */
-    protected function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
+    private function loadLayoutFromFile(string $filePath, array $params): ?LayoutInterface
+    {
+        $layout = $this->loadLayoutFromFileInternal($filePath, $params);
+        $this->listener->onLayoutLoaded($filePath, $layout);
+
+        return $layout;
+    }
+
+    /**
+     * The unwrapped loader; {@see loadLayoutFromFile()} is the
+     * listener-aware facade. Same split as
+     * {@see loadPage()}/{@see loadPageInternal()}.
+     *
+     * @param array<string, string> $params
+     */
+    private function loadLayoutFromFileInternal(string $filePath, array $params): ?LayoutInterface
     {
         if (!\file_exists($filePath)) {
             return null;
@@ -981,7 +1107,29 @@ class AppRouter
      *   re-checked at request time. The deployment / build step owns the
      *   refresh contract via `usephp compile`.
      */
-    protected function resolveCompiledPsxPath(string $psxPath): string
+    private function resolveCompiledPsxPath(string $psxPath): string
+    {
+        // Time the resolution because in dev it may trigger an in-process
+        // PSX compile — a noticeable spike on first hit of a touched page.
+        $span = $this->listener->startPsxCompile($psxPath);
+
+        try {
+            $compiledPath = $this->cachePathForResolved($psxPath);
+            $span?->stop(['source' => $psxPath, 'compiled' => $compiledPath]);
+
+            return $compiledPath;
+        } catch (Throwable $e) {
+            $span?->stop(['source' => $psxPath, 'error' => $e->getMessage()]);
+
+            throw $e;
+        }
+    }
+
+    /**
+     * Unwrapped PSX-resolution path; {@see resolveCompiledPsxPath()} is
+     * the listener-aware facade that adds the timing span around it.
+     */
+    private function cachePathForResolved(string $psxPath): string
     {
         $compiledPath = $this->cachePathFor($psxPath);
 
@@ -1418,5 +1566,36 @@ class AppRouter
         }
 
         return null;
+    }
+
+    /**
+     * The request path (no query string) — what
+     * {@see DispatchListener::handleFrameworkRequest()} receives. Kept
+     * separate from {@see readUrl()} so callers don't have to re-parse.
+     */
+    private static function readPath(): string
+    {
+        $path = \parse_url(self::readUrl(), \PHP_URL_PATH);
+
+        return \is_string($path) ? $path : '/';
+    }
+
+    /**
+     * The verbatim REQUEST_URI — what
+     * {@see DispatchListener::beforeDispatch()} receives so a listener can
+     * record the full URL (including query string) on the profile.
+     */
+    private static function readUrl(): string
+    {
+        $uri = $_SERVER['REQUEST_URI'] ?? '/';
+
+        return \is_string($uri) ? $uri : '/';
+    }
+
+    private static function readMethod(): string
+    {
+        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+        return \is_string($method) ? $method : 'GET';
     }
 }
