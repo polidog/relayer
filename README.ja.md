@@ -239,17 +239,6 @@ dev では自動コンパイル（`APP_ENV=dev`）、本番では
 による URL 衝突）は初回リクエストではなくデプロイ時のコンパイルで
 失敗します。
 
-**ディスパッチリスナー。** `Relayer::boot()` は `relayer.dispatch_listener`
-タグ付きの全サービスを多態的な `RuntimeDispatcher` で wire し、各
-ライフサイクルイベント（ルートマッチ、ページロード、キャッシュ適用、…）を
-登録順に全リスナーへ fan-out します。アプリ独自のリスナーは
-`Polidog\Relayer\Router\Dispatch\DispatchListener` を実装するサービスを
-そのタグ付きで登録すれば、dev/prod 双方で自動検出されます。
-
-`vendor/bin/relayer dispatch:list` は解決済みのチェーンを出力する監査
-コマンドです — どのリスナーがどの順で wire されているか、どのイベント
-を受けるかを、アプリを起動せずに確認できます。
-
 **DI コンテナのコンパイル（本番）。** 既定では `Relayer::boot()` は
 Symfony DI コンテナを*毎リクエスト*ビルドして `compile()` します — 通常
 これが回避可能なリクエストコストの最大要因です。`vendor/bin/relayer
@@ -1967,9 +1956,9 @@ SessionStorage / Authenticator をラップし、`db.query`・`cache.etag_*`・
 
 ### Web ビュー
 
-`ProfilingListener`（フレームワーク同梱の `DispatchListener`）が通常
-ディスパッチの **前に** `/_profiler` を横取りします（プロファイラ自身は
-プロファイルされません）:
+`AppRouter` は通常ディスパッチの **前に** `/_profiler` を横取りします
+（`ProfilerStorage` が `setProfiler()` で wire されているとき＝ dev のみ） —
+プロファイラ自身はプロファイルされません:
 
 | URL                  | 内容                                                |
 | -------------------- | --------------------------------------------------- |

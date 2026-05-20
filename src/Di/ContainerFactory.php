@@ -41,7 +41,6 @@ use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Relayer;
-use Polidog\Relayer\Router\Dispatch\ProfilingListener;
 use Polidog\Relayer\Scaffold\ContainerCompileCommand;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
@@ -235,17 +234,6 @@ final class ContainerFactory
             self::applyDefaults($definition);
         }
 
-        // Resolve the `relayer.dispatch_listener` tag NOW and stash the
-        // service-ID list as a parameter so it survives the PhpDumper
-        // round-trip. A dumped container exposes `getParameter()` but
-        // drops the tag index, so `findTaggedServiceIds()` only works
-        // here on the live ContainerBuilder — not later at runtime under
-        // the compiled container. The parameter is the runtime-portable
-        // mirror of the lookup, read by {@see Relayer::boot()} to build
-        // the {@see RuntimeDispatcher} chain.
-        $listenerIds = \array_keys($container->findTaggedServiceIds(Relayer::DISPATCH_LISTENER_TAG));
-        $container->setParameter(Relayer::DISPATCH_LISTENERS_PARAMETER, $listenerIds);
-
         // Two env-placeholder modes, picked by `$forDump`. A
         // `ContainerBuilder` used directly (dev boot, or the prod
         // missing-dump fallback) must resolve `%env(VAR)%` at compile
@@ -321,21 +309,6 @@ final class ContainerFactory
         ;
         $container->setAlias(Profiler::class, NullProfiler::class)
             ->setPublic(true)
-        ;
-
-        // Dispatch listener — registered unconditionally so the same boot
-        // path works in dev and prod. Autowired against the `Profiler`
-        // alias (NullProfiler in prod / RecordingProfiler in dev) and the
-        // optional `ProfilerStorage` (only bound in dev — autowire resolves
-        // the constructor's nullable default to null when absent).
-        //
-        // The tag is the discovery mechanism {@see Relayer::boot()} reads at
-        // runtime (via {@see Relayer::DISPATCH_LISTENERS_PARAMETER}) and
-        // `relayer dispatch:list` prints for offline audit.
-        $container->register(ProfilingListener::class)
-            ->setAutowired(true)
-            ->setPublic(true)
-            ->addTag(Relayer::DISPATCH_LISTENER_TAG)
         ;
 
         if ($isDev) {
