@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Tests\Di;
 
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
+use Polidog\Relayer\Di\ContainerFactory;
 use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
