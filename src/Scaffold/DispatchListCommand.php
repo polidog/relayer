@@ -10,7 +10,8 @@ use Polidog\Relayer\Di\ContainerFactory;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Dispatch\DispatchListener;
 use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
-use Symfony\Component\DependencyInjection\Definition;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
+use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 use Throwable;
 
@@ -98,7 +99,13 @@ final class DispatchListCommand
             return 1;
         }
 
-        $listenerIds = \array_keys($container->findTaggedServiceIds(Relayer::DISPATCH_LISTENER_TAG));
+        // Read the same parameter {@see Relayer::boot()} reads at runtime —
+        // the canonical source — instead of re-querying the tag locally.
+        // Tag lookups only work on a live ContainerBuilder; the parameter
+        // is the runtime-portable mirror that survives a `container:compile`
+        // PhpDumper round-trip. Reading from it here means the audit cannot
+        // diverge from what actually dispatches in prod.
+        $listenerIds = self::readListenerIds($container);
 
         $write(\sprintf('Dispatch listeners (%s), in registration order:', Relayer::DISPATCH_LISTENER_TAG));
         if ([] === $listenerIds) {
@@ -109,19 +116,20 @@ final class DispatchListCommand
             return 0;
         }
 
-        $listenerClasses = [];
-        foreach ($listenerIds as $id) {
-            $class = self::resolveListenerClass($container->getDefinition($id), $id);
-            if (null === $class) {
-                $write("Listener service {$id} has no resolvable class — re-register it with a concrete class name.");
-
-                return 1;
+        foreach ($listenerIds as $i => $id) {
+            // Boot dispatches services via `$psr->get($id)` and does not
+            // require the id to be a class string, so we mirror that
+            // tolerance here. When the id IS a class (the framework
+            // convention), it's the answer. For factory-defined or
+            // alias-style ids, fall back to the Definition's explicit
+            // class — and if neither is available, print the id alone
+            // rather than rejecting a valid runtime configuration.
+            $class = self::resolveListenerClass($container, $id);
+            if (null === $class || $class === $id) {
+                $write(\sprintf('  %d. %s', $i + 1, $id));
+            } else {
+                $write(\sprintf('  %d. %s (class: %s)', $i + 1, $id, $class));
             }
-            $listenerClasses[] = $class;
-        }
-
-        foreach ($listenerClasses as $i => $class) {
-            $write(\sprintf('  %d. %s', $i + 1, $class));
         }
 
         $write('');
@@ -160,17 +168,59 @@ final class DispatchListCommand
     }
 
     /**
-     * The DI convention is class-keyed services (id === class), so the id
-     * itself is the answer when no explicit class is set on the Definition.
+     * Read the listener service IDs from {@see Relayer::DISPATCH_LISTENERS_PARAMETER}
+     * — the same parameter {@see Relayer::boot()} reads at runtime. Filters
+     * to strings defensively; the parameter is set by {@see ContainerFactory}
+     * from `findTaggedServiceIds()`, so any non-string entry would be a
+     * Symfony bug we'd rather skip than choke on.
+     *
+     * @return list<string>
      */
-    private static function resolveListenerClass(Definition $definition, string $id): ?string
+    private static function readListenerIds(ContainerInterface $container): array
     {
-        $class = $definition->getClass();
-        if (\is_string($class) && '' !== $class) {
-            return $class;
+        if (!$container->hasParameter(Relayer::DISPATCH_LISTENERS_PARAMETER)) {
+            return [];
+        }
+        $ids = $container->getParameter(Relayer::DISPATCH_LISTENERS_PARAMETER);
+        if (!\is_array($ids)) {
+            return [];
         }
 
-        return \class_exists($id) ? $id : null;
+        $result = [];
+        foreach ($ids as $id) {
+            if (\is_string($id)) {
+                $result[] = $id;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Best-effort: when the service ID is a class string, return it
+     * verbatim (the framework convention). When it isn't, try the
+     * Definition's explicit `getClass()`. If neither resolves to a class
+     * name, return null — the caller prints just the service ID in that
+     * case rather than rejecting it, mirroring boot's tolerance for
+     * factory-defined / alias-style services.
+     */
+    private static function resolveListenerClass(ContainerInterface $container, string $id): ?string
+    {
+        if (\class_exists($id)) {
+            return $id;
+        }
+
+        // Definition introspection is only available on a live
+        // ContainerBuilder (the case here — ContainerFactory::create
+        // without a compiledContainerFile returns one). A dumped container
+        // would not expose getDefinition(), but dispatch:list always
+        // rebuilds the container freshly so we never see that here.
+        if (!$container instanceof ContainerBuilder || !$container->hasDefinition($id)) {
+            return null;
+        }
+        $class = $container->getDefinition($id)->getClass();
+
+        return \is_string($class) && '' !== $class ? $class : null;
     }
 
     /**

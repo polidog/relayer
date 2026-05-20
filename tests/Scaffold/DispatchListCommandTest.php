@@ -167,6 +167,40 @@ final class DispatchListCommandTest extends TestCase
         self::assertStringContainsString('3. ' . BetaMetricsListener::class, $output);
     }
 
+    public function testNonClassServiceIdIsPrintedWithExplicitClassAnnotation(): void
+    {
+        // `Relayer::boot()` dispatches services via `$psr->get($id)` and
+        // does NOT require the id to be a class string — apps that
+        // register a listener under a custom service id (factory style)
+        // are valid. The audit must not reject such configurations: it
+        // prints the service id verbatim and annotates it with the
+        // resolvable class when the Definition exposes one.
+        \mkdir($this->project . '/config', 0o755, true);
+        \file_put_contents(
+            $this->project . '/config/services.yaml',
+            <<<'YAML'
+                services:
+                  app.metrics_listener:
+                    class: Polidog\Relayer\Tests\Fixtures\Dispatch\Alpha\MetricsListener
+                    public: true
+                    autowire: true
+                    tags: [relayer.dispatch_listener]
+                YAML,
+        );
+
+        $status = DispatchListCommand::run([], $this->capture(), $this->project);
+        self::assertSame(0, $status, $this->captured());
+
+        $output = $this->captured();
+        // ProfilingListener still leads (framework default), then the
+        // custom-id listener with class annotation.
+        self::assertStringContainsString('1. ' . ProfilingListener::class, $output);
+        self::assertStringContainsString(
+            '2. app.metrics_listener (class: ' . AlphaMetricsListener::class . ')',
+            $output,
+        );
+    }
+
     public function testContainerBuildFailureReportsError(): void
     {
         // Same trigger pattern the old dispatcher-dump test used: an
