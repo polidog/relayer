@@ -82,6 +82,47 @@ final class AppRouterProfilerTest extends TestCase
         self::assertStringContainsString('Profiler', $output);
     }
 
+    public function testProfilerDetailReturns404ForUnknownToken(): void
+    {
+        // A syntactically valid token (16 lowercase hex chars) that the
+        // storage doesn't know about. ProfilerWebView paints a "not
+        // found" page in this case; the response status must match the
+        // body so tools / curl scripts can distinguish missing from
+        // found.
+        $storage = new InMemoryProfilerStorage();
+        $router = AppRouter::create($this->workDir)
+            ->setProfiler(new RecordingProfiler($storage), $storage)
+        ;
+
+        $this->dispatch($router, '/_profiler/0123456789abcdef', 'GET');
+
+        self::assertSame(404, \http_response_code());
+    }
+
+    public function testProfilerDetailReturns200ForKnownToken(): void
+    {
+        // Pre-seed the storage so the detail view has a real profile to
+        // render; status must be 200 in this case.
+        $storage = new InMemoryProfilerStorage();
+        $profiler = new RecordingProfiler($storage);
+        // Drive one dispatch to generate + persist a real profile,
+        // capture its token, then hit the detail URL for it. This
+        // exercises the full storage round-trip rather than a
+        // hand-constructed Profile, so the test stays honest about the
+        // actual contract.
+        $router = AppRouter::create($this->workDir)->setProfiler($profiler, $storage);
+        $this->dispatch($router, '/ping', 'GET');
+        $token = \array_values($storage->saved)[0]->token;
+
+        $output = $this->dispatch($router, '/_profiler/' . $token, 'GET');
+
+        self::assertSame(200, \http_response_code());
+        // The detail page renders the profile's URL on the heading; that
+        // is a load-bearing signal we got the right view and not a 404
+        // body.
+        self::assertStringContainsString('/ping', $output);
+    }
+
     public function testNullProfilerIsToleratedAndDoesNotRecord(): void
     {
         // Defensive: a NullProfiler instance wired in (Relayer::boot

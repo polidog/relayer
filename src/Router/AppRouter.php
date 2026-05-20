@@ -1713,7 +1713,14 @@ final class AppRouter
             return Response::make($view->renderDetail($token), 404, ['Content-Type' => 'text/html; charset=utf-8']);
         }
 
-        return Response::make($view->renderDetail($token), 200, ['Content-Type' => 'text/html; charset=utf-8']);
+        // Pre-resolve so the HTTP status matches the rendered body.
+        // `ProfilerWebView::renderDetail()` already paints a "Profile
+        // not found" page when the storage returns null; this just
+        // aligns the response status with that content so tools / curl
+        // scripts can tell the two cases apart.
+        $status = null !== $storage->load($token) ? 200 : 404;
+
+        return Response::make($view->renderDetail($token), $status, ['Content-Type' => 'text/html; charset=utf-8']);
     }
 
     /**
