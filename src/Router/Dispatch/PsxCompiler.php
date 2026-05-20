@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Dispatch;
 
 use Polidog\Relayer\Router\AppRouter;
-use Polidog\Relayer\Tests\RelayerBootTest;
 use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Psx\Compiler;
 use RuntimeException;
@@ -28,10 +27,9 @@ final class PsxCompiler
     ) {}
 
     /**
-     * Observability accessor: where compiled `.psx.php` files land. Read by
-     * boot-time tests pinning the cache directory to `<root>/var/cache/psx`
-     * (see {@see RelayerBootTest}). Not used at
-     * dispatch time.
+     * Observability accessor: where compiled `.psx.php` files land — used
+     * by boot-time tests pinning the cache directory location, not on the
+     * dispatch path.
      */
     public function cacheDir(): string
     {
