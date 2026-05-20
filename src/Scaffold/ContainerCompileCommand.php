@@ -88,7 +88,11 @@ final class ContainerCompileCommand
         try {
             $configurator = self::discoverConfigurator($root, $write);
             // isDev: false — the dump is only ever read by prod boot.
-            $container = ContainerFactory::create($root, $configurator, false);
+            // forDump: true — keep `%env(VAR)%` placeholders intact so
+            // PhpDumper can wire them to per-request `getEnv()` calls in
+            // the dumped class. Without this the live env values would be
+            // baked into the dump and runtime env changes would be ignored.
+            $container = ContainerFactory::create($root, $configurator, false, forDump: true);
 
             $class = Relayer::COMPILED_CONTAINER_CLASS;
             $sep = \strrpos($class, '\\');
