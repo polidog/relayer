@@ -5,18 +5,13 @@ declare(strict_types=1);
 namespace Polidog\Relayer;
 
 use Polidog\Relayer\Di\ContainerFactory;
-use Polidog\Relayer\Generated\CompiledDispatcher;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\Dispatch\DispatchListener;
 use Polidog\Relayer\Router\Dispatch\ProfilingListener;
 use Polidog\Relayer\Router\Dispatch\RuntimeDispatcher;
-use Polidog\Relayer\Scaffold\RoutesCompileCommand;
 use Polidog\UsePhp\UsePHP;
-use ReflectionMethod;
-use ReflectionNamedType;
-use RuntimeException;
 use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 
@@ -82,12 +77,11 @@ final class Relayer
     /**
      * Symfony service tag the DI container marks
      * {@see DispatchListener} services with.
-     * {@see RoutesCompileCommand} reads tagged
-     * services in registration order to dump
-     * {@see COMPILED_DISPATCHER_FILE}; {@see Relayer::boot()}
-     * reads the resolved list (via {@see DISPATCH_LISTENERS_PARAMETER}) at
-     * runtime when no compiled artifact exists, so dev and prod share the
-     * discovery mechanism.
+     * {@see Relayer::boot()} reads the resolved list (via
+     * {@see DISPATCH_LISTENERS_PARAMETER}) at runtime, so the dispatch
+     * chain is discovered the same way in dev and prod. `relayer
+     * dispatch:list` prints that chain so an operator can audit it
+     * without running the app.
      */
     public const DISPATCH_LISTENER_TAG = 'relayer.dispatch_listener';
 
@@ -102,26 +96,6 @@ final class Relayer
      * runtime-portable mirror of that lookup.
      */
     public const DISPATCH_LISTENERS_PARAMETER = 'relayer.dispatch_listeners';
-
-    /**
-     * Project-root-relative path of the compiled-dispatcher artifact —
-     * a {@see CompiledDispatcher} `final class`
-     * `routes:compile` emits next to the routes dump. Boot loads it when
-     * present and wires the resulting dispatcher into the router; absent,
-     * boot falls back to a polymorphic
-     * {@see RuntimeDispatcher} over the
-     * tag-discovered listeners. Same presence-gated, single-source-of-truth
-     * contract as {@see COMPILED_ROUTES_FILE} and {@see COMPILED_CONTAINER_FILE}.
-     */
-    public const COMPILED_DISPATCHER_FILE = 'var/cache/routes/dispatcher.php';
-
-    /**
-     * Fully-qualified class name `relayer routes:compile` dumps into
-     * {@see COMPILED_DISPATCHER_FILE}. Same `Generated\` namespacing as
-     * the container dump so the two artifacts cannot collide with any
-     * hand-written framework class.
-     */
-    public const COMPILED_DISPATCHER_CLASS = 'Polidog\Relayer\Generated\CompiledDispatcher';
 
     /**
      * @param string               $projectRoot  Absolute path to the project root (the
@@ -198,13 +172,11 @@ final class Relayer
         $usephp = self::buildUsePhp($projectRoot, $isDev);
         $router->setUsePhp($usephp);
 
-        // Attach the dispatch listener — preferring the precompiled
-        // CompiledDispatcher (statically-visible chain) when present,
-        // falling back to a polymorphic RuntimeDispatcher over the same
-        // service IDs otherwise. The two paths are observationally
-        // identical; the compiled form lets an operator audit the chain
-        // by opening one file.
-        $listener = self::resolveListener($container, $psr, $projectRoot);
+        // Attach the dispatch listener — a polymorphic RuntimeDispatcher
+        // over the tag-discovered listeners (singleton bypass when the
+        // chain has exactly one listener, the typical case). `relayer
+        // dispatch:list` prints the same chain for offline audit.
+        $listener = self::resolveListener($container, $psr);
         if (null !== $listener) {
             // Apps configure extra profile-excluded paths via
             // PROFILER_EXCLUDED_PATHS env — only the framework's own
@@ -220,8 +192,7 @@ final class Relayer
     }
 
     /**
-     * Resolve the {@see DispatchListener} to install on the router:
-     * either the {@see CompiledDispatcher} dump (when present) or a
+     * Resolve the {@see DispatchListener} to install on the router as a
      * {@see RuntimeDispatcher} over the {@see DISPATCH_LISTENERS_PARAMETER}
      * service IDs. Returns null only when the container exposes no
      * listeners at all — e.g. an app explicitly overrode the framework's
@@ -231,13 +202,7 @@ final class Relayer
     private static function resolveListener(
         SymfonyContainerInterface $container,
         InjectorContainer $psr,
-        string $projectRoot,
     ): ?DispatchListener {
-        $dispatcherFile = $projectRoot . '/' . self::COMPILED_DISPATCHER_FILE;
-        if (\is_file($dispatcherFile)) {
-            return self::instantiateCompiledDispatcher($dispatcherFile, $psr);
-        }
-
         $listeners = self::discoverListeners($container, $psr);
         if ([] === $listeners) {
             return null;
@@ -245,59 +210,11 @@ final class Relayer
         if (1 === \count($listeners)) {
             // Pass the singleton through directly so the router's
             // setListener can dispatch hooks without the polymorphic
-            // foreach fan-out — the runtime equivalent of the
-            // CompiledDispatcher's single-listener forwarding shape.
+            // foreach fan-out.
             return $listeners[0];
         }
 
         return new RuntimeDispatcher($listeners);
-    }
-
-    /**
-     * Load the dumped CompiledDispatcher and wire its constructor
-     * arguments by reflecting the parameter types against the live
-     * container. Mirrors how Symfony's autowire fills the same params
-     * at container-build time — except here we do it at boot for one
-     * specific class, post-dump, with no compile pass available.
-     */
-    private static function instantiateCompiledDispatcher(string $dispatcherFile, InjectorContainer $psr): DispatchListener
-    {
-        require_once $dispatcherFile;
-
-        /** @var string $cls */
-        $cls = self::COMPILED_DISPATCHER_CLASS;
-        if (!\class_exists($cls, false)) {
-            throw new RuntimeException(\sprintf(
-                'Compiled dispatcher %s did not declare expected class %s — re-run `relayer routes:compile`.',
-                $dispatcherFile,
-                $cls,
-            ));
-        }
-
-        $ctor = new ReflectionMethod($cls, '__construct');
-        $args = [];
-        foreach ($ctor->getParameters() as $parameter) {
-            $type = $parameter->getType();
-            if (!$type instanceof ReflectionNamedType || $type->isBuiltin()) {
-                throw new RuntimeException(\sprintf(
-                    'Compiled dispatcher %s parameter $%s lacks a class type — re-run `relayer routes:compile`.',
-                    $cls,
-                    $parameter->getName(),
-                ));
-            }
-            $args[] = $psr->get($type->getName());
-        }
-
-        $instance = new $cls(...$args);
-        if (!$instance instanceof DispatchListener) {
-            throw new RuntimeException(\sprintf(
-                'Compiled dispatcher %s did not produce a %s — re-run `relayer routes:compile`.',
-                $dispatcherFile,
-                DispatchListener::class,
-            ));
-        }
-
-        return $instance;
     }
 
     /**

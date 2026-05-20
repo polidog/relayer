@@ -241,8 +241,8 @@ final class ContainerFactory
         // drops the tag index, so `findTaggedServiceIds()` only works
         // here on the live ContainerBuilder — not later at runtime under
         // the compiled container. The parameter is the runtime-portable
-        // mirror of the lookup, read by {@see Relayer::boot()} when no
-        // compiled-dispatcher artifact exists.
+        // mirror of the lookup, read by {@see Relayer::boot()} to build
+        // the {@see RuntimeDispatcher} chain.
         $listenerIds = \array_keys($container->findTaggedServiceIds(Relayer::DISPATCH_LISTENER_TAG));
         $container->setParameter(Relayer::DISPATCH_LISTENERS_PARAMETER, $listenerIds);
 
@@ -329,10 +329,9 @@ final class ContainerFactory
         // optional `ProfilerStorage` (only bound in dev — autowire resolves
         // the constructor's nullable default to null when absent).
         //
-        // The tag is the discovery mechanism `routes:compile` reads to dump
-        // a {@see \Polidog\Relayer\Generated\CompiledDispatcher} whose
-        // constructor signature mirrors registration order — so an operator
-        // can audit the dispatch chain by reading one file.
+        // The tag is the discovery mechanism {@see Relayer::boot()} reads at
+        // runtime (via {@see Relayer::DISPATCH_LISTENERS_PARAMETER}) and
+        // `relayer dispatch:list` prints for offline audit.
         $container->register(ProfilingListener::class)
             ->setAutowired(true)
             ->setPublic(true)

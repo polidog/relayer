@@ -37,6 +37,7 @@ final class InitCommand
           relayer routes             list the routes discovered under src/Pages
           relayer routes:compile     write the precompiled route artifact (run at deploy)
           relayer container:compile  dump the DI container to PHP (run at deploy)
+          relayer dispatch:list      list the dispatch listeners wired through the DI container
           relayer profiler:clear     delete cached dev profiler data (var/cache/profiler)
 
         Run inside a project that has already required the framework
@@ -79,6 +80,10 @@ final class InitCommand
 
         if ('container:compile' === $command) {
             return ContainerCompileCommand::run(\array_slice($args, 1), $write, $cwd);
+        }
+
+        if ('dispatch:list' === $command) {
+            return DispatchListCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('profiler:clear' === $command) {

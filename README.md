@@ -236,26 +236,17 @@ reflects the current tree and never goes stale. Scan-time ambiguities
 (page/`route.php` clashes, route-group URL collisions) fail the compile at
 deploy rather than on the first request.
 
-**Compiled dispatch pipeline.** `routes:compile` also emits a sibling
-artifact at `var/cache/routes/dispatcher.php`: a
-`final class CompiledDispatcher implements DispatchListener` whose
-constructor takes each registered listener in registration order and
-whose every method body forwards to those listeners in the same order.
-Opening the file answers "which listener fires at which hook in what
-order?" without running anything — the static-visibility goal of the
-composition refactor.
+**Dispatch listeners.** `Relayer::boot()` wires every service tagged
+`relayer.dispatch_listener` through a polymorphic `RuntimeDispatcher`
+that fan-outs each lifecycle event (route match, page loaded, cache
+applied, …) to every listener in registration order. Apps that need
+their own listener register a service implementing
+`Polidog\Relayer\Router\Dispatch\DispatchListener` with that tag —
+discovery is automatic in dev and prod.
 
-`Relayer::boot()` presence-gates the load: dispatcher dump present ⇒
-load it and wire it into the router; absent ⇒ fall back to a polymorphic
-`RuntimeDispatcher` over the same service IDs (resolved from a container
-parameter that survives the `container:compile` round-trip). Apps that
-need their own listener register a service implementing
-`Polidog\Relayer\Router\Dispatch\DispatchListener` with the
-`relayer.dispatch_listener` tag — both paths discover it automatically.
-
-The dispatcher dump bakes only the listener service IDs (class names),
-not their constructor arguments, so env-derived listener config still
-resolves at runtime through the live container.
+`vendor/bin/relayer dispatch:list` prints the resolved chain so an
+operator can audit which listeners are wired, in what order, and which
+events each one receives, without running the application.
 
 **Compiled DI container (production).** Otherwise `Relayer::boot()` builds
 and `compile()`s the Symfony DI container on *every* request — typically
@@ -273,7 +264,7 @@ scan-free image:
 ```bash
 composer install --no-dev --classmap-authoritative
 vendor/bin/usephp compile src/Pages      # .psx  -> compiled PHP
-vendor/bin/relayer routes:compile         # route map + dispatcher -> PHP
+vendor/bin/relayer routes:compile         # route map -> PHP
 vendor/bin/relayer container:compile      # DI container -> PHP
 ```
 

@@ -239,25 +239,16 @@ dev では自動コンパイル（`APP_ENV=dev`）、本番では
 による URL 衝突）は初回リクエストではなくデプロイ時のコンパイルで
 失敗します。
 
-**ディスパッチ pipeline のコンパイル。** `routes:compile` は同時に
-`var/cache/routes/dispatcher.php` も書き出します — 登録順に各リスナー
-を受け取るコンストラクタを持ち、各インタフェースメソッドが同じ順に
-リスナーへ転送する `final class CompiledDispatcher implements
-DispatchListener` です。ファイルを開けば「どのフックでどのリスナーが
-どの順に呼ばれるか」が型と呼び出し順だけで完全に判ります — composition
-リファクタの静的可視性が狙いです。
-
-`Relayer::boot()` は有無ゲートでロードします: dispatcher ダンプあり ⇒
-ロードしてルータに wire / なし ⇒ 同じ service ID 群を多態的に fan-out
-する `RuntimeDispatcher` に縮退（`container:compile` のラウンドトリップを
-生き残るコンテナ parameter からリスナーを取得）。アプリ独自のリスナーは
+**ディスパッチリスナー。** `Relayer::boot()` は `relayer.dispatch_listener`
+タグ付きの全サービスを多態的な `RuntimeDispatcher` で wire し、各
+ライフサイクルイベント（ルートマッチ、ページロード、キャッシュ適用、…）を
+登録順に全リスナーへ fan-out します。アプリ独自のリスナーは
 `Polidog\Relayer\Router\Dispatch\DispatchListener` を実装するサービスを
-`relayer.dispatch_listener` タグ付きで登録すれば、どちらの経路でも
-自動検出されます。
+そのタグ付きで登録すれば、dev/prod 双方で自動検出されます。
 
-dispatcher ダンプに焼き込まれるのは listener の service ID
-（クラス名）だけで、コンストラクタ引数は焼かれません — env 由来の
-listener 設定はランタイムにライブコンテナ経由で解決されます。
+`vendor/bin/relayer dispatch:list` は解決済みのチェーンを出力する監査
+コマンドです — どのリスナーがどの順で wire されているか、どのイベント
+を受けるかを、アプリを起動せずに確認できます。
 
 **DI コンテナのコンパイル（本番）。** 既定では `Relayer::boot()` は
 Symfony DI コンテナを*毎リクエスト*ビルドして `compile()` します — 通常
@@ -275,7 +266,7 @@ container:compile` がそれを素の PHP クラス
 ```bash
 composer install --no-dev --classmap-authoritative
 vendor/bin/usephp compile src/Pages      # .psx  -> コンパイル済み PHP
-vendor/bin/relayer routes:compile         # ルートマップ + dispatcher -> PHP
+vendor/bin/relayer routes:compile         # ルートマップ -> PHP
 vendor/bin/relayer container:compile      # DI コンテナ -> PHP
 ```
 
