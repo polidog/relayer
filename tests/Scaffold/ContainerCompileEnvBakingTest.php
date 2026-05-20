@@ -69,7 +69,11 @@ final class ContainerCompileEnvBakingTest extends TestCase
         // boot, not in the build pipeline" deployment model).
         $this->setEnv(self::RUNTIME_VAR, '');
 
-        $container = ContainerFactory::create($this->project, $configurator, false);
+        // forDump: true — same signal `relayer container:compile` passes.
+        // Keeps `%env(VAR)%` placeholders intact so PhpDumper can wire
+        // them to per-request `getEnv()` calls; without it the live env
+        // value would be resolved at compile time and baked into the dump.
+        $container = ContainerFactory::create($this->project, $configurator, false, forDump: true);
         [$fqcn, $dumpFile] = $this->dumpToFile($container, 'EnvPlaceholderDump');
 
         // Switch the env to the "runtime" value, then load the dump. A
@@ -99,7 +103,11 @@ final class ContainerCompileEnvBakingTest extends TestCase
 
         $this->setEnv(self::BAKED_VAR, 'at-build-time');
 
-        $container = ContainerFactory::create($this->project, $configurator, false);
+        // forDump: true — match the dump-path signal in production
+        // (`relayer container:compile`). The trap this test pins is
+        // independent of the placeholder mode: a configurator that hands
+        // `setParameter()` a plain string bakes that string regardless.
+        $container = ContainerFactory::create($this->project, $configurator, false, forDump: true);
         [$fqcn, $dumpFile] = $this->dumpToFile($container, 'EnvBakedDump');
 
         // Production-style runtime injection. The dump must NOT see this

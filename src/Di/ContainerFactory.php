@@ -93,6 +93,25 @@ final class ContainerFactory
      * @param null|string          $compiledContainerFile Absolute path to a PhpDumper
      *                                                    artifact, or null to always
      *                                                    live-build
+     * @param bool                 $forDump               True only when the caller will
+     *                                                    immediately pass the returned
+     *                                                    container to {@see PhpDumper}.
+     *                                                    Selects Symfony's two env
+     *                                                    placeholder modes: false (the
+     *                                                    default) resolves
+     *                                                    `%env(VAR)%` to the live env
+     *                                                    value at compile time so a
+     *                                                    {@see ContainerBuilder} used
+     *                                                    directly returns real values
+     *                                                    from `getParameter()` /
+     *                                                    service args; true keeps the
+     *                                                    placeholders intact so
+     *                                                    PhpDumper can embed the
+     *                                                    per-request `getEnv()` calls
+     *                                                    a dumped container resolves
+     *                                                    at runtime. Set by
+     *                                                    {@see ContainerCompileCommand}
+     *                                                    on the dump path.
      *
      * @return ($compiledContainerFile is null ? ContainerBuilder : ContainerInterface)
      */
@@ -101,6 +120,7 @@ final class ContainerFactory
         ?AppConfigurator $configurator,
         bool $isDev,
         ?string $compiledContainerFile = null,
+        bool $forDump = false,
     ): ContainerInterface {
         if (null !== $compiledContainerFile && \is_file($compiledContainerFile)) {
             require_once $compiledContainerFile;
@@ -212,7 +232,17 @@ final class ContainerFactory
             self::applyDefaults($definition);
         }
 
-        $container->compile();
+        // Two env-placeholder modes, picked by `$forDump`. A
+        // `ContainerBuilder` used directly (dev boot, or the prod
+        // missing-dump fallback) must resolve `%env(VAR)%` at compile
+        // time — Symfony's runtime `getEnv()` substitution only lives in
+        // PhpDumper-generated classes, so without this both `getParameter()`
+        // and service args would hand back raw `env_xxx_VAR_xxx`
+        // placeholders. On the dump path we keep the placeholders so
+        // PhpDumper can wire them to per-request `getEnv()` calls in the
+        // dumped class. Mirrors Symfony's own contract for
+        // `ContainerBuilder::compile($resolveEnvPlaceholders)`.
+        $container->compile(!$forDump);
 
         return $container;
     }
