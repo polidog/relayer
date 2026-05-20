@@ -121,11 +121,20 @@ final class RoutesCompileCommand
      * No listeners → no file written (boot falls back to RuntimeDispatcher
      * over the same service IDs via the parameter mirror, so the result
      * is observationally identical without leaving a stale artifact
-     * behind). A build / dump failure surfaces here at deploy.
+     * behind).
+     *
+     * Container-build failure is **non-fatal** — `routes:compile`'s
+     * contract is "no env coupling", so a build problem that only shows
+     * up because env values are missing at compile time must not
+     * regress the previously env-free route dump. We warn and exit 0;
+     * the runtime then attaches the listener via the parameter-mirror
+     * RuntimeDispatcher fallback once boot env is available. Use
+     * `container:compile` if a hard deploy-time gate on the full
+     * container is needed.
      *
      * @param Closure(string): void $write
      *
-     * @return int 0 on success (including the "no listeners" case), 1 on a build/write failure
+     * @return int 0 on success (including the "no listeners" / build-warning cases)
      */
     private static function writeDispatcher(string $root, string $outDir, Closure $write): int
     {
@@ -145,9 +154,10 @@ final class RoutesCompileCommand
             // PhpDumper output, so resolved env values are fine here.
             $container = ContainerFactory::create($root, $configurator, false);
         } catch (Throwable $e) {
-            $write('Could not compile the dispatcher: ' . $e->getMessage());
+            $write('Skipping dispatcher dump (container build failed): ' . $e->getMessage());
+            $write('routes.php is still valid; the runtime will discover listeners on boot.');
 
-            return 1;
+            return 0;
         }
 
         $listenerIds = $container->findTaggedServiceIds(Relayer::DISPATCH_LISTENER_TAG);

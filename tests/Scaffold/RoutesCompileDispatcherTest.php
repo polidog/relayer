@@ -178,6 +178,40 @@ final class RoutesCompileDispatcherTest extends TestCase
         self::assertFileExists($this->project . '/' . Relayer::COMPILED_ROUTES_FILE);
     }
 
+    public function testContainerBuildFailureDoesNotRegressRoutesDump(): void
+    {
+        // `routes:compile`'s contract is "no env coupling" — routes.php
+        // must stay env-free. So if the container fails to build at
+        // compile time (typical reason: an env-derived service that
+        // depends on a deploy-only secret), the dispatcher dump is
+        // skipped but the routes dump still lands. The runtime then
+        // attaches the listener via the parameter-mirror fallback once
+        // env is available.
+        //
+        // Reproduce by autowiring PdoDatabase with no DSN: a non-nullable
+        // string constructor parameter that Symfony cannot satisfy, the
+        // same class of failure an env-only-at-deploy DSN would produce.
+        \mkdir($this->project . '/config', 0o755, true);
+        \file_put_contents(
+            $this->project . '/config/services.yaml',
+            <<<'YAML'
+                services:
+                  Polidog\Relayer\Db\PdoDatabase:
+                    public: true
+                    autowire: true
+                YAML,
+        );
+
+        $status = RoutesCompileCommand::run([], $this->capture(), $this->project);
+
+        // Non-fatal: routes.php still writes, exit 0.
+        self::assertSame(0, $status, $this->captured());
+        self::assertStringContainsString('Skipping dispatcher dump', $this->captured());
+        self::assertStringContainsString('routes.php is still valid', $this->captured());
+        self::assertFileExists($this->project . '/' . Relayer::COMPILED_ROUTES_FILE);
+        self::assertFileDoesNotExist($this->project . '/' . Relayer::COMPILED_DISPATCHER_FILE);
+    }
+
     private function capture(): Closure
     {
         return function (string $line): void {

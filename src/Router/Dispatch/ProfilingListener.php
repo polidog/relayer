@@ -134,9 +134,19 @@ final class ProfilingListener implements DispatchListener
 
     public function handleFrameworkRequest(string $path): bool
     {
-        // `/_profiler[/<token>]` is the dev-only viewer. Intercept BEFORE
-        // beforeDispatch so visiting the viewer does not create a profile of
-        // itself (that would clutter the index and recurse the storage).
+        // `/_profiler[/<token>]` is the dev-only viewer. Only claim the
+        // URL when there is actually something to view — `storage` is
+        // bound by the framework only in dev. In prod (no storage)
+        // the request falls through to normal dispatch and the app's
+        // 404 page so the framework doesn't leak the endpoint's
+        // existence via a 503.
+        if (null === $this->storage) {
+            return false;
+        }
+
+        // Intercept BEFORE beforeDispatch so visiting the viewer does
+        // not create a profile of itself (that would clutter the index
+        // and recurse the storage).
         if (self::PROFILER_PREFIX === $path
             || \str_starts_with($path, self::PROFILER_PREFIX . '/')
         ) {

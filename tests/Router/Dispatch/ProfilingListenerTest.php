@@ -231,9 +231,23 @@ final class ProfilingListenerTest extends TestCase
         self::assertStringContainsString('/blog/[slug]', $output);
     }
 
+    public function testHandleFrameworkRequestDeclinesProfilerPathWithoutStorage(): void
+    {
+        // Prod (no ProfilerStorage bound) must not claim /_profiler —
+        // it would otherwise emit a 503 and leak the framework's
+        // dev-only endpoint to anyone probing the prefix. With storage
+        // absent, the request falls through to normal dispatch and the
+        // app's 404 page.
+        $listener = new ProfilingListener(new RecordingProfiler());
+
+        self::assertFalse($listener->handleFrameworkRequest('/_profiler'));
+        self::assertFalse($listener->handleFrameworkRequest('/_profiler/abc'));
+    }
+
     public function testHandleFrameworkRequestDeclinesNonFrameworkPaths(): void
     {
-        $listener = new ProfilingListener(new RecordingProfiler());
+        $storage = new InMemoryProfilerStorage();
+        $listener = new ProfilingListener(new RecordingProfiler($storage), $storage);
 
         // A path that merely starts with the prefix string but has no
         // trailing slash boundary must NOT be claimed — `/_profilerish`
