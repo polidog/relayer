@@ -178,6 +178,67 @@ final class RoutesCompileDispatcherTest extends TestCase
         self::assertFileExists($this->project . '/' . Relayer::COMPILED_ROUTES_FILE);
     }
 
+    public function testNoListenersBranchRemovesStaleDispatcherDump(): void
+    {
+        // Boot presence-gates on the dispatcher file. If a previous
+        // compile produced one and the operator later de-registered
+        // every listener, the old dump must be removed — otherwise
+        // boot would still load it and dispatch through services that
+        // no longer exist (or, worse, against a constructor signature
+        // the container can no longer fill).
+        $dispatcherFile = $this->project . '/' . Relayer::COMPILED_DISPATCHER_FILE;
+        \mkdir(\dirname($dispatcherFile), 0o755, true);
+        \file_put_contents($dispatcherFile, "<?php /* stale dump from previous compile */\n");
+
+        // Same "all listeners untagged" config the previous test used.
+        \mkdir($this->project . '/config', 0o755, true);
+        \file_put_contents(
+            $this->project . '/config/services.yaml',
+            <<<'YAML'
+                services:
+                  Polidog\Relayer\Router\Dispatch\ProfilingListener:
+                    public: true
+                    autowire: true
+                YAML,
+        );
+
+        $status = RoutesCompileCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        self::assertStringContainsString('No dispatch listeners registered', $this->captured());
+        self::assertStringContainsString('Removed stale', $this->captured());
+        self::assertFileDoesNotExist($dispatcherFile);
+    }
+
+    public function testContainerBuildFailureRemovesStaleDispatcherDump(): void
+    {
+        // Same stale-removal contract as the no-listeners path: when
+        // the container build fails we skip the dump, but a previous
+        // one would otherwise survive at runtime.
+        $dispatcherFile = $this->project . '/' . Relayer::COMPILED_DISPATCHER_FILE;
+        \mkdir(\dirname($dispatcherFile), 0o755, true);
+        \file_put_contents($dispatcherFile, "<?php /* stale dump from previous compile */\n");
+
+        // Same unwireable-PdoDatabase trigger as the env-free test.
+        \mkdir($this->project . '/config', 0o755, true);
+        \file_put_contents(
+            $this->project . '/config/services.yaml',
+            <<<'YAML'
+                services:
+                  Polidog\Relayer\Db\PdoDatabase:
+                    public: true
+                    autowire: true
+                YAML,
+        );
+
+        $status = RoutesCompileCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        self::assertStringContainsString('Skipping dispatcher dump', $this->captured());
+        self::assertStringContainsString('Removed stale', $this->captured());
+        self::assertFileDoesNotExist($dispatcherFile);
+    }
+
     public function testShortNameCollisionsAliasImportsInDispatcherDump(): void
     {
         // Two listeners in different namespaces with the same leaf class

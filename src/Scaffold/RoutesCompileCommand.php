@@ -146,6 +146,8 @@ final class RoutesCompileCommand
             (new Dotenv())->loadEnv($root . '/.env');
         }
 
+        $dispatcherFile = $root . '/' . Relayer::COMPILED_DISPATCHER_FILE;
+
         try {
             $configurator = self::discoverConfigurator($root, $write);
             // isDev: false — the dump is read by prod boot (dev rebuilds
@@ -156,6 +158,12 @@ final class RoutesCompileCommand
         } catch (Throwable $e) {
             $write('Skipping dispatcher dump (container build failed): ' . $e->getMessage());
             $write('routes.php is still valid; the runtime will discover listeners on boot.');
+            // Remove any stale dispatcher from a previous compile — boot
+            // presence-gates on the file's existence, so leaving the old
+            // dump behind would silently keep a no-longer-correct chain
+            // alive. "Skipped" must mean "absent at runtime", not "older
+            // version still loads."
+            self::removeStaleDispatcher($dispatcherFile, $write);
 
             return 0;
         }
@@ -163,6 +171,11 @@ final class RoutesCompileCommand
         $listenerIds = $container->findTaggedServiceIds(Relayer::DISPATCH_LISTENER_TAG);
         if ([] === $listenerIds) {
             $write('No dispatch listeners registered — skipping dispatcher dump.');
+            // Same stale-dump concern as the container-build-failure
+            // branch above: a previously-tagged listener that an app
+            // just removed from its services would otherwise keep
+            // firing via the old dump.
+            self::removeStaleDispatcher($dispatcherFile, $write);
 
             return 0;
         }
@@ -183,7 +196,6 @@ final class RoutesCompileCommand
             $listenerClasses[] = $class;
         }
 
-        $dispatcherFile = $root . '/' . Relayer::COMPILED_DISPATCHER_FILE;
         if (!\is_dir($outDir) && !@\mkdir($outDir, 0o775, true) && !\is_dir($outDir)) {
             $write("Could not create {$outDir}.");
 
@@ -208,15 +220,50 @@ final class RoutesCompileCommand
         return 0;
     }
 
+    /**
+     * Mirror {@see ContainerCompileCommand::discoverConfigurator()} —
+     * surface an absent `App\AppConfigurator` so the operator sees the
+     * same scaffold-discovery message both commands print, instead of a
+     * silent fallback that only differs from "nothing was found"
+     * by reading the dump.
+     */
     private static function discoverConfigurator(string $root, Closure $write): ?AppConfigurator
     {
         $fqcn = self::APP_CONFIGURATOR;
 
         if (!\class_exists($fqcn) || !\is_subclass_of($fqcn, AppConfigurator::class)) {
+            $write('No App\AppConfigurator found — compiling against the framework-default container.');
+
             return null;
         }
 
         return new $fqcn($root);
+    }
+
+    /**
+     * Delete an existing dispatcher dump when the current compile is
+     * declining to write one. Boot presence-gates on the file, so
+     * leaving stale output would silently keep an out-of-date chain
+     * alive — typically after a listener is de-registered (the "no
+     * listeners" path) or when the build env regressed (the
+     * container-build-failure path).
+     *
+     * Best-effort delete: unlink failures are noted but not fatal,
+     * because the operator's deploy script already has signal that the
+     * compile skipped this artifact. An OPcache-residual class is a
+     * different problem the framework can't solve from here.
+     */
+    private static function removeStaleDispatcher(string $dispatcherFile, Closure $write): void
+    {
+        if (!\file_exists($dispatcherFile)) {
+            return;
+        }
+        if (@\unlink($dispatcherFile)) {
+            $write("Removed stale {$dispatcherFile}.");
+
+            return;
+        }
+        $write("Warning: a previous {$dispatcherFile} exists but could not be removed; boot will still load it.");
     }
 
     /**
