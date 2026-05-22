@@ -66,7 +66,8 @@ use Symfony\Component\DependencyInjection\Reference;
  * resolved once by `boot()` and threaded in as `$isDev`.
  *
  * Layering, lowest-precedence first (later wins): framework defaults →
- * `config/services.{yaml,php}` → the caller's AppConfigurator.
+ * `config/services.{yaml,php}` (with `when@<env>` blocks) →
+ * `config/services.{env}.{yaml,php}` → the caller's AppConfigurator.
  */
 final class ContainerFactory
 {
@@ -150,7 +151,7 @@ final class ContainerFactory
         $container->setParameter('app.project_root', $projectRoot);
 
         self::registerDefaults($container, $projectRoot, $isDev);
-        self::loadConventionConfigs($container, $projectRoot);
+        self::loadConventionConfigs($container, $projectRoot, $isDev);
 
         $configurator ??= new AppConfigurator($projectRoot);
         $configurator->configure($container);
@@ -580,30 +581,65 @@ final class ContainerFactory
     }
 
     /**
-     * Auto-load `config/services.{yaml,yml,php}` if present. Symfony's loaders
-     * honor `_defaults: { autowire: true, public: true }` blocks naturally,
-     * so users get full Symfony semantics; the AppConfigurator runs after
-     * these files and can override anything they registered.
+     * Auto-load convention config from `config/`, lowest-precedence first
+     * (later wins):
+     *
+     *   services.{yaml,yml}        base — `when@<env>` blocks applied
+     *   services.php               base
+     *   services.{env}.{yaml,yml}  per-env override
+     *   services.{env}.php         per-env override
+     *
+     * The loaders are env-aware, so a `when@<env>:` block inside the base
+     * file is honored, and a sibling `services.{env}.*` file overrides the
+     * base. `<env>` is `dev` when {@see Relayer::isDev()} resolved true (so
+     * `APP_ENV=dev` *and* `development` both map to `when@dev` /
+     * `services.dev.*`) and `prod` otherwise — Relayer's two-valued env
+     * model, kept consistent with every other dev/prod decision in this
+     * class rather than threading the raw `APP_ENV` string into Symfony's
+     * loader.
+     *
+     * Symfony's loaders honor `_defaults: { autowire: true, public: true }`
+     * blocks naturally, so users get full Symfony semantics; the
+     * AppConfigurator runs after these files and can override anything they
+     * registered.
      */
-    private static function loadConventionConfigs(ContainerBuilder $container, string $projectRoot): void
+    private static function loadConventionConfigs(ContainerBuilder $container, string $projectRoot, bool $isDev): void
     {
         $configDir = $projectRoot . '/config';
         if (!\is_dir($configDir)) {
             return;
         }
 
+        $env = $isDev ? 'dev' : 'prod';
         $locator = new FileLocator($configDir);
+        $yamlLoader = new YamlFileLoader($container, $locator, $env);
+        $phpLoader = new PhpFileLoader($container, $locator, $env);
 
-        foreach (['services.yaml', 'services.yml'] as $name) {
-            if (\file_exists($configDir . '/' . $name)) {
-                (new YamlFileLoader($container, $locator))->load($name);
-
-                break;
-            }
+        self::loadFirstExisting($yamlLoader, $configDir, ['services.yaml', 'services.yml']);
+        if (\file_exists($configDir . '/services.php')) {
+            $phpLoader->load('services.php');
         }
 
-        if (\file_exists($configDir . '/services.php')) {
-            (new PhpFileLoader($container, $locator))->load('services.php');
+        self::loadFirstExisting($yamlLoader, $configDir, ["services.{$env}.yaml", "services.{$env}.yml"]);
+        if (\file_exists($configDir . "/services.{$env}.php")) {
+            $phpLoader->load("services.{$env}.php");
+        }
+    }
+
+    /**
+     * Load the first of $candidates that exists in $configDir, then stop —
+     * `.yaml`/`.yml` are alternate spellings of one file, not layers.
+     *
+     * @param list<string> $candidates
+     */
+    private static function loadFirstExisting(YamlFileLoader $loader, string $configDir, array $candidates): void
+    {
+        foreach ($candidates as $name) {
+            if (\file_exists($configDir . '/' . $name)) {
+                $loader->load($name);
+
+                return;
+            }
         }
     }
 

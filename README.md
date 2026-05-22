@@ -779,6 +779,39 @@ services:
 `config/services.php` (returning a `ContainerConfigurator` closure) and
 `config/services.yml` are also accepted.
 
+#### Per-environment overrides
+
+Two complementary mechanisms let you vary config by env — both resolve
+`<env>` to `dev` (when `APP_ENV=dev` or `APP_ENV=development`) or `prod`
+(everything else).
+
+**`when@<env>` blocks inside `services.yaml`** — Symfony's standard in-file
+env override:
+
+```yaml
+# config/services.yaml
+services:
+  App\Service\Mailer: ~
+
+when@dev:
+  services:
+    App\Service\LoggingMailer: ~   # replaces Mailer only on dev
+```
+
+**Sibling `services.{env}.yaml`** — a dedicated per-env file loaded after
+the base; useful when the env-specific section would otherwise dominate the
+file:
+
+```yaml
+# config/services.dev.yaml
+services:
+  App\Service\LoggingMailer: ~
+```
+
+Both forms also work for `services.php` / `services.{env}.php`. Precedence
+(lowest → highest): framework defaults → `services.{yaml,php}` (incl.
+`when@<env>`) → `services.{env}.{yaml,php}` → `AppConfigurator`.
+
 ### Option B — `AppConfigurator` (PHP)
 
 Subclass `AppConfigurator` and register services on the `ContainerBuilder`.
