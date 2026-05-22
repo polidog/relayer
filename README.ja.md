@@ -851,11 +851,17 @@ PSX コンポーネントファイル（`.psx`）はプレーンなクロージ�
 DI コンテナからサービスを直接取得できます:
 
 ```php
+<?php
 // src/Components/TodoList.psx
-use Polidog\Relayer\Relayer;
-use Polidog\Relayer\Db\Database;
+declare(strict_types=1);
 
-return fc(function (array $props): Element {
+namespace App\Components;
+
+use Polidog\Relayer\Db\Database;
+use Polidog\Relayer\Relayer;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (array $props): Element {
     $db = Relayer::container()->get(Database::class);
     $todos = $db->fetchAll('SELECT id, title, done FROM todos ORDER BY id');
 
@@ -864,7 +870,7 @@ return fc(function (array $props): Element {
             {array_map(fn($t) => <li>{$t['title']}</li>, $todos)}
         </ul>
     );
-});
+};
 ```
 
 `Relayer::container()` は `boot()` が構築した PSR-11 コンテナを返します。

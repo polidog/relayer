@@ -854,11 +854,17 @@ is unavailable. Use `Relayer::container()` to pull a service from the
 DI container directly inside a component:
 
 ```php
+<?php
 // src/Components/TodoList.psx
-use Polidog\Relayer\Relayer;
-use Polidog\Relayer\Db\Database;
+declare(strict_types=1);
 
-return fc(function (array $props): Element {
+namespace App\Components;
+
+use Polidog\Relayer\Db\Database;
+use Polidog\Relayer\Relayer;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (array $props): Element {
     $db = Relayer::container()->get(Database::class);
     $todos = $db->fetchAll('SELECT id, title, done FROM todos ORDER BY id');
 
@@ -867,7 +873,7 @@ return fc(function (array $props): Element {
             {array_map(fn($t) => <li>{$t['title']}</li>, $todos)}
         </ul>
     );
-});
+};
 ```
 
 `Relayer::container()` returns the same PSR-11 container `boot()` built.

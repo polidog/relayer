@@ -24,6 +24,7 @@ final class RelayerBootTest extends TestCase
 
     protected function setUp(): void
     {
+        (new ReflectionProperty(Relayer::class, 'container'))->setValue(null, null);
         $this->projectRoot = \sys_get_temp_dir() . '/relayer-test-' . \uniqid();
         \mkdir($this->projectRoot . '/src/Pages', 0o755, true);
         \file_put_contents(
