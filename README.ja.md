@@ -778,6 +778,37 @@ services:
 `config/services.php`（`ContainerConfigurator` クロージャを return する形）
 や `config/services.yml` も認識されます。
 
+#### 環境別の設定
+
+`<env>` は `dev`（`APP_ENV=dev` または `APP_ENV=development`）か `prod`
+（それ以外）に解決されます。
+
+**`when@<env>` ブロック** — `services.yaml` 内に書くファイル内 env 分岐
+（Symfony 標準の書き方）:
+
+```yaml
+# config/services.yaml
+services:
+  App\Service\Mailer: ~
+
+when@dev:
+  services:
+    App\Service\LoggingMailer: ~   # dev でのみ Mailer を置き換え
+```
+
+**`services.{env}.yaml` / `.yml` サイドファイル** — 基本ファイルの後に
+ロードされる環境専用ファイル。環境別設定が多い場合に便利:
+
+```yaml
+# config/services.dev.yaml  （または services.dev.yml）
+services:
+  App\Service\LoggingMailer: ~
+```
+
+`services.php` / `services.{env}.php` も同様に使えます。優先順位（低→高）:
+フレームワーク既定値 → `services.{yaml,yml,php}`（`when@<env>` 含む）→
+`services.{env}.{yaml,yml,php}` → `AppConfigurator`。
+
 ### Option B — `AppConfigurator` (PHP)
 
 `AppConfigurator` を継承し、`ContainerBuilder` 上でサービス登録します。
