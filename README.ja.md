@@ -796,18 +796,18 @@ when@dev:
     App\Service\LoggingMailer: ~   # dev でのみ Mailer を置き換え
 ```
 
-**`services.{env}.yaml` サイドファイル** — 基本ファイルの後にロードされる
-環境専用ファイル。環境別設定が多い場合に便利:
+**`services.{env}.yaml` / `.yml` サイドファイル** — 基本ファイルの後に
+ロードされる環境専用ファイル。環境別設定が多い場合に便利:
 
 ```yaml
-# config/services.dev.yaml
+# config/services.dev.yaml  （または services.dev.yml）
 services:
   App\Service\LoggingMailer: ~
 ```
 
 `services.php` / `services.{env}.php` も同様に使えます。優先順位（低→高）:
-フレームワーク既定値 → `services.{yaml,php}`（`when@<env>` 含む）→
-`services.{env}.{yaml,php}` → `AppConfigurator`。
+フレームワーク既定値 → `services.{yaml,yml,php}`（`when@<env>` 含む）→
+`services.{env}.{yaml,yml,php}` → `AppConfigurator`。
 
 ### Option B — `AppConfigurator` (PHP)
 

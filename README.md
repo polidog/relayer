@@ -798,19 +798,19 @@ when@dev:
     App\Service\LoggingMailer: ~   # replaces Mailer only on dev
 ```
 
-**Sibling `services.{env}.yaml`** — a dedicated per-env file loaded after
-the base; useful when the env-specific section would otherwise dominate the
-file:
+**Sibling `services.{env}.yaml` / `.yml`** — a dedicated per-env file
+loaded after the base; useful when the env-specific section would otherwise
+dominate the file:
 
 ```yaml
-# config/services.dev.yaml
+# config/services.dev.yaml  (or services.dev.yml)
 services:
   App\Service\LoggingMailer: ~
 ```
 
 Both forms also work for `services.php` / `services.{env}.php`. Precedence
-(lowest → highest): framework defaults → `services.{yaml,php}` (incl.
-`when@<env>`) → `services.{env}.{yaml,php}` → `AppConfigurator`.
+(lowest → highest): framework defaults → `services.{yaml,yml,php}` (incl.
+`when@<env>`) → `services.{env}.{yaml,yml,php}` → `AppConfigurator`.
 
 ### Option B — `AppConfigurator` (PHP)
 

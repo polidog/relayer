@@ -66,8 +66,8 @@ use Symfony\Component\DependencyInjection\Reference;
  * resolved once by `boot()` and threaded in as `$isDev`.
  *
  * Layering, lowest-precedence first (later wins): framework defaults →
- * `config/services.{yaml,php}` (with `when@<env>` blocks) →
- * `config/services.{env}.{yaml,php}` → the caller's AppConfigurator.
+ * `config/services.{yaml,yml,php}` (with `when@<env>` blocks) →
+ * `config/services.{env}.{yaml,yml,php}` → the caller's AppConfigurator.
  */
 final class ContainerFactory
 {
