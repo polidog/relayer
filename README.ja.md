@@ -844,6 +844,41 @@ final class AppConfigurator extends BaseConfigurator
 Relayer::boot(__DIR__ . '/..', new App\AppConfigurator(__DIR__ . '/..'))->run();
 ```
 
+### PSX コンポーネントからのサービス取得
+
+PSX コンポーネントファイル（`.psx`）はプレーンなクロージャのため、コンストラクタ
+インジェクションが使えません。コンポーネント内では `Relayer::container()` で
+DI コンテナからサービスを直接取得できます:
+
+```php
+<?php
+// src/Components/TodoList.psx
+declare(strict_types=1);
+
+namespace App\Components;
+
+use Polidog\Relayer\Db\Database;
+use Polidog\Relayer\Relayer;
+use Polidog\UsePhp\Runtime\Element;
+
+return function (array $props): Element {
+    $db = Relayer::container()->get(Database::class);
+    $todos = $db->fetchAll('SELECT id, title, done FROM todos ORDER BY id');
+
+    return (
+        <ul>
+            {array_map(fn($t) => <li>{$t['title']}</li>, $todos)}
+        </ul>
+    );
+};
+```
+
+`Relayer::container()` は `boot()` が構築した PSR-11 コンテナを返します。
+`boot()` より前に呼ぶと `\LogicException` を投げます。ページハンドラや
+ルートクラスなど通常のサービスは `AppConfigurator` でコンストラクタ
+インジェクションするのが正道です。このメソッドはクロージャゆえに
+インジェクションが難しい PSX コンポーネント専用の逃げ道です。
+
 ### autowire のデフォルト挙動
 
 フレームワークは登録済みの `Definition` を一通り見て:

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer;
 
+use LogicException;
 use Polidog\Relayer\Di\ContainerFactory;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\Profiler;
@@ -11,6 +12,7 @@ use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\UsePhp\UsePHP;
+use Psr\Container\ContainerInterface;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -72,6 +74,27 @@ final class Relayer
      */
     public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
 
+    private static ?ContainerInterface $container = null;
+
+    /**
+     * Return the PSR-11 container built by the last {@see boot()} call.
+     *
+     * Intended as an escape hatch for PSX components, where constructor /
+     * parameter injection is not available (components are plain closures).
+     * Prefer constructor injection via {@see AppConfigurator} for regular
+     * services; use this only inside `.psx` component files.
+     *
+     * @throws LogicException when called before {@see boot()}
+     */
+    public static function container(): ContainerInterface
+    {
+        if (null === self::$container) {
+            throw new LogicException('Relayer::container() called before Relayer::boot().');
+        }
+
+        return self::$container;
+    }
+
     /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
@@ -117,6 +140,7 @@ final class Relayer
         );
 
         $psr = new InjectorContainer($container);
+        self::$container = $psr;
 
         $appDir = $projectRoot . '/src/Pages';
 

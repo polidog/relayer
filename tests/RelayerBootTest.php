@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests;
 
+use LogicException;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\AppConfigurator;
@@ -23,6 +24,7 @@ final class RelayerBootTest extends TestCase
 
     protected function setUp(): void
     {
+        (new ReflectionProperty(Relayer::class, 'container'))->setValue(null, null);
         $this->projectRoot = \sys_get_temp_dir() . '/relayer-test-' . \uniqid();
         \mkdir($this->projectRoot . '/src/Pages', 0o755, true);
         \file_put_contents(
@@ -35,6 +37,7 @@ final class RelayerBootTest extends TestCase
     {
         $this->rrmdir($this->projectRoot);
         unset($_ENV['APP_ENV'], $_ENV['FRAMEWORK_TEST_VALUE'], $_SERVER['APP_ENV'], $_SERVER['FRAMEWORK_TEST_VALUE']);
+        (new ReflectionProperty(Relayer::class, 'container'))->setValue(null, null);
     }
 
     public function testBootReturnsAppRouterAndLoadsEnv(): void
@@ -118,6 +121,23 @@ final class RelayerBootTest extends TestCase
         $router = Relayer::boot($this->projectRoot);
 
         self::assertInstanceOf(AppRouter::class, $router);
+    }
+
+    public function testContainerIsAccessibleAfterBoot(): void
+    {
+        Relayer::boot($this->projectRoot);
+
+        $container = Relayer::container();
+
+        self::assertInstanceOf(ContainerInterface::class, $container);
+        self::assertInstanceOf(HttpClient::class, $container->get(HttpClient::class));
+    }
+
+    public function testContainerThrowsBeforeBoot(): void
+    {
+        $this->expectException(LogicException::class);
+
+        Relayer::container();
     }
 
     public function testBootAutoLoadsServicesYaml(): void
