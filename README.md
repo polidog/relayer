@@ -847,6 +847,35 @@ Then pass it to `boot()`:
 Relayer::boot(__DIR__ . '/..', new App\AppConfigurator(__DIR__ . '/..'))->run();
 ```
 
+### PSX components — accessing services
+
+PSX component files (`.psx`) are plain closures, so constructor injection
+is unavailable. Use `Relayer::container()` to pull a service from the
+DI container directly inside a component:
+
+```php
+// src/Components/TodoList.psx
+use Polidog\Relayer\Relayer;
+use Polidog\Relayer\Db\Database;
+
+return fc(function (array $props): Element {
+    $db = Relayer::container()->get(Database::class);
+    $todos = $db->fetchAll('SELECT id, title, done FROM todos ORDER BY id');
+
+    return (
+        <ul>
+            {array_map(fn($t) => <li>{$t['title']}</li>, $todos)}
+        </ul>
+    );
+});
+```
+
+`Relayer::container()` returns the same PSR-11 container `boot()` built.
+It throws `\LogicException` if called before `boot()`. For regular services
+(page handlers, route classes) prefer constructor injection via
+`AppConfigurator` — this accessor is an escape hatch specifically for the
+PSX component context where closures make injection impractical.
+
 ### Autowire defaults
 
 The framework iterates every `Definition` you register and:
