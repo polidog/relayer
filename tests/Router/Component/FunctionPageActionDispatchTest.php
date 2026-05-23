@@ -169,6 +169,48 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertFalse($called);
     }
 
+    public function testHasPendingActionReturnsTrueForMatchingPostToken(): void
+    {
+        $context = new PageContext([], '/users');
+        $token = $context->action('save', static function (): void {});
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => $token];
+
+        self::assertTrue($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseOnGet(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+
+        $context = new PageContext([], '/users');
+        $token = $context->action('save', static function (): void {});
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => $token];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseForDifferentPage(): void
+    {
+        $context = new PageContext([], '/users');
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => FormAction::createForPage('/other', 'save')];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseWithoutToken(): void
+    {
+        $page = $this->makePage(new PageContext([], '/users'), '/users');
+        $_POST = [];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
     private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage
     {
         $renderFn ??= static fn () => new Element('div', [], []);

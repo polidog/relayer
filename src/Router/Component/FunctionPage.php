@@ -23,6 +23,27 @@ final class FunctionPage
     ) {}
 
     /**
+     * Return true when the current request is a POST that carries a form-action
+     * token targeting this page. Used by AppRouter to decide whether to run
+     * render before dispatch so sub-components can register their actions first.
+     */
+    public function hasPendingAction(): bool
+    {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            return false;
+        }
+
+        $token = $_POST[self::FORM_ACTION_FIELD] ?? null;
+        if (!\is_string($token)) {
+            return false;
+        }
+
+        $payload = FormAction::decode($token);
+
+        return null !== $payload && ($payload['page'] ?? null) === $this->pageId;
+    }
+
+    /**
      * Resolve a POST request to a registered server action on this page and
      * invoke it. Mirrors PageComponent::dispatchActionFromRequest() but
      * dispatches by (pageId, name) instead of (class, method).

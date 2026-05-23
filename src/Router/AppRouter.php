@@ -320,6 +320,7 @@ final class AppRouter
             if ($hasUsephp) {
                 RenderContext::clearApp();
             }
+            Component\PageContext::setCurrent(null);
             // Drop the ambient request Translator so a non-default locale
             // cannot bleed into the next request's pre-dispatch code (e.g.
             // validation) under a long-running worker.
@@ -414,6 +415,7 @@ final class AppRouter
             if (null !== $this->usephp) {
                 RenderContext::clearApp();
             }
+            Component\PageContext::setCurrent(null);
             Translators::reset();
             // Normal-path counterpart to the shutdown handler above —
             // idempotent so a later shutdown call is a no-op.
@@ -1018,10 +1020,18 @@ final class AppRouter
         }
 
         if ($page instanceof FunctionPage) {
-            // Render first so sub-components can register server actions via
-            // PageContext::current()->action(...) before dispatch runs.
-            $pageElement = $page->render();
-            $page->dispatchActionFromRequest();
+            if ($page->hasPendingAction()) {
+                // POST with a matching action token: render first so sub-components
+                // can register server actions via PageContext::current()->action(...)
+                // before dispatch runs. On redirect/abort the rendered element is
+                // discarded — keeping this conditional avoids the cost on GET and
+                // on POST requests that carry no matching action token.
+                $pageElement = $page->render();
+                $page->dispatchActionFromRequest();
+            } else {
+                $page->dispatchActionFromRequest(); // no-op on GET
+                $pageElement = $page->render();
+            }
         } else {
             if ($page instanceof PageComponent) {
                 $page->dispatchActionFromRequest();
