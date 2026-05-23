@@ -211,6 +211,28 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertFalse($page->hasPendingAction());
     }
 
+    public function testRenderAfterDispatchClearsActionsAndReRenders(): void
+    {
+        $callCount = 0;
+        $context = new PageContext([], '/users');
+        PageContext::setCurrent($context);
+
+        $renderFn = static function () use ($context, &$callCount): Element {
+            ++$callCount;
+            $context->action('save', static function (): void {});
+
+            return new Element('div', [], []);
+        };
+
+        $page = $this->makePage($context, '/users', $renderFn);
+
+        $page->render(); // first render registers action
+        $page->renderAfterDispatch(); // clears + re-registers without throwing
+
+        self::assertSame(2, $callCount);
+        PageContext::setCurrent(null);
+    }
+
     private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage
     {
         $renderFn ??= static fn () => new Element('div', [], []);

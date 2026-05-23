@@ -1021,13 +1021,19 @@ final class AppRouter
 
         if ($page instanceof FunctionPage) {
             if ($page->hasPendingAction()) {
-                // POST with a matching action token: render first so sub-components
-                // can register server actions via PageContext::current()->action(...)
-                // before dispatch runs. On redirect/abort the rendered element is
-                // discarded — keeping this conditional avoids the cost on GET and
-                // on POST requests that carry no matching action token.
-                $pageElement = $page->render();
+                // Double-render for function pages with a matching POST action:
+                // 1. Pre-render: executes the render closure so sub-components can
+                //    self-register their server actions via PageContext::current()->action().
+                //    The returned element is discarded.
+                // 2. Dispatch: invokes the matched action handler (may redirect/abort,
+                //    or mutate factory-scoped shared state such as $errors references).
+                // 3. Re-render: FunctionPage::renderAfterDispatch() clears the action
+                //    registry and re-runs the render closure so (a) sub-component actions
+                //    are re-registered for the response form and (b) the element reflects
+                //    any state mutations made by the action handler.
+                $page->render();
                 $page->dispatchActionFromRequest();
+                $pageElement = $page->renderAfterDispatch();
             } else {
                 $page->dispatchActionFromRequest(); // no-op on GET
                 $pageElement = $page->render();

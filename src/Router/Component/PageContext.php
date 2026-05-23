@@ -177,6 +177,18 @@ final class PageContext
     }
 
     /**
+     * Reset the registered action table so a second render pass can re-register
+     * sub-component actions without hitting the duplicate-name guard.
+     *
+     * @internal called by FunctionPage::renderAfterDispatch() before the
+     *           re-render that follows a dispatched (non-redirecting) action
+     */
+    public function clearActions(): void
+    {
+        $this->actions = [];
+    }
+
+    /**
      * Redirect instead of rendering this page. Intended for form-action
      * handlers registered via {@see action()} — do the work, then send the
      * browser elsewhere:

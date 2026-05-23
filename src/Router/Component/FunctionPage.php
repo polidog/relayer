@@ -113,6 +113,22 @@ final class FunctionPage
     }
 
     /**
+     * Re-render after a dispatched action that did not redirect. Clears the
+     * PageContext action registry first so sub-components can re-register their
+     * actions without hitting the duplicate-name guard, and returns a fresh
+     * Element that reflects any state mutated by the action handler.
+     *
+     * @internal called by AppRouter::renderPageInternal() in the double-render
+     *           path (pre-render → dispatch → renderAfterDispatch)
+     */
+    public function renderAfterDispatch(): Element
+    {
+        $this->context->clearActions();
+
+        return $this->render();
+    }
+
+    /**
      * @return array<string, string>
      */
     public function getMetadata(): array
