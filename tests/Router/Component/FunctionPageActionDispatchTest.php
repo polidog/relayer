@@ -169,15 +169,30 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertFalse($called);
     }
 
-    public function testHasPendingActionReturnsTrueForMatchingPostToken(): void
+    public function testHasPendingActionReturnsTrueWhenActionNotYetRegistered(): void
     {
+        // Token targets this page and names an action that has NOT been
+        // registered yet — this is the sub-component self-registration case
+        // where a pre-render pass is required.
+        $context = new PageContext([], '/users');
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => FormAction::createForPage('/users', 'save')];
+
+        self::assertTrue($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseWhenActionAlreadyRegistered(): void
+    {
+        // Factory-registered actions are available before dispatch — no
+        // pre-render pass needed, so hasPendingAction() must return false.
         $context = new PageContext([], '/users');
         $token = $context->action('save', static function (): void {});
         $page = $this->makePage($context, '/users');
 
         $_POST = ['_usephp_action' => $token];
 
-        self::assertTrue($page->hasPendingAction());
+        self::assertFalse($page->hasPendingAction());
     }
 
     public function testHasPendingActionReturnsFalseOnGet(): void
@@ -207,6 +222,16 @@ final class FunctionPageActionDispatchTest extends TestCase
     {
         $page = $this->makePage(new PageContext([], '/users'), '/users');
         $_POST = [];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseWhenNameMissing(): void
+    {
+        $page = $this->makePage(new PageContext([], '/users'), '/users');
+
+        // Class-style token has no 'name' field — must not trigger pre-render.
+        $_POST = ['_usephp_action' => FormAction::create('App\SomePage', 'handle')];
 
         self::assertFalse($page->hasPendingAction());
     }

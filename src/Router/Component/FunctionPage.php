@@ -40,7 +40,19 @@ final class FunctionPage
 
         $payload = FormAction::decode($token);
 
-        return null !== $payload && ($payload['page'] ?? null) === $this->pageId;
+        if (null === $payload || ($payload['page'] ?? null) !== $this->pageId) {
+            return false;
+        }
+
+        $name = $payload['name'] ?? null;
+        if (!\is_string($name)) {
+            return false;
+        }
+
+        // Only trigger the pre-render pass when the action is NOT already
+        // registered (factory-registered actions are always available before
+        // dispatch and do not need a render pass to collect them).
+        return null === $this->context->getAction($name);
     }
 
     /**
