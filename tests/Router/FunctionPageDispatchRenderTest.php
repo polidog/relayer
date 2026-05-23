@@ -84,6 +84,8 @@ final class FunctionPageDispatchRenderTest extends TestCase
         // Verifies that a sub-component can call PageContext::current()->action()
         // from inside the render closure (self-registration) and that the action
         // is dispatched correctly on POST.
+        // $dispatched lives in the factory scope (outer closure) so it survives
+        // the re-render pass and the final output reflects the dispatch result.
         \file_put_contents(
             $this->workDir . '/page.php',
             <<<'PHP'
@@ -92,15 +94,14 @@ final class FunctionPageDispatchRenderTest extends TestCase
                 use Polidog\UsePhp\Runtime\Element;
 
                 return function (): Closure {
-                    return function (): Element {
-                        // Sub-component self-registers via ambient accessor.
+                    $dispatched = false; // factory scope — survives re-render
+                    return function () use (&$dispatched): Element {
                         $ctx = PageContext::current();
-                        $dispatched = false;
                         $ctx->action('doSomething', function () use (&$dispatched): void {
                             $dispatched = true;
                         });
                         $label = $dispatched ? 'dispatched' : 'not-dispatched';
-                        return new Element('span', ['data-result' => 'yes'], [$label]);
+                        return new Element('span', ['data-label' => $label], [$label]);
                     };
                 };
                 PHP,
@@ -114,10 +115,8 @@ final class FunctionPageDispatchRenderTest extends TestCase
 
         $output = $this->runPost($this->workDir . '/page.php', '/');
 
-        // The action was dispatched, but $dispatched is local to the render closure
-        // so it resets on re-render. The important assertion is that the page
-        // rendered without error — proving self-registration + dispatch works.
-        self::assertStringContainsString('data-result="yes"', $output);
+        self::assertStringContainsString('dispatched', $output);
+        self::assertStringNotContainsString('not-dispatched', $output);
     }
 
     private function runPost(string $pageFile, string $uri): string

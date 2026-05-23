@@ -211,7 +211,7 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertFalse($page->hasPendingAction());
     }
 
-    public function testRenderAfterDispatchClearsActionsAndReRenders(): void
+    public function testRenderAfterDispatchClearsRenderStateAndReRenders(): void
     {
         $callCount = 0;
         $context = new PageContext([], '/users');
@@ -220,16 +220,19 @@ final class FunctionPageActionDispatchTest extends TestCase
         $renderFn = static function () use ($context, &$callCount): Element {
             ++$callCount;
             $context->action('save', static function (): void {});
+            $context->js('/app.js');
 
             return new Element('div', [], []);
         };
 
         $page = $this->makePage($context, '/users', $renderFn);
 
-        $page->render(); // first render registers action
-        $page->renderAfterDispatch(); // clears + re-registers without throwing
+        $page->render();
+        $page->renderAfterDispatch(); // clears actions + scripts, then re-renders
 
         self::assertSame(2, $callCount);
+        // scripts should contain exactly one entry from the final render, not two
+        self::assertCount(1, $context->getScripts());
         PageContext::setCurrent(null);
     }
 

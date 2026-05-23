@@ -113,17 +113,18 @@ final class FunctionPage
     }
 
     /**
-     * Re-render after a dispatched action that did not redirect. Clears the
-     * PageContext action registry first so sub-components can re-register their
-     * actions without hitting the duplicate-name guard, and returns a fresh
-     * Element that reflects any state mutated by the action handler.
+     * Re-render after a dispatched action that did not redirect. Resets all
+     * render-accumulated PageContext state (actions and scripts) so
+     * sub-components can re-register without hitting the duplicate-name guard
+     * and script tags are not emitted twice. Returns a fresh Element that
+     * reflects any state mutated by the action handler.
      *
      * @internal called by AppRouter::renderPageInternal() in the double-render
      *           path (pre-render → dispatch → renderAfterDispatch)
      */
     public function renderAfterDispatch(): Element
     {
-        $this->context->clearActions();
+        $this->context->clearRenderState();
 
         return $this->render();
     }

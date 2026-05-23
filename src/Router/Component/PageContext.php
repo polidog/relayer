@@ -177,15 +177,18 @@ final class PageContext
     }
 
     /**
-     * Reset the registered action table so a second render pass can re-register
-     * sub-component actions without hitting the duplicate-name guard.
+     * Reset all render-accumulated state so a second render pass starts clean:
+     * clears the action registry (so sub-components can re-register without
+     * hitting the duplicate-name guard) and the script list (so scripts added
+     * via js() during the pre-render are not emitted twice in the response).
      *
      * @internal called by FunctionPage::renderAfterDispatch() before the
      *           re-render that follows a dispatched (non-redirecting) action
      */
-    public function clearActions(): void
+    public function clearRenderState(): void
     {
         $this->actions = [];
+        $this->scripts = [];
     }
 
     /**
