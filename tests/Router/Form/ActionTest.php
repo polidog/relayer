@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Tests\Router\Form;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\Action;
+use Polidog\Relayer\Router\Form\ActionInterface;
 use Polidog\Relayer\Router\Form\FormAction;
 
 final class ActionTest extends TestCase
@@ -76,5 +77,60 @@ final class ActionTest extends TestCase
         $decoded = FormAction::decode($token);
         self::assertNotNull($decoded);
         self::assertSame(['id' => 42], $decoded['args']);
+    }
+
+    public function testRegisterUsesClassNameAsActionName(): void
+    {
+        $ctx = new PageContext([], '/todos');
+        PageContext::setCurrent($ctx);
+
+        $handler = new class implements ActionInterface {
+            public function handle(array $form): void {}
+        };
+
+        $token = Action::register($handler);
+
+        $decoded = FormAction::decode($token);
+        self::assertNotNull($decoded);
+        self::assertSame($handler::class, $decoded['name']);
+    }
+
+    public function testRegisterDispatchesHandleMethod(): void
+    {
+        $ctx = new PageContext([], '/todos');
+        PageContext::setCurrent($ctx);
+
+        $captured = null;
+        $handler = new class($captured) implements ActionInterface {
+            public function __construct(public mixed &$captured) {}
+
+            public function handle(array $form): void
+            {
+                $this->captured = $form;
+            }
+        };
+
+        Action::register($handler);
+
+        $action = $ctx->getAction($handler::class);
+        self::assertNotNull($action);
+        $action(['title' => 'Buy milk']);
+        self::assertSame(['title' => 'Buy milk'], $captured);
+    }
+
+    public function testRegisterPassesThroughArgs(): void
+    {
+        $ctx = new PageContext([], '/todos');
+        PageContext::setCurrent($ctx);
+
+        $handler = new class implements ActionInterface {
+            public function handle(array $form): void {}
+        };
+
+        $token = Action::register($handler, ['id' => 7]);
+
+        $decoded = FormAction::decode($token);
+        self::assertNotNull($decoded);
+        self::assertSame(['id' => 7], $decoded['args']);
     }
 }
