@@ -11,9 +11,43 @@ use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\Relayer\Router\HttpException;
 use Polidog\Relayer\Router\RedirectException;
+use RuntimeException;
 
 final class PageContextTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        PageContext::setCurrent(null);
+    }
+
+    protected function tearDown(): void
+    {
+        PageContext::setCurrent(null);
+    }
+
+    public function testCurrentThrowsWhenNoContextIsSet(): void
+    {
+        $this->expectException(RuntimeException::class);
+        PageContext::current();
+    }
+
+    public function testSetCurrentAndCurrentReturnSameInstance(): void
+    {
+        $ctx = new PageContext([], '/test');
+        PageContext::setCurrent($ctx);
+
+        self::assertSame($ctx, PageContext::current());
+    }
+
+    public function testSetCurrentNullClearsAmbientContext(): void
+    {
+        PageContext::setCurrent(new PageContext([], '/test'));
+        PageContext::setCurrent(null);
+
+        $this->expectException(RuntimeException::class);
+        PageContext::current();
+    }
+
     public function testCacheDefaultsToNull(): void
     {
         self::assertNull((new PageContext())->getCache());

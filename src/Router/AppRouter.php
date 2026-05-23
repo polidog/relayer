@@ -1017,13 +1017,17 @@ final class AppRouter
             $page->setComponentState($state);
         }
 
-        if ($page instanceof PageComponent) {
+        if ($page instanceof FunctionPage) {
+            // Render first so sub-components can register server actions via
+            // PageContext::current()->action(...) before dispatch runs.
+            $pageElement = $page->render();
             $page->dispatchActionFromRequest();
-        } elseif ($page instanceof FunctionPage) {
-            $page->dispatchActionFromRequest();
+        } else {
+            if ($page instanceof PageComponent) {
+                $page->dispatchActionFromRequest();
+            }
+            $pageElement = $page->render();
         }
-
-        $pageElement = $page->render();
 
         if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
             /** @var array<string, string> $metadata */
@@ -1369,6 +1373,7 @@ final class AppRouter
     {
         $pageId = $this->computePageId($pagePath);
         $context = new Component\PageContext($params, $pageId);
+        Component\PageContext::setCurrent($context);
         $context->setAuthenticator($this->resolveAuthenticator());
         $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
         $result = $factory(...$args);
