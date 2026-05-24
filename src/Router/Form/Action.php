@@ -46,15 +46,12 @@ final class Action
      * action class), so no container access is needed at dispatch time.
      * The class name is used as the action name — register at most one
      * instance per class per page.
-     *
-     * @param array<string, mixed> $args
      */
-    public static function register(ActionInterface $handler, array $args = []): string
+    public static function register(ActionInterface $handler): string
     {
         return PageContext::current()->action(
             $handler::class,
             $handler->handle(...),
-            $args,
         );
     }
 }

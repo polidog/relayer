@@ -49,10 +49,17 @@ final class FunctionPage
             return false;
         }
 
-        // Only trigger the pre-render pass when the action is NOT already
-        // registered (factory-registered actions are always available before
-        // dispatch and do not need a render pass to collect them).
-        return null === $this->context->getAction($name);
+        // Factory-registered actions are always available before dispatch and
+        // do not need a render pass; avoid starting the session in that case.
+        if (null !== $this->context->getAction($name)) {
+            return false;
+        }
+
+        // Validate CSRF only when a pre-render pass is actually needed, so
+        // malformed/forged POSTs do not trigger the expensive double-render.
+        $csrf = $_POST[self::FORM_CSRF_FIELD] ?? null;
+
+        return \is_string($csrf) && CsrfToken::validate($csrf);
     }
 
     /**

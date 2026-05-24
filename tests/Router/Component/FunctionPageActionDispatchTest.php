@@ -30,6 +30,7 @@ final class FunctionPageActionDispatchTest extends TestCase
     {
         $_POST = [];
         unset($_SERVER['REQUEST_METHOD']);
+        PageContext::setCurrent(null);
     }
 
     #[RunInSeparateProcess]
@@ -169,6 +170,7 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertFalse($called);
     }
 
+    #[RunInSeparateProcess]
     public function testHasPendingActionReturnsTrueWhenActionNotYetRegistered(): void
     {
         // Token targets this page and names an action that has NOT been
@@ -177,7 +179,10 @@ final class FunctionPageActionDispatchTest extends TestCase
         $context = new PageContext([], '/users');
         $page = $this->makePage($context, '/users');
 
-        $_POST = ['_usephp_action' => FormAction::createForPage('/users', 'save')];
+        $_POST = [
+            '_usephp_action' => FormAction::createForPage('/users', 'save'),
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
 
         self::assertTrue($page->hasPendingAction());
     }
@@ -258,7 +263,6 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertSame(2, $callCount);
         // scripts should contain exactly one entry from the final render, not two
         self::assertCount(1, $context->getScripts());
-        PageContext::setCurrent(null);
     }
 
     private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage

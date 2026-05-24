@@ -117,20 +117,4 @@ final class ActionTest extends TestCase
         $action(['title' => 'Buy milk']);
         self::assertSame(['title' => 'Buy milk'], $captured);
     }
-
-    public function testRegisterPassesThroughArgs(): void
-    {
-        $ctx = new PageContext([], '/todos');
-        PageContext::setCurrent($ctx);
-
-        $handler = new class implements ActionInterface {
-            public function handle(array $form): void {}
-        };
-
-        $token = Action::register($handler, ['id' => 7]);
-
-        $decoded = FormAction::decode($token);
-        self::assertNotNull($decoded);
-        self::assertSame(['id' => 7], $decoded['args']);
-    }
 }
