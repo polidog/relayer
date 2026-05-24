@@ -84,18 +84,15 @@ final class ActionTest extends TestCase
         $ctx = new PageContext([], '/todos');
         PageContext::setCurrent($ctx);
 
-        $handler = new class implements ActionInterface {
-            public function handle(array $form): void {}
-        };
-
-        $token = Action::register($handler);
+        // No instance needed — just the class name.
+        $token = Action::register(ActionInterface::class);
 
         $decoded = FormAction::decode($token);
         self::assertNotNull($decoded);
         self::assertSame('/todos', $decoded['page']);
-        self::assertSame($handler::class, $decoded['di_class']);
+        self::assertSame(ActionInterface::class, $decoded['di_class']);
         // Class-based actions are NOT registered in the PageContext registry —
         // the container resolves them at dispatch time.
-        self::assertNull($ctx->getAction($handler::class));
+        self::assertNull($ctx->getAction(ActionInterface::class));
     }
 }
