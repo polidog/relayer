@@ -9,10 +9,13 @@ use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\Relayer\Router\Form\ActionInterface;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\Relayer\Router\RedirectException;
 use Polidog\UsePhp\Runtime\Element;
+use Psr\Container\ContainerInterface;
+use RuntimeException;
 
 /**
  * Dispatch tests exercise CsrfToken which calls session_start(), so each
@@ -265,11 +268,82 @@ final class FunctionPageActionDispatchTest extends TestCase
         self::assertCount(1, $context->getScripts());
     }
 
+    public function testHasPendingActionReturnsFalseForDiClassToken(): void
+    {
+        // DI-dispatched actions never need a pre-render pass — the handler
+        // is resolved from the container at dispatch time.
+        $context = new PageContext([], '/users');
+        $page = $this->makePageWithContainer($context, '/users', $this->makeContainer([]));
+
+        $_POST = ['_usephp_action' => FormAction::createDiActionForPage('/users', 'App\SomeAction')];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    #[RunInSeparateProcess]
+    public function testDispatchInvokesDiHandlerFromContainer(): void
+    {
+        $captured = null;
+        $handler = new class($captured) implements ActionInterface {
+            public function __construct(public mixed &$captured) {}
+
+            public function handle(array $form): void
+            {
+                $this->captured = $form;
+            }
+        };
+
+        $container = $this->makeContainer([$handler::class => $handler]);
+        $context = new PageContext([], '/users');
+        $page = $this->makePageWithContainer($context, '/users', $container);
+
+        $_POST = [
+            '_usephp_action' => FormAction::createDiActionForPage('/users', $handler::class),
+            '_usephp_csrf' => CsrfToken::getToken(),
+            'email' => 'alice@example.com',
+        ];
+
+        $page->dispatchActionFromRequest();
+
+        self::assertSame(['email' => 'alice@example.com'], $captured);
+    }
+
     private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage
     {
         $renderFn ??= static fn () => new Element('div', [], []);
-        $pageClass = FunctionPage::class;
 
-        return new $pageClass($renderFn, $context, $pageId);
+        return new FunctionPage($renderFn, $context, $pageId);
+    }
+
+    private function makePageWithContainer(
+        PageContext $context,
+        string $pageId,
+        ContainerInterface $container,
+        ?Closure $renderFn = null,
+    ): FunctionPage {
+        $renderFn ??= static fn () => new Element('div', [], []);
+
+        return new FunctionPage($renderFn, $context, $pageId, $container);
+    }
+
+    /**
+     * @param array<string, mixed> $services
+     */
+    private function makeContainer(array $services): ContainerInterface
+    {
+        return new class($services) implements ContainerInterface {
+            /** @param array<string, mixed> $services */
+            public function __construct(private array $services) {}
+
+            public function get(string $id): mixed
+            {
+                return $this->services[$id] ?? throw new RuntimeException("Not found: {$id}");
+            }
+
+            public function has(string $id): bool
+            {
+                return isset($this->services[$id]);
+            }
+        };
     }
 }

@@ -39,6 +39,20 @@ final class FormAction
     }
 
     /**
+     * Build a token for a class-based action on a function-style page. The
+     * handler is resolved from the DI container at dispatch time using the
+     * class name, so no render pass is needed to collect the action before
+     * dispatching — the token carries enough information on its own.
+     */
+    public static function createDiActionForPage(string $pageId, string $class): string
+    {
+        return self::encode([
+            'page' => $pageId,
+            'di_class' => $class,
+        ]);
+    }
+
+    /**
      * @return null|array<string, mixed>
      */
     public static function decode(string $token): ?array

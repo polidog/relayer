@@ -7,9 +7,11 @@ namespace Polidog\Relayer\Router\Component;
 use Closure;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Document\Script;
+use Polidog\Relayer\Router\Form\ActionInterface;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\UsePhp\Runtime\Element;
+use Psr\Container\ContainerInterface;
 
 final class FunctionPage
 {
@@ -20,12 +22,16 @@ final class FunctionPage
         private Closure $renderFn,
         private PageContext $context,
         private string $pageId,
+        private ?ContainerInterface $container = null,
     ) {}
 
     /**
      * Return true when the current request is a POST that carries a form-action
      * token targeting this page. Used by AppRouter to decide whether to run
      * render before dispatch so sub-components can register their actions first.
+     *
+     * DI-dispatched class actions (di_class token) never need a pre-render
+     * pass — the handler is resolved from the container at dispatch time.
      */
     public function hasPendingAction(): bool
     {
@@ -41,6 +47,11 @@ final class FunctionPage
         $payload = FormAction::decode($token);
 
         if (null === $payload || ($payload['page'] ?? null) !== $this->pageId) {
+            return false;
+        }
+
+        // DI-dispatched class actions resolve via container — no pre-render.
+        if (isset($payload['di_class'])) {
             return false;
         }
 
@@ -66,6 +77,10 @@ final class FunctionPage
      * Resolve a POST request to a registered server action on this page and
      * invoke it. Mirrors PageComponent::dispatchActionFromRequest() but
      * dispatches by (pageId, name) instead of (class, method).
+     *
+     * Two dispatch paths:
+     *   - di_class token: resolve ActionInterface from the DI container.
+     *   - name token: look up the closure registered in PageContext.
      */
     public function dispatchActionFromRequest(): void
     {
@@ -96,6 +111,25 @@ final class FunctionPage
             return;
         }
 
+        /** @var array<string, mixed> $formData */
+        $formData = $_POST;
+        unset($formData[self::FORM_ACTION_FIELD], $formData[self::FORM_CSRF_FIELD]);
+
+        // DI dispatch: resolve the handler class from the container.
+        if (isset($payload['di_class'])) {
+            $class = $payload['di_class'];
+            if (!\is_string($class) || null === $this->container || !$this->container->has($class)) {
+                return;
+            }
+            $handler = $this->container->get($class);
+            if ($handler instanceof ActionInterface) {
+                $handler->handle($formData);
+            }
+
+            return;
+        }
+
+        // Closure dispatch: look up the handler registered in PageContext.
         $name = $payload['name'] ?? null;
         if (!\is_string($name)) {
             return;
@@ -105,9 +139,6 @@ final class FunctionPage
         if (null === $handler) {
             return;
         }
-
-        $formData = $_POST;
-        unset($formData[self::FORM_ACTION_FIELD], $formData[self::FORM_CSRF_FIELD]);
 
         $args = $payload['args'] ?? [];
         if (!\is_array($args)) {

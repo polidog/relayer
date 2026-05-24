@@ -79,7 +79,7 @@ final class ActionTest extends TestCase
         self::assertSame(['id' => 42], $decoded['args']);
     }
 
-    public function testRegisterUsesClassNameAsActionName(): void
+    public function testRegisterEmbedsDiClassInToken(): void
     {
         $ctx = new PageContext([], '/todos');
         PageContext::setCurrent($ctx);
@@ -92,29 +92,10 @@ final class ActionTest extends TestCase
 
         $decoded = FormAction::decode($token);
         self::assertNotNull($decoded);
-        self::assertSame($handler::class, $decoded['name']);
-    }
-
-    public function testRegisterDispatchesHandleMethod(): void
-    {
-        $ctx = new PageContext([], '/todos');
-        PageContext::setCurrent($ctx);
-
-        $captured = null;
-        $handler = new class($captured) implements ActionInterface {
-            public function __construct(public mixed &$captured) {}
-
-            public function handle(array $form): void
-            {
-                $this->captured = $form;
-            }
-        };
-
-        Action::register($handler);
-
-        $action = $ctx->getAction($handler::class);
-        self::assertNotNull($action);
-        $action(['title' => 'Buy milk']);
-        self::assertSame(['title' => 'Buy milk'], $captured);
+        self::assertSame('/todos', $decoded['page']);
+        self::assertSame($handler::class, $decoded['di_class']);
+        // Class-based actions are NOT registered in the PageContext registry —
+        // the container resolves them at dispatch time.
+        self::assertNull($ctx->getAction($handler::class));
     }
 }

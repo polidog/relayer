@@ -41,17 +41,16 @@ final class Action
     }
 
     /**
-     * Register a class-based action. The handler instance is already
-     * DI-resolved by the caller (constructor-injected component or dedicated
-     * action class), so no container access is needed at dispatch time.
-     * The class name is used as the action name — register at most one
-     * instance per class per page.
+     * Register a class-based action. The class name is embedded in the
+     * returned token; at dispatch time the framework resolves a fresh instance
+     * from the DI container and calls handle() — no pre-render pass is needed
+     * and no closure is stored in the PageContext.
      */
     public static function register(ActionInterface $handler): string
     {
-        return PageContext::current()->action(
+        return FormAction::createDiActionForPage(
+            PageContext::current()->pageId,
             $handler::class,
-            $handler->handle(...),
         );
     }
 }

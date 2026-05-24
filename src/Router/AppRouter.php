@@ -1408,7 +1408,7 @@ final class AppRouter
             throw new RuntimeException("Page factory must return a Closure or Element: {$pagePath}");
         }
 
-        return new FunctionPage($renderFn, $context, $pageId);
+        return new FunctionPage($renderFn, $context, $pageId, $this->container);
     }
 
     /**
