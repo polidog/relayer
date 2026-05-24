@@ -320,6 +320,7 @@ final class AppRouter
             if ($hasUsephp) {
                 RenderContext::clearApp();
             }
+            Component\PageContext::setCurrent(null);
             // Drop the ambient request Translator so a non-default locale
             // cannot bleed into the next request's pre-dispatch code (e.g.
             // validation) under a long-running worker.
@@ -414,6 +415,7 @@ final class AppRouter
             if (null !== $this->usephp) {
                 RenderContext::clearApp();
             }
+            Component\PageContext::setCurrent(null);
             Translators::reset();
             // Normal-path counterpart to the shutdown handler above —
             // idempotent so a later shutdown call is a no-op.
@@ -1017,13 +1019,31 @@ final class AppRouter
             $page->setComponentState($state);
         }
 
-        if ($page instanceof PageComponent) {
-            $page->dispatchActionFromRequest();
-        } elseif ($page instanceof FunctionPage) {
-            $page->dispatchActionFromRequest();
+        if ($page instanceof FunctionPage) {
+            if ($page->hasPendingAction()) {
+                // Double-render for function pages with a matching POST action:
+                // 1. Pre-render: executes the render closure so sub-components can
+                //    self-register their server actions via PageContext::current()->action().
+                //    The returned element is discarded.
+                // 2. Dispatch: invokes the matched action handler (may redirect/abort,
+                //    or mutate factory-scoped shared state such as $errors references).
+                // 3. Re-render: FunctionPage::renderAfterDispatch() clears the action
+                //    registry and re-runs the render closure so (a) sub-component actions
+                //    are re-registered for the response form and (b) the element reflects
+                //    any state mutations made by the action handler.
+                $page->render();
+                $page->dispatchActionFromRequest();
+                $pageElement = $page->renderAfterDispatch();
+            } else {
+                $page->dispatchActionFromRequest(); // no-op on GET
+                $pageElement = $page->render();
+            }
+        } else {
+            if ($page instanceof PageComponent) {
+                $page->dispatchActionFromRequest();
+            }
+            $pageElement = $page->render();
         }
-
-        $pageElement = $page->render();
 
         if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
             /** @var array<string, string> $metadata */
@@ -1369,6 +1389,7 @@ final class AppRouter
     {
         $pageId = $this->computePageId($pagePath);
         $context = new Component\PageContext($params, $pageId);
+        Component\PageContext::setCurrent($context);
         $context->setAuthenticator($this->resolveAuthenticator());
         $args = $this->resolveFactoryArguments($factory, $context, $pagePath);
         $result = $factory(...$args);

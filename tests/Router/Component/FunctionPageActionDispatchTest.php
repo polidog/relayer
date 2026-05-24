@@ -30,6 +30,7 @@ final class FunctionPageActionDispatchTest extends TestCase
     {
         $_POST = [];
         unset($_SERVER['REQUEST_METHOD']);
+        PageContext::setCurrent(null);
     }
 
     #[RunInSeparateProcess]
@@ -167,6 +168,101 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page->dispatchActionFromRequest();
 
         self::assertFalse($called);
+    }
+
+    #[RunInSeparateProcess]
+    public function testHasPendingActionReturnsTrueWhenActionNotYetRegistered(): void
+    {
+        // Token targets this page and names an action that has NOT been
+        // registered yet — this is the sub-component self-registration case
+        // where a pre-render pass is required.
+        $context = new PageContext([], '/users');
+        $page = $this->makePage($context, '/users');
+
+        $_POST = [
+            '_usephp_action' => FormAction::createForPage('/users', 'save'),
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        self::assertTrue($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseWhenActionAlreadyRegistered(): void
+    {
+        // Factory-registered actions are available before dispatch — no
+        // pre-render pass needed, so hasPendingAction() must return false.
+        $context = new PageContext([], '/users');
+        $token = $context->action('save', static function (): void {});
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => $token];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseOnGet(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+
+        $context = new PageContext([], '/users');
+        $token = $context->action('save', static function (): void {});
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => $token];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseForDifferentPage(): void
+    {
+        $context = new PageContext([], '/users');
+        $page = $this->makePage($context, '/users');
+
+        $_POST = ['_usephp_action' => FormAction::createForPage('/other', 'save')];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseWithoutToken(): void
+    {
+        $page = $this->makePage(new PageContext([], '/users'), '/users');
+        $_POST = [];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testHasPendingActionReturnsFalseWhenNameMissing(): void
+    {
+        $page = $this->makePage(new PageContext([], '/users'), '/users');
+
+        // Class-style token has no 'name' field — must not trigger pre-render.
+        $_POST = ['_usephp_action' => FormAction::create('App\SomePage', 'handle')];
+
+        self::assertFalse($page->hasPendingAction());
+    }
+
+    public function testRenderAfterDispatchClearsRenderStateAndReRenders(): void
+    {
+        $callCount = 0;
+        $context = new PageContext([], '/users');
+        PageContext::setCurrent($context);
+
+        $renderFn = static function () use ($context, &$callCount): Element {
+            ++$callCount;
+            $context->action('save', static function (): void {});
+            $context->js('/app.js');
+
+            return new Element('div', [], []);
+        };
+
+        $page = $this->makePage($context, '/users', $renderFn);
+
+        $page->render();
+        $page->renderAfterDispatch(); // clears actions + scripts, then re-renders
+
+        self::assertSame(2, $callCount);
+        // scripts should contain exactly one entry from the final render, not two
+        self::assertCount(1, $context->getScripts());
     }
 
     private function makePage(PageContext $context, string $pageId, ?Closure $renderFn = null): FunctionPage

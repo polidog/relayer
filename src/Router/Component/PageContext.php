@@ -20,6 +20,8 @@ use RuntimeException;
 
 final class PageContext
 {
+    private static ?self $current = null;
+
     /** @var array<string, string> */
     private array $metadata = [];
 
@@ -44,6 +46,37 @@ final class PageContext
         public readonly array $params = [],
         public readonly string $pageId = '',
     ) {}
+
+    /**
+     * Set the ambient PageContext for the current request. Called by AppRouter
+     * when building a FunctionPage; also used in tests to seed or clear state.
+     *
+     * @internal
+     */
+    public static function setCurrent(?self $ctx): void
+    {
+        self::$current = $ctx;
+    }
+
+    /**
+     * Return the PageContext for the page currently being built or rendered.
+     * Available from the moment AppRouter creates the context through the end
+     * of the render phase, so sub-components can register server actions via
+     * `PageContext::current()->action(...)` without needing `$ctx` threaded
+     * through props.
+     *
+     * Throws if called outside a page request (no context has been set).
+     */
+    public static function current(): self
+    {
+        if (null === self::$current) {
+            throw new RuntimeException(
+                'PageContext::current() called outside a page request.',
+            );
+        }
+
+        return self::$current;
+    }
 
     /**
      * @internal appRouter wires this before invoking the page factory so
@@ -141,6 +174,24 @@ final class PageContext
     public function getAction(string $name): ?Closure
     {
         return $this->actions[$name] ?? null;
+    }
+
+    /**
+     * Reset all render-accumulated state so a second render pass starts clean:
+     * clears the action registry (so sub-components can re-register without
+     * hitting the duplicate-name guard), the script list (so scripts added
+     * via js() during the pre-render are not emitted twice in the response),
+     * and metadata (so conditional metadata set during the pre-render does
+     * not leak into the final response if the re-render omits it).
+     *
+     * @internal called by FunctionPage::renderAfterDispatch() before the
+     *           re-render that follows a dispatched (non-redirecting) action
+     */
+    public function clearRenderState(): void
+    {
+        $this->actions = [];
+        $this->scripts = [];
+        $this->metadata = [];
     }
 
     /**

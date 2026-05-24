@@ -23,6 +23,46 @@ final class FunctionPage
     ) {}
 
     /**
+     * Return true when the current request is a POST that carries a form-action
+     * token targeting this page. Used by AppRouter to decide whether to run
+     * render before dispatch so sub-components can register their actions first.
+     */
+    public function hasPendingAction(): bool
+    {
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+            return false;
+        }
+
+        $token = $_POST[self::FORM_ACTION_FIELD] ?? null;
+        if (!\is_string($token)) {
+            return false;
+        }
+
+        $payload = FormAction::decode($token);
+
+        if (null === $payload || ($payload['page'] ?? null) !== $this->pageId) {
+            return false;
+        }
+
+        $name = $payload['name'] ?? null;
+        if (!\is_string($name)) {
+            return false;
+        }
+
+        // Factory-registered actions are always available before dispatch and
+        // do not need a render pass; avoid starting the session in that case.
+        if (null !== $this->context->getAction($name)) {
+            return false;
+        }
+
+        // Validate CSRF only when a pre-render pass is actually needed, so
+        // malformed/forged POSTs do not trigger the expensive double-render.
+        $csrf = $_POST[self::FORM_CSRF_FIELD] ?? null;
+
+        return \is_string($csrf) && CsrfToken::validate($csrf);
+    }
+
+    /**
      * Resolve a POST request to a registered server action on this page and
      * invoke it. Mirrors PageComponent::dispatchActionFromRequest() but
      * dispatches by (pageId, name) instead of (class, method).
@@ -89,6 +129,23 @@ final class FunctionPage
         \assert($element instanceof Element);
 
         return $element;
+    }
+
+    /**
+     * Re-render after a dispatched action that did not redirect. Resets all
+     * render-accumulated PageContext state (actions and scripts) so
+     * sub-components can re-register without hitting the duplicate-name guard
+     * and script tags are not emitted twice. Returns a fresh Element that
+     * reflects any state mutated by the action handler.
+     *
+     * @internal called by AppRouter::renderPageInternal() in the double-render
+     *           path (pre-render → dispatch → renderAfterDispatch)
+     */
+    public function renderAfterDispatch(): Element
+    {
+        $this->context->clearRenderState();
+
+        return $this->render();
     }
 
     /**
