@@ -179,8 +179,10 @@ final class PageContext
     /**
      * Reset all render-accumulated state so a second render pass starts clean:
      * clears the action registry (so sub-components can re-register without
-     * hitting the duplicate-name guard) and the script list (so scripts added
-     * via js() during the pre-render are not emitted twice in the response).
+     * hitting the duplicate-name guard), the script list (so scripts added
+     * via js() during the pre-render are not emitted twice in the response),
+     * and metadata (so conditional metadata set during the pre-render does
+     * not leak into the final response if the re-render omits it).
      *
      * @internal called by FunctionPage::renderAfterDispatch() before the
      *           re-render that follows a dispatched (non-redirecting) action
@@ -189,6 +191,7 @@ final class PageContext
     {
         $this->actions = [];
         $this->scripts = [];
+        $this->metadata = [];
     }
 
     /**

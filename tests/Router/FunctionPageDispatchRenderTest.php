@@ -47,23 +47,23 @@ final class FunctionPageDispatchRenderTest extends TestCase
         \file_put_contents(
             $this->workDir . '/page.php',
             <<<'PHP'
-                <?php
-                use Polidog\Relayer\Router\Component\PageContext;
-                use Polidog\UsePhp\Runtime\Element;
+<?php
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
 
-                return function (PageContext $ctx): Closure {
-                    $errors = [];
-                    $ctx->action('submit', function (array $form) use (&$errors): void {
-                        if ('' === ($form['name'] ?? '')) {
-                            $errors[] = 'Name is required';
-                        }
-                    });
-                    return function () use (&$errors): Element {
-                        $body = $errors ? implode(',', $errors) : 'ok';
-                        return new Element('p', ['data-result' => 'yes'], [$body]);
-                    };
-                };
-                PHP,
+return function (PageContext $ctx): Closure {
+    $errors = [];
+    $ctx->action('submit', function (array $form) use (&$errors): void {
+        if ('' === ($form['name'] ?? '')) {
+            $errors[] = 'Name is required';
+        }
+    });
+    return function () use (&$errors): Element {
+        $body = $errors ? implode(',', $errors) : 'ok';
+        return new Element('p', ['data-result' => 'yes'], [$body]);
+    };
+};
+PHP,
         );
 
         $token = FormAction::createForPage('/', 'submit');
@@ -89,22 +89,22 @@ final class FunctionPageDispatchRenderTest extends TestCase
         \file_put_contents(
             $this->workDir . '/page.php',
             <<<'PHP'
-                <?php
-                use Polidog\Relayer\Router\Component\PageContext;
-                use Polidog\UsePhp\Runtime\Element;
+<?php
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\UsePhp\Runtime\Element;
 
-                return function (): Closure {
-                    $dispatched = false; // factory scope — survives re-render
-                    return function () use (&$dispatched): Element {
-                        $ctx = PageContext::current();
-                        $ctx->action('doSomething', function () use (&$dispatched): void {
-                            $dispatched = true;
-                        });
-                        $label = $dispatched ? 'dispatched' : 'not-dispatched';
-                        return new Element('span', ['data-label' => $label], [$label]);
-                    };
-                };
-                PHP,
+return function (): Closure {
+    $dispatched = false; // factory scope — survives re-render
+    return function () use (&$dispatched): Element {
+        $ctx = PageContext::current();
+        $ctx->action('doSomething', function () use (&$dispatched): void {
+            $dispatched = true;
+        });
+        $label = $dispatched ? 'dispatched' : 'not-dispatched';
+        return new Element('span', ['data-label' => $label], [$label]);
+    };
+};
+PHP,
         );
 
         $token = FormAction::createForPage('/', 'doSomething');
