@@ -211,6 +211,13 @@ final class ScaffoldTest extends TestCase
         // unvalidated; the two runtime writers PHP itself owns move under
         // var/cache/ so the writable set is one directory tree.
         self::assertStringContainsString('opcache.validate_timestamps = 0', $dockerfile);
+        // The base image activates no php.ini, so PHP's defaults print
+        // errors into the response and log none of them. A prod image
+        // that ships that way leaks absolute paths and stack traces to
+        // whoever can trigger a fatal.
+        self::assertStringContainsString('display_errors = Off', $dockerfile);
+        self::assertStringContainsString('display_startup_errors = Off', $dockerfile);
+        self::assertStringContainsString('log_errors = On', $dockerfile);
         self::assertStringContainsString('session.save_path = /app/var/cache/sessions', $dockerfile);
         self::assertStringContainsString('upload_tmp_dir = /app/var/cache/uploads', $dockerfile);
 

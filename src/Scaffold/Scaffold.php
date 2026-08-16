@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 7;
+    public const int STRUCTURE_VERSION = 8;
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -207,6 +207,15 @@ final class Scaffold
                     'cb8068ad84466847beaedbf8bfcdfcd2caac89a785c573516549e708b8e0bd45',
                     // v5-v6, with it
                     '047f8b5b87ebf610bd8b34e83dbe6fe2d69256d205136606db00ce3b21b249db',
+                ],
+            ],
+            // v8 turns display_errors off and log_errors on in the prod
+            // image. The base image activates no php.ini, so PHP's own
+            // defaults were in force and a fatal reached the client.
+            8 => [
+                'Dockerfile' => [
+                    // v7, as first shipped with the base/dev/prod targets
+                    '1578e593b86ecac7f8b760d2d87558ca4b63ab4a9243d2c4e45fc4002631a12b',
                 ],
             ],
         ];
@@ -857,8 +866,23 @@ final class Scaffold
             # ETag store is already there), which is what the read-only
             # service in compose.yaml mounts. Loaded after zz-relayer.ini,
             # so these win.
+            #
+            # display_errors/log_errors are not a preference here. The
+            # FrankenPHP image activates no php.ini of its own (it ships
+            # php.ini-production and php.ini-development but enables
+            # neither), so PHP's built-in defaults apply: errors are
+            # PRINTED TO THE RESPONSE and logged nowhere. In production
+            # that hands any visitor who can trigger a fatal your absolute
+            # paths and a stack trace, and leaves you nothing to debug
+            # from. Off + On is the inverse: nothing in the body, every
+            # error on STDERR, which is where `docker logs` and every
+            # platform log drain already look (and where LOG_FILE-less
+            # Monolog writes too, so the two agree).
             RUN mkdir -p var/cache/etags var/cache/sessions var/cache/uploads \
              && printf '%s\n' \
+                    'display_errors = Off' \
+                    'display_startup_errors = Off' \
+                    'log_errors = On' \
                     'opcache.validate_timestamps = 0' \
                     'opcache.memory_consumption = 256' \
                     'session.save_path = /app/var/cache/sessions' \

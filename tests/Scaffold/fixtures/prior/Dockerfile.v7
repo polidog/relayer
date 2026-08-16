@@ -1,0 +1,98 @@
+# Relayer app — FrankenPHP image with two build targets:
+#
+#   dev   .psx compiled on the fly, APP_ENV=dev from .env, no
+#         build step. This is what `docker compose up --build`
+#         uses.
+#   prod  the three precompile steps run at BUILD time, so the
+#         running container never scans, compiles or rebuilds
+#         per request — and generates nothing at all, which is
+#         what makes a read-only filesystem possible (see the
+#         commented app-prod service in compose.yaml).
+#
+# `prod` is the last stage, so a bare `docker build .` (no
+# --target) produces the production image; compose pins the
+# target explicitly for both.
+#
+# FrankenPHP serves /app/public through its bundled Caddy in
+# classic (per-request) mode, so Relayer's public/index.php
+# front controller works as-is — no framework changes. For
+# worker mode (app kept booted between requests), build the
+# single binary instead: see static-build.Dockerfile.
+
+# --- Shared base: extensions, dependencies, app source -------
+FROM dunglas/frankenphp:php8.5 AS base
+
+# curl and pdo_sqlite ship enabled in the base image.
+# pdo_mysql matches the DATABASE_DSN example in .env and the
+# commented db service in compose.yaml; zip lets composer
+# install from dist. For PostgreSQL append pdo_pgsql here.
+RUN install-php-extensions pdo_mysql zip
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+WORKDIR /app
+
+# Install dependencies in their own layer so editing app code
+# doesn't reinstall them. --no-scripts because the post-install
+# hook (usephp asset publisher) needs the app source, which is
+# copied next; the second install runs it with sources present.
+COPY composer.* ./
+RUN composer install --no-interaction --prefer-dist \
+    --no-scripts --no-autoloader
+
+COPY . .
+RUN composer install --no-interaction --prefer-dist
+
+# php.ini is loaded as a conf.d override (last, so it wins);
+# edit the project's php.ini, not this path. Applied after the
+# Composer steps so build-time Composer keeps its own memory
+# limit rather than the runtime override.
+COPY php.ini "$PHP_INI_DIR/conf.d/zz-relayer.ini"
+
+# Serve on :8000 to match compose.yaml and the README. With
+# no hostname FrankenPHP also skips auto-HTTPS, which is what
+# you want for local development.
+ENV SERVER_NAME=:8000
+EXPOSE 8000
+
+# --- dev: nothing precompiled, APP_ENV comes from .env -------
+FROM base AS dev
+
+# --- prod: everything precompiled, nothing built at runtime --
+FROM base AS prod
+
+# Drop the dev-only packages the shared base installed and
+# regenerate the autoloader without its filesystem fallback —
+# nothing is added to the image, so the classmap is complete.
+RUN composer install --no-interaction --prefer-dist \
+    --no-dev --classmap-authoritative
+
+# .env.local overrides the committed .env (APP_ENV=dev) without
+# editing it. .dockerignore keeps the host's own .env.local out
+# of the image, so this is the only one.
+RUN printf 'APP_ENV=prod\n' > .env.local
+
+# The three precompile steps. Each removes a per-request cost:
+#   usephp compile     .psx -> PHP, plus the component manifest
+#   routes:compile     the src/Pages/ walk -> one PHP array
+#   container:compile  ContainerBuilder+compile() -> one class
+# A path with no .psx files is skipped, so src/Components is
+# fine to list before the app has any.
+RUN vendor/bin/usephp compile src/Pages src/Components \
+ && vendor/bin/relayer routes:compile \
+ && vendor/bin/relayer container:compile
+
+# With everything precompiled, OPcache can stop stat()-ing
+# files and never expire — revalidation = redeploy. Sessions
+# and upload temp files move under var/cache/ so that EVERY
+# path this image writes to at runtime lives in one place (the
+# ETag store is already there), which is what the read-only
+# service in compose.yaml mounts. Loaded after zz-relayer.ini,
+# so these win.
+RUN mkdir -p var/cache/etags var/cache/sessions var/cache/uploads \
+ && printf '%s\n' \
+        'opcache.validate_timestamps = 0' \
+        'opcache.memory_consumption = 256' \
+        'session.save_path = /app/var/cache/sessions' \
+        'upload_tmp_dir = /app/var/cache/uploads' \
+    > "$PHP_INI_DIR/conf.d/zzz-relayer-prod.ini"
