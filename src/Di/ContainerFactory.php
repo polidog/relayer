@@ -53,6 +53,7 @@ use Symfony\Component\DependencyInjection\Dumper\PhpDumper;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
 use Symfony\Component\DependencyInjection\Reference;
+use Throwable;
 
 /**
  * Builds and compiles the application's Symfony DI container.
@@ -148,12 +149,33 @@ final class ContainerFactory
             // it now, from the *runtime* environment (so env-derived
             // parameters bake the values this process actually has), and
             // load it, so every later request takes the fast path above.
-            // A write failure is deliberately not fatal: the request is
-            // served by the live build below.
+            // Producing the dump is deliberately best-effort: whatever
+            // goes wrong, the request is still served by the live build
+            // below. That covers the write (a read-only filesystem) and
+            // also {@see dump()} rejecting a multi-file PhpDumper result —
+            // a failure mode that exists ONLY on this path, so letting it
+            // escape would make opting into warm-up turn a bootable app
+            // into a dead one.
+            //
+            // `build()` is inside the try only incidentally: it throws for
+            // reasons (a broken service definition) that would throw again
+            // on the fallback below, which is the right place for it to
+            // surface. `loadDump()` stays outside — we just wrote that
+            // file, so failing to load it back is a real defect and must
+            // not be swallowed into a silent per-request rebuild.
             if ($warm) {
-                $dumped = self::dump(self::build($projectRoot, $configurator, $isDev, true));
+                $written = false;
 
-                if (self::writeDump($compiledContainerFile, $dumped)) {
+                try {
+                    $written = self::writeDump(
+                        $compiledContainerFile,
+                        self::dump(self::build($projectRoot, $configurator, $isDev, true)),
+                    );
+                } catch (Throwable) {
+                    $written = false;
+                }
+
+                if ($written) {
                     return self::loadDump($compiledContainerFile);
                 }
             }

@@ -10,6 +10,7 @@ use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
 use ReflectionProperty;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 /**
  * `RELAYER_WARM_CACHE` — the opt-in that lets a production boot build the
@@ -78,6 +79,38 @@ final class RelayerWarmCacheTest extends TestCase
         self::assertTrue(
             (new ReflectionProperty(AppRouter::class, 'autoCompilePsx'))->getValue($router),
         );
+    }
+
+    #[RunInSeparateProcess]
+    public function testWarmStillServesTheRequestWhenTheArtifactCannotBeProduced(): void
+    {
+        $this->writeEnv("APP_ENV=prod\nRELAYER_WARM_CACHE=1\n");
+
+        // Occupy the container cache directory's path with a file so the
+        // dump cannot be written. That is the reachable half of "warm-up
+        // failed"; the other half (dump() rejecting a multi-file PhpDumper
+        // result) needs a container no test can realistically build, but
+        // both converge on the same fall-through, so this pins the
+        // contract they share.
+        $containerDir = \dirname($this->projectRoot . '/' . Relayer::COMPILED_CONTAINER_FILE);
+        \mkdir(\dirname($containerDir), 0o755, true);
+        \file_put_contents($containerDir, 'not a directory');
+
+        $router = Relayer::boot($this->projectRoot);
+
+        // Warm-up is best effort: failing to produce the artifact must
+        // cost speed, never availability.
+        self::assertInstanceOf(AppRouter::class, $router);
+        self::assertFileDoesNotExist($this->projectRoot . '/' . Relayer::COMPILED_CONTAINER_FILE);
+        self::assertFalse(\class_exists(Relayer::COMPILED_CONTAINER_CLASS, false));
+
+        // ...and the container it fell back to is a live build, which is
+        // the whole point: the request is served with real wiring rather
+        // than a half-written dump.
+        $inner = (new ReflectionProperty(InjectorContainer::class, 'container'))
+            ->getValue(Relayer::container())
+        ;
+        self::assertInstanceOf(ContainerBuilder::class, $inner);
     }
 
     #[RunInSeparateProcess]
