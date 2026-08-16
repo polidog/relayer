@@ -107,15 +107,26 @@ vendor/bin/relayer upgrade
 composer install
 ```
 
-It reads the `extra.relayer.structure_version` marker, writes only the
-files added in the versions between it and the current one, then advances
-the marker (the one mutation `init` deliberately never makes). Every step
-is **skip-if-exists**, so files you have edited are kept and reported as
-skipped; the scope is exactly the structure deltas plus the marker — it
-does not touch composer scripts or autoload (re-run `relayer init` for
-those — it is additive and safe). It is idempotent: once at the current
-version it reports nothing to do. If the project has no marker it was not
-created by `relayer init`; run `init` first to stamp the current shape.
+It reads the `extra.relayer.structure_version` marker, applies the deltas
+between it and the current one, then advances the marker (the one mutation
+`init` deliberately never makes). New files are **skip-if-exists**, so a
+file you have edited is kept and reported as skipped (`=`).
+
+A version can also change the *content* of a file it shipped earlier — the
+`Dockerfile` gaining a production target, say. Those are reported
+separately and gated on the file being untouched: `upgrade` replaces your
+copy only when it is still byte-for-byte what some framework version
+wrote (`~`). If you have edited it at all, it is left exactly as it is and
+listed as kept (`!`), with a note that the template moved on; take the new
+one by saving your changes, deleting the file and running `relayer init`.
+So the command can update a stale template without ever overwriting your
+work.
+
+The scope is exactly the structure deltas plus the marker — it does not
+touch composer scripts or autoload (re-run `relayer init` for those — it
+is additive and safe). It is idempotent: once at the current version it
+reports nothing to do. If the project has no marker it was not created by
+`relayer init`; run `init` first to stamp the current shape.
 
 ## Project Layout
 
@@ -260,6 +271,20 @@ Then run with `APP_ENV` unset and OPcache `validate_timestamps=0` (the
 scaffolded `php.ini` carries the production block). Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
+
+**Read-only filesystem.** The scaffolded `Dockerfile` runs all three steps
+in its `prod` target, so the image generates nothing at runtime and can be
+served with an immutable filesystem. `compose.yaml` ships that shape as a
+commented `app-prod` service: `read_only: true` plus a small `tmpfs` on
+each path still written — the ETag store (`var/cache/etags`), PHP sessions
+and upload temp files (both relocated under `var/cache/` by the prod
+image), and Caddy's own `/data` + `/config` (the FrankenPHP image points
+`XDG_DATA_HOME` / `XDG_CONFIG_HOME` there and declares no `VOLUME`, so a
+read-only container cannot start without them). Do **not** mount over
+`var/cache/` as a whole: the compiled routes, container and `.psx` are
+built into the image, and an empty tmpfs on top hides them — every request
+then silently falls back to the per-request scan and rebuild the artifacts
+exist to remove.
 
 **Runtime secrets vs `container:compile`.** `container:compile` runs
 `AppConfigurator::configure()` once, at deploy, and **bakes** whatever

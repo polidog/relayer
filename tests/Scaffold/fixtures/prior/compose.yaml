@@ -1,0 +1,36 @@
+# Relayer app — minimal Compose setup. `docker compose up
+# --build`, then open http://localhost:8000.
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    # Mount the source for live edits (APP_ENV=dev recompiles
+    # .psx on the fly). The bare /app/vendor volume keeps the
+    # image's installed dependencies from being hidden by the
+    # host checkout (which has no vendor/). Remove both for an
+    # immutable image.
+    # volumes:
+    #   - .:/app
+    #   - /app/vendor
+    # env_file: .env
+
+  # A database is optional. To use one, uncomment this service
+  # and set in .env: DATABASE_DSN=mysql:host=db;dbname=app —
+  # under Compose the host is the service name "db", not the
+  # .env default 127.0.0.1 (which, from the app container,
+  # would be the app itself).
+  # db:
+  #   image: mysql:8
+  #   environment:
+  #     MYSQL_DATABASE: app
+  #     MYSQL_USER: app
+  #     MYSQL_PASSWORD: secret
+  #     MYSQL_ROOT_PASSWORD: secret
+  #   ports:
+  #     - "3306:3306"
+  #   volumes:
+  #     - db-data:/var/lib/mysql
+
+# volumes:
+#   db-data:

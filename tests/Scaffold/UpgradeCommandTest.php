@@ -230,6 +230,95 @@ final class UpgradeCommandTest extends TestCase
         self::assertFileExists($this->project . '/CLAUDE.md');
     }
 
+    public function testRefreshesAPristineTemplateWhoseContentTheFrameworkChanged(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'extra' => ['relayer' => ['structure_version' => 6]],
+        ]);
+        // A v6 project's Dockerfile: untouched since the framework wrote
+        // it, so `upgrade` owes it the new content.
+        $prior = self::priorContent('Dockerfile');
+        \file_put_contents($this->project . '/Dockerfile', $prior);
+
+        $status = UpgradeCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        self::assertSame(
+            Scaffold::files()['Dockerfile'],
+            \file_get_contents($this->project . '/Dockerfile'),
+        );
+        self::assertStringContainsString('~ Dockerfile', $this->captured());
+    }
+
+    public function testLeavesALocallyModifiedTemplateAloneAndSaysSo(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'extra' => ['relayer' => ['structure_version' => 6]],
+        ]);
+        $mine = self::priorContent('Dockerfile') . "\nRUN echo mine\n";
+        \file_put_contents($this->project . '/Dockerfile', $mine);
+        // ...while an untouched sibling in the same rewrite step still
+        // gets updated: one local edit must not stall the whole step.
+        \file_put_contents($this->project . '/compose.yaml', self::priorContent('compose.yaml'));
+
+        $status = UpgradeCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        self::assertSame($mine, \file_get_contents($this->project . '/Dockerfile'));
+        self::assertStringContainsString('! Dockerfile', $this->captured());
+        self::assertSame(
+            Scaffold::files()['compose.yaml'],
+            \file_get_contents($this->project . '/compose.yaml'),
+        );
+        // The marker still advances: the project IS at the new structure,
+        // it just carries its own copy of one file.
+        $extra = $this->readComposer()['extra'];
+        self::assertIsArray($extra);
+        self::assertSame(
+            ['structure_version' => Scaffold::STRUCTURE_VERSION],
+            $extra['relayer'],
+        );
+    }
+
+    public function testDoesNotRecreateARewrittenFileTheProjectDeleted(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'extra' => ['relayer' => ['structure_version' => 6]],
+        ]);
+
+        $status = UpgradeCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        // Removing the container files is a legitimate choice (deploying
+        // some other way); a content migration must not push them back.
+        self::assertFileDoesNotExist($this->project . '/Dockerfile');
+        self::assertFileDoesNotExist($this->project . '/compose.yaml');
+    }
+
+    public function testUpgradingFromV1WritesCurrentContentWithoutARewritePass(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'extra' => ['relayer' => ['structure_version' => 1]],
+        ]);
+
+        $status = UpgradeCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        // v3 creates the file, v7 would rewrite it — the creation must
+        // already use the current template, so the later step is a no-op
+        // rather than writing the same bytes twice.
+        self::assertSame(
+            Scaffold::files()['Dockerfile'],
+            \file_get_contents($this->project . '/Dockerfile'),
+        );
+        self::assertStringContainsString('+ Dockerfile', $this->captured());
+        self::assertStringNotContainsString('~ Dockerfile', $this->captured());
+    }
+
     public function testIsIdempotentOnReRun(): void
     {
         $this->writeComposer([
@@ -291,6 +380,37 @@ final class UpgradeCommandTest extends TestCase
         $this->lines = [];
         InitCommand::run(['help'], $this->capture(), $this->project);
         self::assertStringContainsString('relayer upgrade', $this->captured());
+    }
+
+    /**
+     * A previously-shipped copy of `$relative`, byte-for-byte, as a real
+     * project scaffolded by an older framework version would hold it.
+     *
+     * {@see Scaffold::rewrites()} stores only hashes, so the bytes live in
+     * `fixtures/prior/` — and the assertion below is what keeps them
+     * honest: a fixture that no longer hashes to a value the map accepts
+     * would make these tests exercise the "locally modified" path while
+     * claiming to test the refresh path.
+     */
+    private static function priorContent(string $relative): string
+    {
+        $contents = \file_get_contents(__DIR__ . '/fixtures/prior/' . \str_replace('/', '_', $relative));
+        self::assertIsString($contents, "missing prior-content fixture for {$relative}");
+
+        $accepted = [];
+        foreach (Scaffold::rewrites() as $paths) {
+            foreach ($paths[$relative] ?? [] as $hash) {
+                $accepted[] = $hash;
+            }
+        }
+
+        self::assertContains(
+            \hash('sha256', $contents),
+            $accepted,
+            "the prior-content fixture for {$relative} is not a content Scaffold::rewrites() supersedes",
+        );
+
+        return $contents;
     }
 
     /**
