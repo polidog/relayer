@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Routing;
 
+use Polidog\Relayer\Relayer;
 use RuntimeException;
 
 /**
@@ -65,6 +66,45 @@ final class CompiledRoutes
         }
 
         return self::HEADER . ' ' . self::dump($entries, 0) . ";\n";
+    }
+
+    /**
+     * Write the artifact for `$routes` to `$outFile`, creating the
+     * directory when needed.
+     *
+     * The write is atomic (temp file in the same directory + rename) so a
+     * reader can never `require` a half-written artifact — that matters
+     * for the runtime warm-up path ({@see Relayer::boot()}
+     * with `RELAYER_WARM_CACHE`), where several threads may race to
+     * produce the same file while others are serving requests.
+     *
+     * Returns false on any I/O failure instead of throwing: the CLI turns
+     * that into a reported error, the warm-up path degrades to a live
+     * scan.
+     */
+    public static function write(RouteCollection $routes, string $appDir, string $outFile): bool
+    {
+        $outDir = \dirname($outFile);
+
+        if (!\is_dir($outDir) && !@\mkdir($outDir, 0o775, true) && !\is_dir($outDir)) {
+            return false;
+        }
+
+        $tmp = $outFile . '.tmp-' . \bin2hex(\random_bytes(4));
+
+        if (false === @\file_put_contents($tmp, self::export($routes, $appDir))) {
+            @\unlink($tmp);
+
+            return false;
+        }
+
+        if (!@\rename($tmp, $outFile)) {
+            @\unlink($tmp);
+
+            return false;
+        }
+
+        return true;
     }
 
     public static function load(string $file, string $appDir): RouteCollection

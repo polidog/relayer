@@ -8,7 +8,6 @@ use Closure;
 use Polidog\Relayer\AppConfigurator;
 use Polidog\Relayer\Di\ContainerFactory;
 use Polidog\Relayer\Relayer;
-use Symfony\Component\DependencyInjection\Dumper\PhpDumper;
 use Symfony\Component\Dotenv\Dotenv;
 use Throwable;
 
@@ -94,21 +93,13 @@ final class ContainerCompileCommand
             // baked into the dump and runtime env changes would be ignored.
             $container = ContainerFactory::create($root, $configurator, false, forDump: true);
 
-            $class = Relayer::COMPILED_CONTAINER_CLASS;
-            $sep = \strrpos($class, '\\');
-            $dumped = (new PhpDumper($container))->dump([
-                'class' => false === $sep ? $class : \substr($class, $sep + 1),
-                'namespace' => false === $sep ? '' : \substr($class, 0, $sep),
-            ]);
+            // PhpDumper is driven through ContainerFactory::dump() so this
+            // command and the runtime warm-up path emit byte-identical
+            // artifacts (same class, same namespace).
+            $dumped = ContainerFactory::dump($container);
         } catch (Throwable $e) {
             $write('Could not compile the container: ' . $e->getMessage());
             $write('Fix the service configuration (config/services.yaml or App\AppConfigurator), then retry.');
-
-            return 1;
-        }
-
-        if (!\is_string($dumped)) {
-            $write('Container dumper returned multiple files; this command expects a single class.');
 
             return 1;
         }
