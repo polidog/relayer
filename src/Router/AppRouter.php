@@ -302,40 +302,6 @@ final class AppRouter
             RenderContext::setApp($this->usephp);
         }
 
-        // Belt-and-braces cleanup for the `exit/die` paths inside dispatch
-        // (the 304 short-circuit in applyFunctionPageCache and the PRG
-        // redirect in dispatchStateAction). PHP's `finally` does not run on
-        // exit, so without this the static RenderContext + the container's
-        // currentRequest would carry the previous dispatch's state into the
-        // next request under any long-running PHP runtime. Both teardown
-        // calls are idempotent so this is safe even when `finally` runs
-        // first on the normal path.
-        $container = $this->container;
-        $hasUsephp = null !== $this->usephp;
-        $recording = $this->recording;
-        \register_shutdown_function(static function () use ($container, $hasUsephp, $recording): void {
-            if ($container instanceof InjectorContainer) {
-                $container->setCurrentRequest(null);
-            }
-            if ($hasUsephp) {
-                RenderContext::clearApp();
-            }
-            Component\PageContext::setCurrent(null);
-            // Drop the ambient request Translator so a non-default locale
-            // cannot bleed into the next request's pre-dispatch code (e.g.
-            // validation) under a long-running worker.
-            Translators::reset();
-            // Idempotent profile finalize — covers the exit paths (304
-            // short-circuit, PRG redirect) the `finally` block below
-            // cannot reach. RecordingProfiler::endProfile guards against
-            // double-firing so the normal path's finally + this shutdown
-            // both running is safe.
-            if (null !== $recording) {
-                $status = \http_response_code();
-                $recording->endProfile(\is_int($status) ? $status : 200);
-            }
-        });
-
         try {
             // Deferred component GETs (under `/_defer/{name}`) are dispatched
             // before route matching: usePHP owns that URL space, and we never
@@ -407,6 +373,11 @@ final class AppRouter
             } else {
                 $dispatch($request);
             }
+        } catch (StopRequest) {
+            // A short-circuit branch (304 answer to a conditional GET, PRG
+            // redirect after a state action) already produced the complete
+            // response. Nothing to add — fall through to the cleanup in
+            // `finally` and return normally, so a worker keeps running.
         } finally {
             if ($this->container instanceof InjectorContainer) {
                 $this->container->setCurrentRequest(null);
@@ -416,9 +387,15 @@ final class AppRouter
                 RenderContext::clearApp();
             }
             Component\PageContext::setCurrent(null);
+            // Drop the ambient request Translator so a non-default locale
+            // cannot bleed into the next request's pre-dispatch code (e.g.
+            // validation) under a long-running worker.
             Translators::reset();
-            // Normal-path counterpart to the shutdown handler above —
-            // idempotent so a later shutdown call is a no-op.
+            // Every dispatch path reaches this block — the short-circuits
+            // unwind through `StopRequest` rather than `exit`, so no
+            // shutdown-function fallback is needed. `endProfile` is still
+            // idempotent, which keeps a dev profile correct when a page
+            // finalized it early.
             if (null !== $this->recording) {
                 $status = \http_response_code();
                 $this->recording->endProfile(\is_int($status) ? $status : 200);
@@ -654,19 +631,16 @@ final class AppRouter
         ]);
 
         if (CachePolicy::isNotModified($effective)) {
-            // Persist the 304 path BEFORE exit so the saved profile
-            // reflects it — PHP's `finally` doesn't run on exit. The
-            // shutdown handler registered in run() catches anything
-            // endProfile didn't already flush; endProfile is idempotent
-            // so calling it here is safe.
             $this->profiler?->collect('cache', 'hit_304', [
                 'etag' => $effective->etag,
             ]);
-            $this->recording?->endProfile(304);
 
             CachePolicy::sendNotModified();
 
-            exit;
+            // Nothing left to render. Unwind to run() rather than exit so
+            // the `finally` cleanup runs and a FrankenPHP worker survives
+            // a conditional GET (see StopRequest).
+            throw new StopRequest();
         }
     }
 
@@ -992,14 +966,10 @@ final class AppRouter
      * facade. Split so the profiler's `page.render` span is wrapped by
      * a try/finally on the normal-return path.
      *
-     * Caveat: the `dispatchStateAction` PRG path calls `exit` mid-render,
-     * which bypasses both `finally` blocks here, so no `page.render`
-     * timing event is recorded on that branch. The Profile itself is
-     * still finalized — `register_shutdown_function` in {@see run()}
-     * triggers `RecordingProfiler::endProfile()` so the saved JSON has
-     * the request's status code and end timestamp; only the inner span
-     * is lost. Acceptable today because PRG is the only `exit` site in
-     * the render path; revisit if more exit sites accumulate.
+     * The `dispatchStateAction` PRG path abandons the render mid-way by
+     * throwing {@see StopRequest}; that unwinds through both `finally`
+     * blocks here, so the `page.render` span is stopped and the profile is
+     * finalized in {@see run()} exactly like on the normal path.
      *
      * @param array<string, string> $params
      */
@@ -1164,7 +1134,9 @@ final class AppRouter
             $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
             \header('Location: ' . $redirectUrl, true, 303);
 
-            exit;
+            // The redirect IS the response — abandon the render. See
+            // StopRequest for why this is not `exit`.
+            throw new StopRequest();
         }
     }
 

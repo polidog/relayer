@@ -20,9 +20,14 @@ use JsonException;
  *
  * Same idempotent, non-destructive, testable shape as the other scaffold
  * commands (injected line writer + cwd, skip-if-exists writes, atomic
- * composer.json rewrite). Scope is deliberately just the structure deltas
- * plus the marker — it does NOT reconcile composer scripts/autoload; re-run
- * `relayer init` for those (it is additive and safe).
+ * rewrites). It is the one command that can overwrite an existing file —
+ * {@see Scaffold::rewrites()} carries content updates to already-shipped
+ * templates — and it does so only for a file still byte-identical to what
+ * a framework version wrote, so "non-destructive" continues to hold for
+ * anything the project has edited. Scope is deliberately just the
+ * structure deltas plus the marker — it does NOT reconcile composer
+ * scripts/autoload; re-run `relayer init` for those (it is additive and
+ * safe).
  */
 final class UpgradeCommand
 {
@@ -125,9 +130,15 @@ final class UpgradeCommand
     }
 
     /**
-     * Write every file introduced between `$recorded` (exclusive) and
-     * `$target` (inclusive), skip-if-exists. Mirrors {@see
-     * InitCommand::writeFiles()} reporting so the two commands feel the same.
+     * Apply both migration maps for every version between `$recorded`
+     * (exclusive) and `$target` (inclusive): {@see Scaffold::migrations()}
+     * writes newly-introduced files skip-if-exists (mirroring {@see
+     * InitCommand::writeFiles()} so the two commands feel the same), then
+     * {@see Scaffold::rewrites()} refreshes files whose template content
+     * changed — but only where the project's copy is still byte-identical
+     * to something the framework itself wrote. A locally-edited file is
+     * reported and left alone, which keeps `upgrade` non-destructive even
+     * though it now writes over existing paths.
      *
      * @param Closure(string): void $write
      */
@@ -138,6 +149,10 @@ final class UpgradeCommand
 
         $created = [];
         $skipped = [];
+
+        $rewrites = Scaffold::rewrites();
+        $refreshed = [];
+        $kept = [];
 
         for ($v = $recorded + 1; $v <= $target; ++$v) {
             foreach ($migrations[$v] ?? [] as $relative) {
@@ -172,15 +187,72 @@ final class UpgradeCommand
 
                 $created[] = $relative;
             }
+
+            // Content updates run after this version's additions, so a
+            // project old enough to be missing the file gets it written
+            // with the current content first and then reads as up to
+            // date here, rather than being rewritten twice.
+            foreach ($rewrites[$v] ?? [] as $relative => $priorHashes) {
+                if (!isset($files[$relative])) {
+                    $write(\sprintf('Internal error: no scaffold content for "%s".', $relative));
+
+                    return 1;
+                }
+
+                $path = $root . '/' . $relative;
+
+                // Deleted by the project: creating it here would push a
+                // file back onto someone who removed it on purpose.
+                // `relayer init` is the way back if that was a mistake.
+                if (!\is_file($path)) {
+                    continue;
+                }
+
+                $existing = @\file_get_contents($path);
+                if (false === $existing) {
+                    $write(\sprintf('Could not read "%s".', $relative));
+
+                    return 1;
+                }
+
+                $hash = \hash('sha256', $existing);
+
+                if ($hash === \hash('sha256', $files[$relative])) {
+                    continue;
+                }
+
+                if (!\in_array($hash, $priorHashes, true)) {
+                    $kept[] = $relative;
+
+                    continue;
+                }
+
+                if (!self::atomicWrite($path, $files[$relative])) {
+                    $write(\sprintf('Could not write "%s".', $relative));
+
+                    return 1;
+                }
+
+                $refreshed[] = $relative;
+            }
         }
 
         \sort($created);
         \sort($skipped);
+        \sort($refreshed);
+        \sort($kept);
 
         if ([] !== $created) {
             $write(\sprintf('Created %d files:', \count($created)));
             foreach ($created as $relative) {
                 $write('  + ' . $relative);
+            }
+        }
+
+        if ([] !== $refreshed) {
+            $write(\sprintf('Updated %d unmodified files:', \count($refreshed)));
+            foreach ($refreshed as $relative) {
+                $write('  ~ ' . $relative);
             }
         }
 
@@ -191,7 +263,44 @@ final class UpgradeCommand
             }
         }
 
+        if ([] !== $kept) {
+            $write(\sprintf(
+                'Kept %d locally-modified files (the framework template has changed):',
+                \count($kept),
+            ));
+            foreach ($kept as $relative) {
+                $write('  ! ' . $relative);
+            }
+            $write('Your edits are untouched. To take the new template instead,');
+            $write('save your changes, delete the file and run `relayer init`.');
+        }
+
         return 0;
+    }
+
+    /**
+     * Replace a file through a sibling temp file + rename, so a crash
+     * mid-write can never leave the project holding a truncated
+     * Dockerfile / compose.yaml. Same shape as {@see stampVersion()}'s
+     * composer.json write.
+     */
+    private static function atomicWrite(string $path, string $contents): bool
+    {
+        $tmp = $path . '.relayer-tmp-' . \bin2hex(\random_bytes(4));
+
+        if (false === @\file_put_contents($tmp, $contents)) {
+            @\unlink($tmp);
+
+            return false;
+        }
+
+        if (!@\rename($tmp, $path)) {
+            @\unlink($tmp);
+
+            return false;
+        }
+
+        return true;
     }
 
     /**

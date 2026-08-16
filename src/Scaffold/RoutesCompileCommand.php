@@ -58,17 +58,8 @@ final class RoutesCompileCommand
         }
 
         $outFile = $root . '/' . Relayer::COMPILED_ROUTES_FILE;
-        $outDir = \dirname($outFile);
 
-        if (!\is_dir($outDir) && !@\mkdir($outDir, 0o775, true) && !\is_dir($outDir)) {
-            $write("Could not create {$outDir}.");
-
-            return 1;
-        }
-
-        $php = CompiledRoutes::export($collection, $appDir);
-
-        if (false === @\file_put_contents($outFile, $php)) {
+        if (!CompiledRoutes::write($collection, $appDir, $outFile)) {
             $write("Could not write {$outFile}.");
 
             return 1;

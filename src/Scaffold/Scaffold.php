@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 5;
+    public const int STRUCTURE_VERSION = 7;
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -66,12 +66,20 @@ final class Scaffold
             'src/AppConfigurator.php' => self::appConfigurator(),
             'src/Pages/layout.psx' => self::layoutPsx(),
             'src/Pages/page.psx' => self::pagePsx(),
-            // A minimal dev container so `docker compose up --build` boots
+            // A minimal container so `docker compose up --build` boots
             // the app with no host PHP. All skip-if-exists like the rest.
             'Dockerfile' => self::dockerfile(),
             'php.ini' => self::phpIni(),
             'compose.yaml' => self::compose(),
             '.dockerignore' => self::dockerignore(),
+            // The deployment counterpart: build the app into a single
+            // self-contained FrankenPHP binary, served in worker mode.
+            // Unused files if you never build one — but shipping them from
+            // day one is the point: the app is worker-safe by default
+            // instead of retrofitted later.
+            'static-build.Dockerfile' => self::staticBuildDockerfile(),
+            'Caddyfile' => self::caddyfile(),
+            'public/worker.php' => self::workerPhp(),
         ];
     }
 
@@ -106,26 +114,24 @@ final class Scaffold
     }
 
     /**
-     * The structure migration map: the version at which each skeleton file
-     * was *introduced* => the relative paths added at that version.
+     * The *additive* structure migration map: the version at which each
+     * skeleton file was introduced => the relative paths added there.
      *
-     * Every layout change so far has been purely additive (new files, never
-     * a move/rename/rewrite/delete), so a migration step is just "ensure
-     * these files exist" — `upgrade` writes them skip-if-exists, pulling the
-     * contents from {@see files()} (the single source of truth; this map
-     * only groups paths by the version that added them). The v1 baseline
-     * files ({@see files()} minus every path here — `.env`, the `src/`
-     * tree, `public/index.php`, …) need no step: any project carrying
-     * the `structure_version` marker was scaffolded with them.
+     * An additive step is just "ensure these files exist" — `upgrade`
+     * writes them skip-if-exists, pulling the contents from {@see files()}
+     * (the single source of truth; this map only groups paths by the
+     * version that added them). The v1 baseline files ({@see files()}
+     * minus every path here — `.env`, the `src/` tree,
+     * `public/index.php`, …) need no step: any project carrying the
+     * `structure_version` marker was scaffolded with them.
      *
-     * `upgrade` applies the steps for `recorded + 1 .. STRUCTURE_VERSION`
-     * in order. A future non-additive delta gets its own version key here
-     * and the writer learns that one shape — the ordered-step structure is
-     * the seam for it.
+     * Changes to the *content* of an already-shipped file live in
+     * {@see rewrites()} instead; `upgrade` applies both maps for
+     * `recorded + 1 .. STRUCTURE_VERSION`, in that order per version.
      *
-     * Invariant (asserted in tests): keys are exactly `2 ..
-     * STRUCTURE_VERSION`, every path is a {@see files()} key, and no path
-     * repeats across versions.
+     * Invariant (asserted in tests): every path is a {@see files()} key,
+     * no path repeats across versions, and the keys of this map together
+     * with {@see rewrites()}' cover exactly `2 .. STRUCTURE_VERSION`.
      *
      * @return array<int, list<string>>
      */
@@ -139,6 +145,70 @@ final class Scaffold
                 '.claude/agents/relayer-reviewer.md',
             ],
             5 => ['CLAUDE.md'],
+            6 => ['static-build.Dockerfile', 'Caddyfile', 'public/worker.php'],
+        ];
+    }
+
+    /**
+     * The *non-additive* migration map: version => (relative path =>
+     * sha256 of every content this framework has ever shipped for it,
+     * oldest first).
+     *
+     * {@see migrations()} cannot carry these. It creates missing files and
+     * skips existing ones, so a project scaffolded before the change keeps
+     * its old copy forever — which is fine for a new file and wrong for a
+     * template whose content the framework has since fixed.
+     *
+     * Rewriting a file in someone's project is destructive in a way the
+     * rest of the scaffolder never is, so the hashes are the safety gate,
+     * not decoration. `upgrade` replaces a file **only** when its current
+     * content still hashes to one of the values listed here — i.e. it is
+     * byte-for-byte what some framework version wrote and nobody has
+     * touched it since. Content that matches {@see files()} is already
+     * current (no-op); anything else is a local edit and is reported and
+     * left exactly as it is. A project that customized its Dockerfile can
+     * therefore run `upgrade` without fear.
+     *
+     * Adding an entry is a two-step edit, and skipping the second step is
+     * the failure mode to watch for: change the template in
+     * {@see files()}, then append the hash of the content you just
+     * replaced. Miss it and every existing project reads as
+     * locally-modified and silently stops receiving the update.
+     *
+     * Invariant (asserted in tests): every path is a {@see files()} key,
+     * every hash is a distinct lowercase sha256, and no listed hash equals
+     * the current {@see files()} content (a hash that did would mean the
+     * "already current" and "safe to replace" cases overlap).
+     *
+     * @return array<int, array<string, list<string>>>
+     */
+    public static function rewrites(): array
+    {
+        return [
+            // v7 turned the single-stage dev Dockerfile into base/dev/prod
+            // targets (prod precompiles the three artifacts and relocates
+            // the writable paths), gave compose.yaml a read-only prod
+            // service, and repointed php.ini's production block at it.
+            7 => [
+                'Dockerfile' => [
+                    // v3, as first shipped
+                    '3d611cbb649cbe93c4e3806787207800ffd4f6495a63e7018774f0dd905416f6',
+                    // v3-v5, after the dependency-layer split
+                    '5d515cd765623919b10b63fcb663ae07966dec1465bdf1f6a988d16cf5ad93f7',
+                    // v5-v6, after the worker-mode note
+                    'db66529ca0a7c6b71d03c597c0e5be21e2d24c48f02de5f2a54c457048be8c8d',
+                ],
+                'compose.yaml' => [
+                    // v3-v6, unchanged since it was introduced
+                    '5a9b3ee03bbcb2124232571724102ffdcac0a0f17a56f058433f726b1bdf3114',
+                ],
+                'php.ini' => [
+                    // v3-v5, before the OPcache production block
+                    'cb8068ad84466847beaedbf8bfcdfcd2caac89a785c573516549e708b8e0bd45',
+                    // v5-v6, with it
+                    '047f8b5b87ebf610bd8b34e83dbe6fe2d69256d205136606db00ce3b21b249db',
+                ],
+            ],
         ];
     }
 
@@ -208,14 +278,17 @@ final class Scaffold
             AGENTS.md              auto-read pointer → RELAYER.md
             CLAUDE.md              auto-read pointer → RELAYER.md
             .claude/               Claude Code skill + reviewer agent (co-versioned)
-            Dockerfile             FrankenPHP (PHP 8.5) image
+            Dockerfile             FrankenPHP (PHP 8.5) image: dev + prod targets
             php.ini                PHP overrides (loaded via conf.d)
             compose.yaml           `docker compose up` → http://localhost:8000
             .dockerignore
+            static-build.Dockerfile  builds the single-binary release
+            Caddyfile              server config (worker mode) for that binary
             config/
               services.yaml        Symfony DI registrations (auto-loaded)
             public/
               index.php            single entrypoint: Relayer::boot()->run()
+              worker.php           FrankenPHP worker-mode entrypoint
             src/
               AppConfigurator.php  register your services here
               Pages/               file-based routes (Next.js App Router-style)
@@ -240,6 +313,55 @@ final class Scaffold
             the live path rather than breaking. In production also set
             OPcache `validate_timestamps=0` — the production block in
             `php.ini` documents this.
+
+            The `Dockerfile` does all of that for you in its `prod` target:
+
+            ```bash
+            docker build -t my-app .          # no --target: prod is default
+            ```
+
+            ### Read-only filesystem
+
+            Because `prod` precompiles everything, the container writes
+            nothing at runtime except a handful of disposable paths, so it
+            can run with an immutable filesystem. `compose.yaml` carries
+            the whole shape as a commented `app-prod` service:
+
+            ```bash
+            docker compose --profile prod up --build   # → :8001
+            ```
+
+            It sets `read_only: true` and mounts `tmpfs` (RAM-backed,
+            per-container, wiped on restart) on exactly what still gets
+            written: the ETag store, PHP sessions and upload temp files
+            (both relocated under `var/cache/` by the prod image), and
+            Caddy's own `/data` + `/config`.
+
+            One thing not to do: mount over `var/cache/` as a whole. The
+            compiled routes, DI container and `.psx` live there, built
+            into the image — an empty tmpfs on top hides them and every
+            request silently falls back to scanning and rebuilding.
+
+            ## Single binary
+
+            `static-build.Dockerfile` builds the app into one self-contained
+            FrankenPHP executable (PHP, Caddy, `vendor/` and your code
+            inside it) that runs in worker mode per the `Caddyfile`:
+
+            ```bash
+            docker build -t relayer-static -f static-build.Dockerfile .
+            id=$(docker create relayer-static)
+            docker cp "$id:/go/src/app/dist/frankenphp-linux-x86_64" ./app
+            docker rm "$id"
+            ./app run
+            ```
+
+            The binary sets `RELAYER_WARM_CACHE=1`, which tells the app to
+            build the `.psx` cache and the DI container dump on its first
+            request: FrankenPHP unpacks the embedded app into a fresh
+            directory at startup, so artifacts precompiled at build time
+            would point at paths that no longer exist. Only the first
+            request pays for it.
 
             README;
     }
@@ -644,21 +766,29 @@ final class Scaffold
     private static function dockerfile(): string
     {
         return <<<'DOCKER'
-            # Relayer app — FrankenPHP image. The default .env sets
-            # APP_ENV=dev, which compiles .psx on the fly, so the image
-            # needs no build step. For production, unset APP_ENV and
-            # precompile once:
-            #   vendor/bin/usephp compile src/Pages   # .psx -> .psx.php
-            #   vendor/bin/relayer routes:compile      # route artifact
-            #   vendor/bin/relayer container:compile   # DI container
-            # All are pure build steps; prod then reads the artifacts
-            # instead of scanning/compiling/rebuilding per request.
+            # Relayer app — FrankenPHP image with two build targets:
+            #
+            #   dev   .psx compiled on the fly, APP_ENV=dev from .env, no
+            #         build step. This is what `docker compose up --build`
+            #         uses.
+            #   prod  the three precompile steps run at BUILD time, so the
+            #         running container never scans, compiles or rebuilds
+            #         per request — and generates nothing at all, which is
+            #         what makes a read-only filesystem possible (see the
+            #         commented app-prod service in compose.yaml).
+            #
+            # `prod` is the last stage, so a bare `docker build .` (no
+            # --target) produces the production image; compose pins the
+            # target explicitly for both.
             #
             # FrankenPHP serves /app/public through its bundled Caddy in
             # classic (per-request) mode, so Relayer's public/index.php
-            # front controller works as-is — no framework changes. Worker
-            # mode (app kept booted between requests) is a future option.
-            FROM dunglas/frankenphp:php8.5
+            # front controller works as-is — no framework changes. For
+            # worker mode (app kept booted between requests), build the
+            # single binary instead: see static-build.Dockerfile.
+
+            # --- Shared base: extensions, dependencies, app source -------
+            FROM dunglas/frankenphp:php8.5 AS base
 
             # curl and pdo_sqlite ship enabled in the base image.
             # pdo_mysql matches the DATABASE_DSN example in .env and the
@@ -693,6 +823,48 @@ final class Scaffold
             ENV SERVER_NAME=:8000
             EXPOSE 8000
 
+            # --- dev: nothing precompiled, APP_ENV comes from .env -------
+            FROM base AS dev
+
+            # --- prod: everything precompiled, nothing built at runtime --
+            FROM base AS prod
+
+            # Drop the dev-only packages the shared base installed and
+            # regenerate the autoloader without its filesystem fallback —
+            # nothing is added to the image, so the classmap is complete.
+            RUN composer install --no-interaction --prefer-dist \
+                --no-dev --classmap-authoritative
+
+            # .env.local overrides the committed .env (APP_ENV=dev) without
+            # editing it. .dockerignore keeps the host's own .env.local out
+            # of the image, so this is the only one.
+            RUN printf 'APP_ENV=prod\n' > .env.local
+
+            # The three precompile steps. Each removes a per-request cost:
+            #   usephp compile     .psx -> PHP, plus the component manifest
+            #   routes:compile     the src/Pages/ walk -> one PHP array
+            #   container:compile  ContainerBuilder+compile() -> one class
+            # A path with no .psx files is skipped, so src/Components is
+            # fine to list before the app has any.
+            RUN vendor/bin/usephp compile src/Pages src/Components \
+             && vendor/bin/relayer routes:compile \
+             && vendor/bin/relayer container:compile
+
+            # With everything precompiled, OPcache can stop stat()-ing
+            # files and never expire — revalidation = redeploy. Sessions
+            # and upload temp files move under var/cache/ so that EVERY
+            # path this image writes to at runtime lives in one place (the
+            # ETag store is already there), which is what the read-only
+            # service in compose.yaml mounts. Loaded after zz-relayer.ini,
+            # so these win.
+            RUN mkdir -p var/cache/etags var/cache/sessions var/cache/uploads \
+             && printf '%s\n' \
+                    'opcache.validate_timestamps = 0' \
+                    'opcache.memory_consumption = 256' \
+                    'session.save_path = /app/var/cache/sessions' \
+                    'upload_tmp_dir = /app/var/cache/uploads' \
+                > "$PHP_INI_DIR/conf.d/zzz-relayer-prod.ini"
+
             DOCKER;
     }
 
@@ -712,14 +884,18 @@ final class Scaffold
             upload_max_filesize = 16M
             post_max_size = 16M
 
-            ; OPcache. The defaults below are dev-safe (timestamps are
-            ; validated, so edited files reload). For production, run the
-            ; three precompile steps so there is nothing to compile per
-            ; request:
+            ; OPcache. The values below are dev-safe: timestamps are
+            ; validated, so an edited file reloads. The Dockerfile's `prod`
+            ; target runs the three precompile steps and then writes its
+            ; own conf.d override on top of this file (validate_timestamps
+            ; off, a larger cache, sessions and upload temp under
+            ; var/cache/), so a production image needs no edit here.
+            ;
+            ; Deploying some other way? Run the three steps yourself:
             ;   vendor/bin/usephp compile src/Pages    ; .psx  -> PHP cache
             ;   vendor/bin/relayer routes:compile       ; route map -> PHP
             ;   vendor/bin/relayer container:compile     ; DI container -> PHP
-            ; then uncomment the production block.
+            ; and uncomment the production block below.
             opcache.memory_consumption = 128
             opcache.interned_strings_buffer = 16
             ; Must exceed the app's total PHP file count (vendor tree +
@@ -742,7 +918,12 @@ final class Scaffold
             # --build`, then open http://localhost:8000.
             services:
               app:
-                build: .
+                build:
+                  context: .
+                  # The Dockerfile's dev target: no precompile step, so an
+                  # edited .psx just reloads. `prod` is the default target
+                  # of a bare `docker build`, hence pinning it here.
+                  target: dev
                 ports:
                   - "8000:8000"
                 # Mount the source for live edits (APP_ENV=dev recompiles
@@ -754,6 +935,47 @@ final class Scaffold
                 #   - .:/app
                 #   - /app/vendor
                 # env_file: .env
+
+              # The production shape of the same image. `target: prod`
+              # precompiles the routes, the DI container and every .psx at
+              # build time, so the container generates nothing at runtime
+              # and its filesystem can be read-only. Uncomment, then:
+              #   docker compose --profile prod up --build
+              #   → http://localhost:8001
+              #
+              # tmpfs is what keeps read_only workable: a small RAM-backed
+              # filesystem per container, mounted only where something is
+              # still written. Everything below is disposable — losing it
+              # costs cache hits or logged-out sessions, never data.
+              # app-prod:
+              #   build:
+              #     context: .
+              #     target: prod
+              #   profiles: [prod]
+              #   ports:
+              #     - "8001:8000"
+              #   read_only: true
+              #   tmpfs:
+              #     # Relayer's ETag store (Http\FileEtagStore). Write
+              #     # failures here degrade silently, so this is the one
+              #     # mount you could drop — at the cost of every
+              #     # conditional request revalidating.
+              #     - /app/var/cache/etags:size=64m,mode=1777
+              #     # PHP sessions and upload temp files, pointed here by
+              #     # the prod stage's php.ini override.
+              #     - /app/var/cache/sessions:size=64m,mode=1777
+              #     - /app/var/cache/uploads:size=64m,mode=1777
+              #     # Caddy's own state. The FrankenPHP image sets
+              #     # XDG_DATA_HOME=/data and XDG_CONFIG_HOME=/config and
+              #     # declares no VOLUME for them, so under read_only
+              #     # Caddy cannot start without these.
+              #     - /data/caddy:size=16m,mode=1777
+              #     - /config/caddy:size=16m,mode=1777
+              #
+              # Deliberately NOT mounted: var/cache/{psx,routes,container}.
+              # Those artifacts are built INTO the image; covering them
+              # with an empty tmpfs would hide them, and the app would
+              # quietly fall back to scanning and rebuilding per request.
 
               # A database is optional. To use one, uncomment this service
               # and set in .env: DATABASE_DSN=mysql:host=db;dbname=app —
@@ -783,11 +1005,164 @@ final class Scaffold
         return <<<'DOCKERIGNORE'
             /vendor/
             /var/
+            /dist/
             /.git/
             /public/usephp.js
             /.env.local
             /.env.*.local
 
             DOCKERIGNORE;
+    }
+
+    private static function staticBuildDockerfile(): string
+    {
+        return <<<'DOCKER'
+            # Relayer app — build the whole app into ONE self-contained
+            # FrankenPHP binary (PHP + Caddy + vendor/ + your code inside a
+            # single executable, no runtime dependencies on the host):
+            #
+            #   docker build -t relayer-static -f static-build.Dockerfile .
+            #   id=$(docker create relayer-static)
+            #   docker cp "$id:/go/src/app/dist/frankenphp-linux-x86_64" ./app
+            #   docker rm "$id"
+            #   ./app run                 # serves :8000 per the Caddyfile
+            #
+            # Deliberately NOT precompiled into the binary: the `.psx` cache
+            # (keyed by each source's absolute path) and the dumped DI
+            # container (which bakes absolute paths). FrankenPHP extracts the
+            # embedded app into a fresh directory when the binary starts, so
+            # those build-time paths do not exist at runtime.
+            # `RELAYER_WARM_CACHE=1` (written into .env.local below) makes the
+            # app build both on its first request instead — every request
+            # after that reads the same artifacts a normal deploy ships.
+            # The route artifact stores paths relative to src/Pages/, so it
+            # IS portable and is compiled here.
+
+            # --- Stage 1: the application to embed -----------------------
+            FROM dunglas/frankenphp:php8.5 AS app
+
+            COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+            WORKDIR /app
+            COPY . .
+
+            # --no-dev: the binary ships production dependencies only.
+            # Scripts run (they publish public/usephp.js, which the default
+            # document references).
+            RUN composer install --no-interaction --prefer-dist --no-dev \
+                    --classmap-authoritative \
+             && vendor/bin/relayer routes:compile \
+             && printf 'APP_ENV=prod\nRELAYER_WARM_CACHE=1\n' > .env.local \
+             && rm -rf .git var/cache/psx var/cache/container
+
+            # --- Stage 2: static PHP + embedded app ----------------------
+            # Slow on a cold cache: PHP itself is compiled from source.
+            # Extensions are detected from this app's composer.json `ext-*`
+            # requirements — declare what you use there (`composer require
+            # ext-pdo_mysql`), or override with PHP_EXTENSIONS=pdo_mysql,intl.
+            # Swap in static-builder-musl for a fully static (musl) binary
+            # that cannot dlopen extensions.
+            FROM --platform=linux/amd64 dunglas/frankenphp:static-builder-gnu
+
+            WORKDIR /go/src/app/dist/app
+            COPY --from=app /app .
+
+            WORKDIR /go/src/app
+            RUN EMBED=dist/app/ PHP_VERSION=8.5 ./build-static.sh
+
+            DOCKER;
+    }
+
+    private static function caddyfile(): string
+    {
+        return <<<'CADDY'
+            # Relayer app — FrankenPHP/Caddy config. It is embedded in the
+            # single binary (`./app run`) and also usable directly:
+            # `frankenphp run --config Caddyfile`.
+
+            {
+            	# Worker mode: boot the app once and keep it in memory
+            	# between requests, which is where FrankenPHP's speed comes
+            	# from. Comment this block out for classic (per-request)
+            	# mode — public/index.php serves exactly the same routes.
+            	frankenphp {
+            		worker {
+            			file ./public/worker.php
+            			# num 8        # workers; defaults to 2x CPU cores
+            		}
+            	}
+            }
+
+            # SERVER_NAME overrides the bind address/host. With a real
+            # hostname (SERVER_NAME=example.com) Caddy also provisions
+            # HTTPS automatically.
+            {$SERVER_NAME::8000} {
+            	root public/
+            	encode zstd br gzip
+            	php_server
+            }
+
+            CADDY;
+    }
+
+    private static function workerPhp(): string
+    {
+        return <<<'PHP'
+            <?php
+
+            declare(strict_types=1);
+
+            use App\AppConfigurator;
+            use Polidog\Relayer\Relayer;
+
+            require_once __DIR__ . '/../vendor/autoload.php';
+
+            // FrankenPHP worker entrypoint: boot the app ONCE, then serve
+            // requests from memory. public/index.php remains the classic
+            // per-request entrypoint; both wire the app identically, so you
+            // can switch modes by editing the Caddyfile alone.
+            $root = __DIR__ . '/..';
+            $router = Relayer::boot($root, new AppConfigurator($root));
+
+            $handler = static function () use ($router): void {
+                try {
+                    $router->run();
+                } catch (Throwable $e) {
+                    // set_exception_handler only fires when the WORKER ends,
+                    // so a per-request failure has to be handled here or it
+                    // takes the booted app down with it.
+                    if (!headers_sent()) {
+                        http_response_code(500);
+                    }
+                    error_log((string) $e);
+                }
+            };
+
+            // Not running under FrankenPHP (e.g. `php -S` picked this file
+            // up): serve the single request and stop instead of looping.
+            if (!function_exists('frankenphp_handle_request')) {
+                $handler();
+
+                return;
+            }
+
+            // MAX_REQUESTS restarts the worker after N requests — a safety
+            // valve for code that accumulates memory across requests.
+            $maxRequests = (int) ($_SERVER['MAX_REQUESTS'] ?? 0);
+
+            for ($n = 0; 0 === $maxRequests || $n < $maxRequests; ++$n) {
+                $keepRunning = frankenphp_handle_request($handler);
+
+                // Drop request-scoped state the framework and usePHP keep in
+                // statics (component instances, their storage, the ambient
+                // translator) so nothing leaks into the next visitor.
+                Relayer::endRequest();
+                gc_collect_cycles();
+
+                if (!$keepRunning) {
+                    break;
+                }
+            }
+
+            PHP;
     }
 }

@@ -6,13 +6,21 @@ namespace Polidog\Relayer;
 
 use LogicException;
 use Polidog\Relayer\Di\ContainerFactory;
+use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\Relayer\Router\Routing\CompiledRoutes;
+use Polidog\Relayer\Router\Routing\PageScanner;
+use Polidog\UsePhp\Runtime\ComponentState;
+use Polidog\UsePhp\Runtime\RenderContext;
+use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
+use RuntimeException;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
@@ -96,6 +104,32 @@ final class Relayer
     }
 
     /**
+     * Drop every piece of request-scoped state the framework (and usePHP)
+     * keeps in statics, so the next request on a long-running worker
+     * starts clean.
+     *
+     * Only needed under a worker loop — a classic per-request SAPI throws
+     * the whole process away instead. {@see AppRouter::run()} already
+     * clears its own ambient state in a `finally`; this adds the usePHP
+     * runtime caches (component instances and their storage backends),
+     * which would otherwise leak one visitor's component state into the
+     * next visitor's render. Idempotent, so calling it after a request
+     * that already cleaned up is free.
+     *
+     * The container built by {@see boot()} is deliberately NOT reset: it
+     * is boot-scoped, and rebuilding it per request is exactly what worker
+     * mode exists to avoid.
+     */
+    public static function endRequest(): void
+    {
+        ComponentState::clearInstances();
+        StorageFactory::reset();
+        RenderContext::clearApp();
+        PageContext::setCurrent(null);
+        Translators::reset();
+    }
+
+    /**
      * @param string               $projectRoot  Absolute path to the project root (the
      *                                           directory that contains composer.json, .env, and `src/Pages/`).
      * @param null|AppConfigurator $configurator Optional configurator.
@@ -128,6 +162,12 @@ final class Relayer
         // itself mid-boot.
         $isDev = self::isDev();
 
+        // Same for the opt-in warm-up mode (RELAYER_WARM_CACHE): in prod,
+        // build the missing build-time artifacts at runtime instead of
+        // failing / live-building them per request. Meaningless in dev
+        // (which always live-builds), so it is folded into `!$isDev`.
+        $warm = !$isDev && self::isWarmEnabled();
+
         // ContainerFactory owns the "load the dump if present, else live
         // build" decision (mirrors AppRouter::create's presence-gated
         // artifact contract). Dev passes null so config edits never read
@@ -137,6 +177,7 @@ final class Relayer
             $configurator,
             $isDev,
             $isDev ? null : $projectRoot . '/' . self::COMPILED_CONTAINER_FILE,
+            warm: $warm,
         );
 
         $psr = new InjectorContainer($container);
@@ -155,6 +196,12 @@ final class Relayer
         // place. See https://github.com/polidog/relayer/issues/21
         $psxCacheDir = $projectRoot . '/var/cache/psx';
 
+        $compiledRoutesFile = $isDev ? null : $projectRoot . '/' . self::COMPILED_ROUTES_FILE;
+
+        if ($warm && null !== $compiledRoutesFile && !\is_file($compiledRoutesFile)) {
+            self::warmRoutes($appDir, $compiledRoutesFile);
+        }
+
         // Single router class for dev and prod. Profiling (dev only) is
         // wired in directly below — in prod neither `Profiler` nor
         // `ProfilerStorage` is bound on AppRouter, so every profiler
@@ -163,13 +210,13 @@ final class Relayer
         // config edits never read a stale dump.
         $router = AppRouter::create(
             $appDir,
-            autoCompilePsx: $isDev,
+            autoCompilePsx: $isDev || $warm,
             psxCacheDir: $psxCacheDir,
-            compiledRoutesFile: $isDev ? null : $projectRoot . '/' . self::COMPILED_ROUTES_FILE,
+            compiledRoutesFile: $compiledRoutesFile,
         );
         $router->setContainer($psr);
 
-        $usephp = self::buildUsePhp($projectRoot, $isDev);
+        $usephp = self::buildUsePhp($projectRoot, $isDev, $warm);
         $router->setUsePhp($usephp);
 
         // Wire dev-time profiling when the container exposes a Profiler.
@@ -254,7 +301,7 @@ final class Relayer
      * `.psx` source is newer than the manifest; prod expects
      * `vendor/bin/usephp compile src/Components/` to have run during deploy.
      */
-    private static function buildUsePhp(string $projectRoot, bool $isDev): UsePHP
+    private static function buildUsePhp(string $projectRoot, bool $isDev, bool $warm): UsePHP
     {
         $app = new UsePHP();
 
@@ -267,10 +314,35 @@ final class Relayer
             $app,
             componentsDir: $projectRoot . '/src/Components',
             cacheDir: $projectRoot . '/var/cache/psx',
-            autoCompile: $isDev,
+            // Warm-up compiles the manifest at runtime too: without it a
+            // prod boot with no precompiled manifest registers nothing and
+            // deferred components silently stop working.
+            autoCompile: $isDev || $warm,
         );
 
         return $app;
+    }
+
+    /**
+     * Warm-up counterpart of `relayer routes:compile`: scan `src/Pages/`
+     * once and write the route artifact, so the *next* request (and every
+     * request after it) loads the compiled file instead of rescanning.
+     *
+     * Best-effort by design. A scan failure (ambiguous routes, missing
+     * directory) is left for {@see AppRouter} to report on the live path
+     * it falls back to — reporting it here would duplicate the message and
+     * make warm-up look like the cause. A write failure (read-only
+     * filesystem) is likewise not fatal.
+     */
+    private static function warmRoutes(string $appDir, string $outFile): void
+    {
+        try {
+            $routes = (new PageScanner($appDir))->scan();
+        } catch (RuntimeException) {
+            return;
+        }
+
+        CompiledRoutes::write($routes, $appDir, $outFile);
     }
 
     private static function resolveSnapshotSecret(string $projectRoot, bool $isDev): string
@@ -352,5 +424,35 @@ final class Relayer
         $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? \getenv('APP_ENV') ?: 'prod';
 
         return 'dev' === $env || 'development' === $env;
+    }
+
+    /**
+     * `RELAYER_WARM_CACHE` — opt in to building the prod artifacts
+     * (compiled routes, dumped container, compiled `.psx`) at runtime,
+     * into `var/cache/`, when a deploy step did not produce them.
+     *
+     * The case this exists for: a **FrankenPHP single binary**, which
+     * extracts its embedded app into a fresh directory on start, so the
+     * paths the build precompiled against no longer exist (the `.psx`
+     * cache is keyed by the source's absolute path, and a dumped container
+     * bakes absolute paths). Warming at runtime sidesteps that entirely —
+     * the first request pays for it, everything after reads the same
+     * artifacts an ordinary deploy would have shipped.
+     *
+     * Off by default: without it, prod keeps the presence-gated contract
+     * (missing artifact ⇒ live path, missing compiled `.psx` ⇒ a loud
+     * error pointing at `usephp compile`), which is what you want when the
+     * deploy *should* have precompiled and silently recompiling would mask
+     * a broken build.
+     */
+    private static function isWarmEnabled(): bool
+    {
+        $raw = $_ENV['RELAYER_WARM_CACHE'] ?? $_SERVER['RELAYER_WARM_CACHE'] ?? \getenv('RELAYER_WARM_CACHE');
+
+        if (!\is_string($raw)) {
+            return false;
+        }
+
+        return \in_array(\strtolower(\trim($raw)), ['1', 'true', 'yes', 'on'], true);
     }
 }

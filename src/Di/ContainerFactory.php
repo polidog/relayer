@@ -53,6 +53,7 @@ use Symfony\Component\DependencyInjection\Dumper\PhpDumper;
 use Symfony\Component\DependencyInjection\Loader\PhpFileLoader;
 use Symfony\Component\DependencyInjection\Loader\YamlFileLoader;
 use Symfony\Component\DependencyInjection\Reference;
+use Throwable;
 
 /**
  * Builds and compiles the application's Symfony DI container.
@@ -115,6 +116,16 @@ final class ContainerFactory
      *                                                    at runtime. Set by
      *                                                    {@see ContainerCompileCommand}
      *                                                    on the dump path.
+     * @param bool                 $warm                  Opt-in (`RELAYER_WARM_CACHE`)
+     *                                                    "produce the missing artifact
+     *                                                    instead of live-building every
+     *                                                    request": when a
+     *                                                    `$compiledContainerFile` is
+     *                                                    requested but absent, dump it
+     *                                                    once, from the runtime env, and
+     *                                                    load it. Off by default, so the
+     *                                                    presence-gated contract above is
+     *                                                    unchanged for ordinary deploys.
      *
      * @return ($compiledContainerFile is null ? ContainerBuilder : ContainerInterface)
      */
@@ -124,29 +135,154 @@ final class ContainerFactory
         bool $isDev,
         ?string $compiledContainerFile = null,
         bool $forDump = false,
+        bool $warm = false,
     ): ContainerInterface {
-        if (null !== $compiledContainerFile && \is_file($compiledContainerFile)) {
-            require_once $compiledContainerFile;
-
-            // The dumped class only exists after `container:compile`
-            // generated it, so it is opaque to static analysis — treat
-            // the FQCN as a plain string and prove the contract at
-            // runtime via the instanceof guard below.
-            /** @var string $dumpedClass */
-            $dumpedClass = Relayer::COMPILED_CONTAINER_CLASS;
-            $container = new $dumpedClass();
-
-            if (!$container instanceof ContainerInterface) {
-                throw new RuntimeException(\sprintf(
-                    'Dumped container %s did not produce a %s — re-run `relayer container:compile`.',
-                    $compiledContainerFile,
-                    ContainerInterface::class,
-                ));
+        if (null !== $compiledContainerFile) {
+            if (\is_file($compiledContainerFile)) {
+                return self::loadDump($compiledContainerFile);
             }
 
-            return $container;
+            // Warm-up path (`RELAYER_WARM_CACHE`): prod is pointed at a
+            // dump that no deploy step produced — typically because the
+            // build path is not the runtime path, as with a FrankenPHP
+            // single binary that extracts itself into /tmp on start. Dump
+            // it now, from the *runtime* environment (so env-derived
+            // parameters bake the values this process actually has), and
+            // load it, so every later request takes the fast path above.
+            // Producing the dump is deliberately best-effort: whatever
+            // goes wrong, the request is still served by the live build
+            // below. That covers the write (a read-only filesystem) and
+            // also {@see dump()} rejecting a multi-file PhpDumper result —
+            // a failure mode that exists ONLY on this path, so letting it
+            // escape would make opting into warm-up turn a bootable app
+            // into a dead one.
+            //
+            // `build()` is inside the try only incidentally: it throws for
+            // reasons (a broken service definition) that would throw again
+            // on the fallback below, which is the right place for it to
+            // surface. `loadDump()` stays outside — we just wrote that
+            // file, so failing to load it back is a real defect and must
+            // not be swallowed into a silent per-request rebuild.
+            if ($warm) {
+                $written = false;
+
+                try {
+                    $written = self::writeDump(
+                        $compiledContainerFile,
+                        self::dump(self::build($projectRoot, $configurator, $isDev, true)),
+                    );
+                } catch (Throwable) {
+                    $written = false;
+                }
+
+                if ($written) {
+                    return self::loadDump($compiledContainerFile);
+                }
+            }
         }
 
+        return self::build($projectRoot, $configurator, $isDev, $forDump);
+    }
+
+    /**
+     * Render a compiled {@see ContainerBuilder} as the PHP source of
+     * {@see Relayer::COMPILED_CONTAINER_CLASS}. Shared by the warm-up path
+     * above and {@see ContainerCompileCommand} so the two can never emit
+     * differently-shaped artifacts.
+     *
+     * @throws RuntimeException when PhpDumper splits the container across
+     *                          several files (not supported here)
+     */
+    public static function dump(ContainerBuilder $container): string
+    {
+        $class = Relayer::COMPILED_CONTAINER_CLASS;
+        $sep = \strrpos($class, '\\');
+
+        $dumped = (new PhpDumper($container))->dump([
+            'class' => false === $sep ? $class : \substr($class, $sep + 1),
+            'namespace' => false === $sep ? '' : \substr($class, 0, $sep),
+        ]);
+
+        if (!\is_string($dumped)) {
+            throw new RuntimeException(
+                'Container dumper returned multiple files; Relayer expects a single class.',
+            );
+        }
+
+        return $dumped;
+    }
+
+    /**
+     * `require` a PhpDumper artifact and instantiate the dumped class.
+     *
+     * @throws RuntimeException when the file does not define the expected
+     *                          {@see Relayer::COMPILED_CONTAINER_CLASS}
+     */
+    private static function loadDump(string $compiledContainerFile): ContainerInterface
+    {
+        require_once $compiledContainerFile;
+
+        // The dumped class only exists after `container:compile` (or the
+        // warm-up path) generated it, so it is opaque to static analysis —
+        // treat the FQCN as a plain string and prove the contract at
+        // runtime via the instanceof guard below.
+        /** @var string $dumpedClass */
+        $dumpedClass = Relayer::COMPILED_CONTAINER_CLASS;
+        $container = new $dumpedClass();
+
+        if (!$container instanceof ContainerInterface) {
+            throw new RuntimeException(\sprintf(
+                'Dumped container %s did not produce a %s — re-run `relayer container:compile`.',
+                $compiledContainerFile,
+                ContainerInterface::class,
+            ));
+        }
+
+        return $container;
+    }
+
+    /**
+     * Write a dump atomically (temp file + rename, same directory) so a
+     * concurrent reader can never `require` a half-written class. Returns
+     * false on any I/O failure — callers decide whether that is fatal.
+     */
+    private static function writeDump(string $outFile, string $dumped): bool
+    {
+        $outDir = \dirname($outFile);
+
+        if (!\is_dir($outDir) && !@\mkdir($outDir, 0o775, true) && !\is_dir($outDir)) {
+            return false;
+        }
+
+        $tmp = $outFile . '.tmp-' . \bin2hex(\random_bytes(4));
+
+        if (false === @\file_put_contents($tmp, $dumped)) {
+            @\unlink($tmp);
+
+            return false;
+        }
+
+        if (!@\rename($tmp, $outFile)) {
+            @\unlink($tmp);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * The live build: framework defaults → convention configs → the
+     * caller's {@see AppConfigurator} → autowire-by-default → compile.
+     * Split out of {@see create()} so the warm-up path can build a
+     * dump-shaped container without duplicating any of it.
+     */
+    private static function build(
+        string $projectRoot,
+        ?AppConfigurator $configurator,
+        bool $isDev,
+        bool $forDump,
+    ): ContainerBuilder {
         $container = new ContainerBuilder();
         $container->setParameter('app.project_root', $projectRoot);
 

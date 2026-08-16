@@ -31,6 +31,9 @@ final class ScaffoldTest extends TestCase
             'php.ini',
             'compose.yaml',
             '.dockerignore',
+            'static-build.Dockerfile',
+            'Caddyfile',
+            'public/worker.php',
         ], \array_keys($files));
 
         // init patches an existing composer.json; it must never ship one.
@@ -45,7 +48,7 @@ final class ScaffoldTest extends TestCase
     {
         $files = Scaffold::files();
 
-        foreach (['public/index.php', 'src/AppConfigurator.php'] as $php) {
+        foreach (['public/index.php', 'public/worker.php', 'src/AppConfigurator.php'] as $php) {
             // token_get_all in TOKEN_PARSE mode performs a full parse and
             // raises ParseError on malformed source — a shell-free syntax
             // check for the generated entrypoints.
@@ -157,7 +160,11 @@ final class ScaffoldTest extends TestCase
         self::assertStringContainsString('COPY composer.* ./', $files['Dockerfile']);
 
         // compose builds the local image and publishes the same port.
-        self::assertStringContainsString('build: .', $files['compose.yaml']);
+        // The target must be pinned: `prod` is the Dockerfile's last
+        // stage, so an unpinned `build: .` would hand the dev service a
+        // production image with .psx live-compilation switched off.
+        self::assertStringContainsString('context: .', $files['compose.yaml']);
+        self::assertStringContainsString('target: dev', $files['compose.yaml']);
         self::assertStringContainsString('8000:8000', $files['compose.yaml']);
 
         $compose = $files['compose.yaml'];
@@ -174,6 +181,92 @@ final class ScaffoldTest extends TestCase
         // vendor/ must be excluded so the image runs a fresh, in-image
         // `composer install` (which also fires the usephp asset publisher).
         self::assertStringContainsString('/vendor/', $files['.dockerignore']);
+    }
+
+    public function testScaffoldsAProductionTargetThatGeneratesNothingAtRuntime(): void
+    {
+        $files = Scaffold::files();
+        $dockerfile = $files['Dockerfile'];
+        $compose = $files['compose.yaml'];
+
+        // Both targets exist and share one base, so the prod image is the
+        // dev image plus precompilation — not a separately drifting build.
+        self::assertStringContainsString('FROM dunglas/frankenphp:php8.5 AS base', $dockerfile);
+        self::assertStringContainsString('FROM base AS dev', $dockerfile);
+        self::assertStringContainsString('FROM base AS prod', $dockerfile);
+
+        // All three artifacts must be built, or "generates nothing at
+        // runtime" is false and read_only breaks the app instead of
+        // merely slowing it down. Unlike the single-binary build, this
+        // image's build path IS its runtime path, so the two path-keyed
+        // artifacts are safe to bake in here.
+        self::assertStringContainsString('usephp compile src/Pages', $dockerfile);
+        self::assertStringContainsString('relayer routes:compile', $dockerfile);
+        self::assertStringContainsString('relayer container:compile', $dockerfile);
+        // ...and prod must actually boot as prod: the committed .env says
+        // APP_ENV=dev, which would live-build past every artifact above.
+        self::assertStringContainsString("printf 'APP_ENV=prod\\n' > .env.local", $dockerfile);
+
+        // Nothing may be left compiling at request time, so timestamps go
+        // unvalidated; the two runtime writers PHP itself owns move under
+        // var/cache/ so the writable set is one directory tree.
+        self::assertStringContainsString('opcache.validate_timestamps = 0', $dockerfile);
+        self::assertStringContainsString('session.save_path = /app/var/cache/sessions', $dockerfile);
+        self::assertStringContainsString('upload_tmp_dir = /app/var/cache/uploads', $dockerfile);
+
+        // The read-only service documents the payoff. Every path PHP or
+        // Caddy writes needs a tmpfs; Caddy's two are easy to miss (the
+        // FrankenPHP image sets XDG_*_HOME but declares no VOLUME, so
+        // read_only stops it from starting at all).
+        self::assertStringContainsString('read_only: true', $compose);
+        self::assertStringContainsString('/app/var/cache/etags', $compose);
+        self::assertStringContainsString('/app/var/cache/sessions', $compose);
+        self::assertStringContainsString('/app/var/cache/uploads', $compose);
+        self::assertStringContainsString('/data/caddy', $compose);
+        self::assertStringContainsString('/config/caddy', $compose);
+
+        // The one mount that must NOT be there: covering var/cache itself
+        // hides the compiled artifacts and silently restores the live
+        // scan/build path the prod target exists to remove.
+        self::assertStringNotContainsString('- /app/var/cache:', $compose);
+    }
+
+    public function testScaffoldsACoherentSingleBinaryBuild(): void
+    {
+        $files = Scaffold::files();
+        $dockerfile = $files['static-build.Dockerfile'];
+        $caddyfile = $files['Caddyfile'];
+        $worker = $files['public/worker.php'];
+
+        // The static builder is what turns the app into one executable;
+        // EMBED is what puts the app inside it. Without either, the build
+        // produces a bare FrankenPHP binary that serves nothing.
+        self::assertStringContainsString('dunglas/frankenphp:static-builder-gnu', $dockerfile);
+        self::assertStringContainsString('EMBED=dist/app/', $dockerfile);
+
+        // The embedded app is extracted to a fresh directory at startup,
+        // so the build MUST NOT precompile the path-keyed artifacts and
+        // MUST leave the app able to build them at runtime instead.
+        self::assertStringContainsString('RELAYER_WARM_CACHE=1', $dockerfile);
+        self::assertStringContainsString('--no-dev', $dockerfile);
+        self::assertStringContainsString('relayer routes:compile', $dockerfile);
+        self::assertStringNotContainsString('container:compile', $dockerfile);
+        self::assertStringNotContainsString('usephp compile', $dockerfile);
+
+        // The Caddyfile is the binary's server config: it must point the
+        // document root at public/ and wire worker mode at the worker
+        // entrypoint that actually exists in the scaffold.
+        self::assertStringContainsString('root public/', $caddyfile);
+        self::assertStringContainsString('php_server', $caddyfile);
+        self::assertStringContainsString('file ./public/worker.php', $caddyfile);
+
+        // The worker loop must boot ONCE outside the loop (that is the
+        // whole point), reset request state between requests, and never
+        // loop when frankenphp_handle_request is unavailable.
+        self::assertStringContainsString('Relayer::boot($root, new AppConfigurator($root))', $worker);
+        self::assertStringContainsString('frankenphp_handle_request($handler)', $worker);
+        self::assertStringContainsString('Relayer::endRequest()', $worker);
+        self::assertStringContainsString("function_exists('frankenphp_handle_request')", $worker);
     }
 
     public function testComposerPatchIsAdditiveAndCarriesTheStructureMarker(): void
@@ -197,13 +290,18 @@ final class ScaffoldTest extends TestCase
         $migrations = Scaffold::migrations();
         $fileKeys = \array_keys(Scaffold::files());
 
-        // Versions are exactly 2 .. STRUCTURE_VERSION, contiguous: every
-        // bump must register the files it added or `upgrade` silently skips
-        // them. v1 is the baseline (no step), so the map starts at 2.
-        self::assertSame(
-            \range(2, Scaffold::STRUCTURE_VERSION),
+        // Every version from 2 up must register what it changed, in one
+        // map or the other, or `upgrade` walks past it silently. A bump
+        // that adds files lands in migrations(), one that only rewrites
+        // existing content lands in rewrites(); together they must be
+        // contiguous. v1 is the baseline (no step), so it starts at 2.
+        $versions = \array_unique(\array_merge(
             \array_keys($migrations),
-        );
+            \array_keys(Scaffold::rewrites()),
+        ));
+        \sort($versions);
+
+        self::assertSame(\range(2, Scaffold::STRUCTURE_VERSION), $versions);
 
         $seen = [];
         foreach ($migrations as $version => $paths) {
@@ -232,5 +330,50 @@ final class ScaffoldTest extends TestCase
             \array_diff($fileKeys, \array_keys($seen)),
             'expected at least one v1 baseline file outside the migration map',
         );
+    }
+
+    public function testRewritesMapListsOnlySupersededContentForRealFiles(): void
+    {
+        $files = Scaffold::files();
+        $seenHashes = [];
+
+        foreach (Scaffold::rewrites() as $version => $paths) {
+            self::assertNotSame([], $paths, "version {$version} must rewrite at least one file");
+
+            foreach ($paths as $relative => $priorHashes) {
+                self::assertArrayHasKey(
+                    $relative,
+                    $files,
+                    "{$relative} (v{$version}) must be a Scaffold::files() key",
+                );
+                self::assertNotSame(
+                    [],
+                    $priorHashes,
+                    "{$relative} (v{$version}) must list the content it supersedes",
+                );
+
+                $currentHash = \hash('sha256', $files[$relative]);
+
+                foreach ($priorHashes as $hash) {
+                    self::assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $hash);
+                    // A prior hash equal to the current content would make
+                    // "already up to date" and "safe to replace" the same
+                    // case, and would mean a template edit shipped without
+                    // its hash being recorded — the exact silent failure
+                    // this map exists to prevent.
+                    self::assertNotSame(
+                        $currentHash,
+                        $hash,
+                        "{$relative} (v{$version}) lists its own current content as superseded",
+                    );
+                    self::assertArrayNotHasKey(
+                        $hash,
+                        $seenHashes,
+                        "{$relative} (v{$version}) repeats a hash already listed",
+                    );
+                    $seenHashes[$hash] = true;
+                }
+            }
+        }
     }
 }
