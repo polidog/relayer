@@ -28,7 +28,8 @@ final class RoutesCommandTest extends TestCase
         );
         \file_put_contents(
             $this->project . '/src/Pages/api/items/route.php',
-            "<?php\n\nreturn ['GET' => static fn () => [], 'POST' => static fn () => []];\n",
+            "<?php\n\nuse Polidog\\Relayer\\Http\\Request;\nuse Polidog\\Relayer\\Http\\Response;\n\n"
+            . "return ['GET' => static fn (Request \$request): Response => Response::json(['q' => \$request->query('q')]), 'POST' => static fn () => []];\n",
         );
         \file_put_contents(
             $this->project . '/src/Pages/api/items/[id]/route.php',
@@ -88,6 +89,40 @@ final class RoutesCommandTest extends TestCase
 
         self::assertSame(0, $status);
         self::assertStringContainsString('relayer routes', $this->captured());
+    }
+
+    public function testGraphPrintsMermaidRouteMap(): void
+    {
+        $status = RoutesCommand::run(['--graph'], $this->capture(), $this->project);
+        $out = $this->captured();
+
+        self::assertSame(0, $status);
+        self::assertStringContainsString('flowchart TD', $out);
+        self::assertStringContainsString('/api/items', $out);
+        self::assertStringContainsString('GET,POST api', $out);
+    }
+
+    public function testJsonPrintsStructuredRouteMap(): void
+    {
+        $status = RoutesCommand::run(['--json'], $this->capture(), $this->project);
+        $json = \json_decode($this->captured(), true);
+
+        self::assertSame(0, $status);
+        self::assertIsArray($json);
+        self::assertContains('/api/items/[id]', \array_column($json, 'path'));
+    }
+
+    public function testEmulatesRequestThroughCliDispatch(): void
+    {
+        $status = InitCommand::run(
+            ['routes:emulate', 'GET', '/api/items', '--query', 'q=abc'],
+            $this->capture(),
+            $this->project,
+        );
+
+        self::assertSame(0, $status);
+        self::assertStringContainsString('HTTP 200', $this->captured());
+        self::assertStringContainsString('{"q":"abc"}', $this->captured());
     }
 
     private function capture(): Closure

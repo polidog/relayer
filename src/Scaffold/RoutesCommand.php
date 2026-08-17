@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Scaffold;
 use Closure;
 use Polidog\Relayer\Router\Api\RouteHandlers;
 use Polidog\Relayer\Router\Routing\PageScanner;
+use Polidog\Relayer\Router\Routing\Route;
 use RuntimeException;
 use Throwable;
 
@@ -56,9 +57,54 @@ final class RoutesCommand
             return 1;
         }
 
-        // [methods, path, type, file] rows, sorted by path for readability.
-        $rows = [];
+        [$routes, $warnings] = self::describeRoutes($root, $collection);
+
+        if ([] === $routes) {
+            $write('No routes found under src/Pages.');
+
+            return 0;
+        }
+
+        if (\in_array('--json', $args, true)) {
+            $json = \json_encode($routes, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_UNESCAPED_UNICODE);
+            $write(false === $json ? '[]' : $json);
+        } elseif (\in_array('--graph', $args, true) || \in_array('--mermaid', $args, true)) {
+            foreach (self::mermaid($routes) as $line) {
+                $write($line);
+            }
+        } else {
+            // [methods, path, type, file] rows, sorted by path for readability.
+            $rows = \array_map(
+                static fn (array $route): array => [$route['methods'], $route['path'], $route['type'], $route['file']],
+                $routes,
+            );
+
+            \array_unshift($rows, ['METHODS', 'PATH', 'TYPE', 'FILE']);
+            foreach (self::format($rows) as $line) {
+                $write($line);
+            }
+        }
+
+        if ([] !== $warnings) {
+            $write('');
+            foreach ($warnings as $warning) {
+                $write($warning);
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param iterable<Route> $collection
+     *
+     * @return array{list<array{methods: string, path: string, type: string, file: string, params: list<string>}>, list<string>}
+     */
+    private static function describeRoutes(string $root, iterable $collection): array
+    {
+        $routes = [];
         $warnings = [];
+
         foreach ($collection as $route) {
             $file = self::relative($root, $route->pagePath);
 
@@ -78,30 +124,67 @@ final class RoutesCommand
                 $methods = 'GET,POST';
             }
 
-            $rows[] = [$methods, $route->pattern, $route->isApi ? 'api' : 'page', $file];
+            $routes[] = [
+                'methods' => $methods,
+                'path' => $route->pattern,
+                'type' => $route->isApi ? 'api' : 'page',
+                'file' => $file,
+                'params' => \array_values($route->paramNames),
+            ];
         }
 
-        if ([] === $rows) {
-            $write('No routes found under src/Pages.');
+        \usort($routes, static fn (array $a, array $b): int => $a['path'] <=> $b['path']);
 
-            return 0;
-        }
+        return [$routes, $warnings];
+    }
 
-        \usort($rows, static fn (array $a, array $b): int => $a[1] <=> $b[1]);
+    /**
+     * @param list<array{methods: string, path: string, type: string, file: string, params: list<string>}> $routes
+     *
+     * @return list<string>
+     */
+    private static function mermaid(array $routes): array
+    {
+        $lines = ['flowchart TD'];
+        $nodeIds = ['/' => 'root'];
+        $labels = ['/' => '/'];
+        $edges = [];
 
-        \array_unshift($rows, ['METHODS', 'PATH', 'TYPE', 'FILE']);
-        foreach (self::format($rows) as $line) {
-            $write($line);
-        }
+        foreach ($routes as $route) {
+            $parts = '/' === $route['path'] ? [] : \explode('/', \trim($route['path'], '/'));
+            $current = '/';
 
-        if ([] !== $warnings) {
-            $write('');
-            foreach ($warnings as $warning) {
-                $write($warning);
+            foreach ($parts as $part) {
+                $next = '/' === $current ? '/' . $part : $current . '/' . $part;
+                $nodeIds[$next] ??= 'n' . \count($nodeIds);
+                $labels[$next] ??= $next;
+                $edges[$current . '->' . $next] = [$current, $next];
+                $current = $next;
             }
+
+            $labels[$route['path']] = \sprintf(
+                '%s<br/>%s %s<br/>%s',
+                $route['path'],
+                $route['methods'],
+                $route['type'],
+                $route['file'],
+            );
         }
 
-        return 0;
+        foreach ($nodeIds as $path => $id) {
+            $lines[] = '  ' . $id . '["' . self::escapeMermaidLabel($labels[$path]) . '"]';
+        }
+
+        foreach ($edges as [$from, $to]) {
+            $lines[] = '  ' . $nodeIds[$from] . ' --> ' . $nodeIds[$to];
+        }
+
+        return $lines;
+    }
+
+    private static function escapeMermaidLabel(string $label): string
+    {
+        return \str_replace(['\\', '"'], ['\\\\', '\"'], $label);
     }
 
     private static function relative(string $root, string $path): string
