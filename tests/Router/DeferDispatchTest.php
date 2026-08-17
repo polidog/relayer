@@ -5,10 +5,16 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
+use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\InjectorContainer;
+use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Tests\Auth\ArraySessionStorage;
 use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
+use Psr\Container\ContainerInterface;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 final class DeferDispatchTest extends TestCase
 {
@@ -120,7 +126,45 @@ final class DeferDispatchTest extends TestCase
         self::assertStringContainsString('<!DOCTYPE', $output);
     }
 
-    private function bootUsePhp(): UsePHP
+    public function testDeferredComponentReceivesSessionStorageFromContainer(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/src/Components/ProfileBadge.psx',
+            <<<'PSX'
+                <?php
+                namespace App\Components;
+                use Polidog\Relayer\Auth\SessionStorage;
+                use Polidog\UsePhp\Component\Defer;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\fc;
+
+                return fc(
+                    fn(array $props, SessionStorage $session): Element => <span data-id="profile">{$props['slot']}:{$session->get('viewer')}</span>,
+                    defer: new Defer(name: 'profile-badge'),
+                );
+                PSX,
+        );
+
+        $session = new ArraySessionStorage();
+        $session->set('viewer', 'Alice');
+
+        $builder = new ContainerBuilder();
+        $builder->set(SessionStorage::class, $session);
+        $container = new InjectorContainer($builder);
+
+        $usephp = $this->bootUsePhp($container);
+
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/_defer/profile-badge?slot=header';
+        $_GET = ['slot' => 'header'];
+
+        $output = $this->runApp($usephp);
+
+        self::assertStringContainsString('<span data-id="profile">header:Alice</span>', $output);
+    }
+
+    private function bootUsePhp(?ContainerInterface $container = null): UsePHP
     {
         $cacheDir = $this->workDir . '/var/cache/psx';
         \mkdir($cacheDir, 0o777, true);
@@ -142,9 +186,13 @@ final class DeferDispatchTest extends TestCase
 
         $usephp = new UsePHP();
         $usephp->setSnapshotSecret('defer-test-secret');
-        if (\file_exists($cacheDir . '/manifest.php')) {
-            $usephp->loadComponentManifest($cacheDir . '/manifest.php');
-        }
+        PsxComponentRegistrar::configure(
+            $usephp,
+            componentsDir: $this->workDir . '/src/Components',
+            cacheDir: $cacheDir,
+            autoCompile: false,
+            container: $container,
+        );
 
         return $usephp;
     }
