@@ -238,7 +238,7 @@ final class UpgradeCommandTest extends TestCase
         ]);
         // A v6 project's Dockerfile: untouched since the framework wrote
         // it, so `upgrade` owes it the new content.
-        $prior = self::priorContent('Dockerfile');
+        $prior = self::priorContent('Dockerfile', 6);
         \file_put_contents($this->project . '/Dockerfile', $prior);
 
         $status = UpgradeCommand::run([], $this->capture(), $this->project);
@@ -251,17 +251,41 @@ final class UpgradeCommandTest extends TestCase
         self::assertStringContainsString('~ Dockerfile', $this->captured());
     }
 
+    public function testCarriesAContentFixToProjectsScaffoldedAtTheImmediatelyPreviousVersion(): void
+    {
+        $this->writeComposer([
+            'name' => 'acme/app',
+            'extra' => ['relayer' => ['structure_version' => 7]],
+        ]);
+        // A v7 project holds the first base/dev/prod Dockerfile, whose
+        // prod target left PHP's defaults in place — errors printed into
+        // the response, logged nowhere. Exactly the case the rewrite map
+        // exists for: the fix has to reach projects that already exist,
+        // not just the next `relayer init`.
+        \file_put_contents($this->project . '/Dockerfile', self::priorContent('Dockerfile', 7));
+
+        $status = UpgradeCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(0, $status, $this->captured());
+        self::assertStringContainsString('~ Dockerfile', $this->captured());
+
+        $updated = (string) \file_get_contents($this->project . '/Dockerfile');
+        self::assertSame(Scaffold::files()['Dockerfile'], $updated);
+        self::assertStringContainsString('display_errors = Off', $updated);
+        self::assertStringContainsString('log_errors = On', $updated);
+    }
+
     public function testLeavesALocallyModifiedTemplateAloneAndSaysSo(): void
     {
         $this->writeComposer([
             'name' => 'acme/app',
             'extra' => ['relayer' => ['structure_version' => 6]],
         ]);
-        $mine = self::priorContent('Dockerfile') . "\nRUN echo mine\n";
+        $mine = self::priorContent('Dockerfile', 6) . "\nRUN echo mine\n";
         \file_put_contents($this->project . '/Dockerfile', $mine);
         // ...while an untouched sibling in the same rewrite step still
         // gets updated: one local edit must not stall the whole step.
-        \file_put_contents($this->project . '/compose.yaml', self::priorContent('compose.yaml'));
+        \file_put_contents($this->project . '/compose.yaml', self::priorContent('compose.yaml', 6));
 
         $status = UpgradeCommand::run([], $this->capture(), $this->project);
 
@@ -383,19 +407,24 @@ final class UpgradeCommandTest extends TestCase
     }
 
     /**
-     * A previously-shipped copy of `$relative`, byte-for-byte, as a real
-     * project scaffolded by an older framework version would hold it.
+     * The copy of `$relative` that structure version `$version` shipped,
+     * byte-for-byte, as a real project scaffolded then would hold it.
      *
      * {@see Scaffold::rewrites()} stores only hashes, so the bytes live in
-     * `fixtures/prior/` — and the assertion below is what keeps them
-     * honest: a fixture that no longer hashes to a value the map accepts
-     * would make these tests exercise the "locally modified" path while
-     * claiming to test the refresh path.
+     * `fixtures/prior/<path>.v<n>` — and the assertion below is what keeps
+     * them honest: a fixture that no longer hashes to a value the map
+     * accepts would make these tests exercise the "locally modified" path
+     * while claiming to test the refresh path.
      */
-    private static function priorContent(string $relative): string
+    private static function priorContent(string $relative, int $version): string
     {
-        $contents = \file_get_contents(__DIR__ . '/fixtures/prior/' . \str_replace('/', '_', $relative));
-        self::assertIsString($contents, "missing prior-content fixture for {$relative}");
+        $contents = \file_get_contents(\sprintf(
+            '%s/fixtures/prior/%s.v%d',
+            __DIR__,
+            \str_replace('/', '_', $relative),
+            $version,
+        ));
+        self::assertIsString($contents, "missing prior-content fixture for {$relative} (v{$version})");
 
         $accepted = [];
         foreach (Scaffold::rewrites() as $paths) {
