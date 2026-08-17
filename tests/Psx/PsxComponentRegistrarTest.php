@@ -6,7 +6,12 @@ namespace Polidog\Relayer\Tests\Psx;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
+use Polidog\Relayer\Tests\Fixtures\PlainService;
+use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\UsePHP;
+use Psr\Container\ContainerInterface;
+use Psr\Container\NotFoundExceptionInterface;
+use RuntimeException;
 
 final class PsxComponentRegistrarTest extends TestCase
 {
@@ -148,6 +153,72 @@ final class PsxComponentRegistrarTest extends TestCase
         \file_put_contents($manifestPath, '<?php return [];');
 
         self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
+    }
+
+    public function testContainerAwareComponentUsesManifestParameterMetadata(): void
+    {
+        $componentsDir = $this->workDir . '/Components';
+        $cacheDir = $this->workDir . '/cache';
+        \mkdir($componentsDir, 0o777, true);
+        \mkdir($cacheDir, 0o777, true);
+
+        $compiledPath = $cacheDir . '/Greeting.php';
+        \file_put_contents(
+            $compiledPath,
+            <<<'PHP'
+                <?php
+                declare(strict_types=1);
+
+                use Polidog\Relayer\Tests\Fixtures\PlainService;
+                use Polidog\UsePhp\Runtime\Element;
+
+                return static fn (array $props, PlainService $service): Element => new Element(
+                    'span',
+                    [],
+                    [$props['label'] . ':' . $service::class],
+                );
+                PHP,
+        );
+
+        \file_put_contents(
+            $cacheDir . '/manifest.php',
+            '<?php return ' . \var_export([
+                'App\Components\Greeting' => [
+                    'file' => $compiledPath,
+                    'parameters' => [
+                        ['kind' => 'props', 'name' => 'props'],
+                        ['kind' => 'service', 'name' => 'service', 'service' => PlainService::class],
+                    ],
+                ],
+            ], true) . ';',
+        );
+
+        $plain = new PlainService();
+        $container = new class($plain) implements ContainerInterface {
+            public function __construct(private readonly PlainService $plain) {}
+
+            public function has(string $id): bool
+            {
+                return PlainService::class === $id;
+            }
+
+            public function get(string $id): object
+            {
+                if (PlainService::class !== $id) {
+                    throw new class("not found: {$id}") extends RuntimeException implements NotFoundExceptionInterface {};
+                }
+
+                return $this->plain;
+            }
+        };
+
+        $app = new UsePHP();
+        PsxComponentRegistrar::configure($app, $componentsDir, $cacheDir, autoCompile: false, container: $container);
+
+        $element = $app->renderPsxComponent('App\Components\Greeting', ['label' => 'hello']);
+
+        self::assertInstanceOf(Element::class, $element);
+        self::assertSame(['hello:' . PlainService::class], $element->children);
     }
 
     private function rmrf(string $path): void

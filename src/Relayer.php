@@ -216,7 +216,7 @@ final class Relayer
         );
         $router->setContainer($psr);
 
-        $usephp = self::buildUsePhp($projectRoot, $isDev, $warm);
+        $usephp = self::buildUsePhp($projectRoot, $isDev, $warm, $psr);
         $router->setUsePhp($usephp);
 
         // Wire dev-time profiling when the container exposes a Profiler.
@@ -301,8 +301,12 @@ final class Relayer
      * `.psx` source is newer than the manifest; prod expects
      * `vendor/bin/usephp compile src/Components/` to have run during deploy.
      */
-    private static function buildUsePhp(string $projectRoot, bool $isDev, bool $warm): UsePHP
-    {
+    private static function buildUsePhp(
+        string $projectRoot,
+        bool $isDev,
+        bool $warm,
+        ?ContainerInterface $container = null,
+    ): UsePHP {
         $app = new UsePHP();
 
         $secret = self::resolveSnapshotSecret($projectRoot, $isDev);
@@ -318,6 +322,7 @@ final class Relayer
             // prod boot with no precompiled manifest registers nothing and
             // deferred components silently stop working.
             autoCompile: $isDev || $warm,
+            container: $container,
         );
 
         return $app;
