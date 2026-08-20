@@ -30,7 +30,7 @@
         "ext-curl": "*",
         "ext-openssl": "*",
         "firebase/php-jwt": "^7.0",
-        "polidog/use-php": "^0.7.3",
+        "polidog/use-php": "^0.8.0",
         "symfony/dependency-injection": "^7.1",
         "symfony/config": "^7.1",
         "symfony/yaml": "^7.1",
