@@ -35,6 +35,7 @@ final class InitCommand
           relayer init               scaffold the project structure in the current directory
           relayer upgrade            migrate the project structure up to this framework version
           relayer routes             list the routes discovered under src/Pages
+          relayer compile            build all deploy artifacts: .psx, routes, DI container
           relayer routes:compile     write the precompiled route artifact (run at deploy)
           relayer container:compile  dump the DI container to PHP (run at deploy)
           relayer profiler:clear     delete cached dev profiler data (var/cache/profiler)
@@ -71,6 +72,10 @@ final class InitCommand
 
         if ('routes' === $command) {
             return RoutesCommand::run(\array_slice($args, 1), $write, $cwd);
+        }
+
+        if ('compile' === $command) {
+            return CompileCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('routes:compile' === $command) {
