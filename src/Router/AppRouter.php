@@ -100,6 +100,15 @@ final class AppRouter
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
     private ?UsePHP $usephp = null;
+
+    /**
+     * Function-style page factories keyed by the (compiled) file path —
+     * see {@see loadPageInternal()} for why `require_once` alone is not
+     * enough once the process outlives a single request.
+     *
+     * @var array<string, Closure>
+     */
+    private array $pageFactories = [];
     private ?Profiler $profiler = null;
     private ?RecordingProfiler $recording = null;
     private ?ProfilerStorage $profilerStorage = null;
@@ -908,10 +917,24 @@ final class AppRouter
             $pagePath = $this->resolveCompiledPsxPath($pagePath);
         }
 
+        // Function-style pages return their factory Closure from the file.
+        // `require_once` yields that Closure only on the FIRST include; on
+        // every later include of the same file it returns `true`, so under
+        // a long-running runtime (FrankenPHP worker, RoadRunner) the second
+        // request for the same page would fall through to the class lookup,
+        // find nothing, and 404. Keep the factory per compiled path — it is
+        // invoked afresh for every request, so caching it carries no
+        // per-request state.
+        if (isset($this->pageFactories[$pagePath])) {
+            return $this->buildFunctionPage($this->pageFactories[$pagePath], $originalPagePath, $params);
+        }
+
         $result = require_once $pagePath;
 
         // Closure return: function-based page
         if ($result instanceof Closure) {
+            $this->pageFactories[$pagePath] = $result;
+
             return $this->buildFunctionPage($result, $originalPagePath, $params);
         }
 

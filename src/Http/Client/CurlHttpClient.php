@@ -61,7 +61,6 @@ final class CurlHttpClient implements HttpClient
         if (false === $result) {
             $error = \curl_error($handle);
             $errno = \curl_errno($handle);
-            \curl_close($handle);
 
             throw new HttpClientException(
                 \sprintf('HTTP request to %s failed: %s (cURL %d)', $url, $error, $errno),
@@ -69,7 +68,6 @@ final class CurlHttpClient implements HttpClient
         }
 
         $status = (int) \curl_getinfo($handle, \CURLINFO_RESPONSE_CODE);
-        \curl_close($handle);
 
         return new HttpResponse($status, $responseHeaders, \is_string($result) ? $result : '');
     }
