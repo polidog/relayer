@@ -262,9 +262,17 @@ scan-free image:
 
 ```bash
 composer install --no-dev --classmap-authoritative
-vendor/bin/usephp compile src/Pages      # .psx  -> compiled PHP
-vendor/bin/relayer routes:compile         # route map -> PHP
-vendor/bin/relayer container:compile      # DI container -> PHP
+vendor/bin/relayer compile                # all three, in order, stop on first failure
+```
+
+`relayer compile` is shorthand for the three standalone steps, which you
+can still run individually (e.g. to skip `container:compile` — see
+"Runtime secrets" below):
+
+```bash
+vendor/bin/usephp compile src/Pages src/Components   # .psx  -> compiled PHP
+vendor/bin/relayer routes:compile                     # route map -> PHP
+vendor/bin/relayer container:compile                  # DI container -> PHP
 ```
 
 Then run with `APP_ENV` unset and OPcache `validate_timestamps=0` (the

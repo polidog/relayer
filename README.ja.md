@@ -266,9 +266,17 @@ container:compile` がそれを素の PHP クラス
 
 ```bash
 composer install --no-dev --classmap-authoritative
-vendor/bin/usephp compile src/Pages      # .psx  -> コンパイル済み PHP
-vendor/bin/relayer routes:compile         # ルートマップ -> PHP
-vendor/bin/relayer container:compile      # DI コンテナ -> PHP
+vendor/bin/relayer compile                # 3 つを順に実行、最初の失敗で停止
+```
+
+`relayer compile` は以下 3 つの個別コマンドの省略形です。個別に実行する
+こともできます（例: `container:compile` だけ外す — 後述「ランタイム
+secret」参照）:
+
+```bash
+vendor/bin/usephp compile src/Pages src/Components   # .psx  -> コンパイル済み PHP
+vendor/bin/relayer routes:compile                     # ルートマップ -> PHP
+vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 ```
 
 あとは `APP_ENV` を未設定にし、OPcache の `validate_timestamps=0`
