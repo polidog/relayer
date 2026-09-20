@@ -1001,6 +1001,7 @@ return function (PageContext $ctx, Request $req): Closure {
 | ---------------------------- | --------------------------------------------- |
 | `$req->method`               | uppercase HTTP method                         |
 | `$req->path`                 | request path (no query string)                |
+| `$req->uri()`                | verbatim request URI (query string included)  |
 | `$req->isGet()` / `isPost()` | `bool`                                        |
 | `$req->isMethod('PUT')`      | `bool`                                        |
 | `$req->post($key)`           | `?string` (null if missing / non-string)      |

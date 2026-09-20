@@ -22,6 +22,8 @@ final readonly class Request
      *                                       (set by the framework once the
      *                                       LocaleResolver has run; null when
      *                                       i18n is not configured)
+     * @param null|string           $uri     verbatim request URI including the
+     *                                       query string; defaults to `path`
      */
     public function __construct(
         public string $method,
@@ -31,6 +33,7 @@ final readonly class Request
         private array $headers = [],
         private array $cookies = [],
         private readonly ?string $locale = null,
+        private readonly ?string $uri = null,
     ) {}
 
     public static function fromGlobals(): self
@@ -71,7 +74,18 @@ final readonly class Request
             post: self::filterStringKeys($_POST),
             headers: $headers,
             cookies: $cookies,
+            uri: $uri,
         );
+    }
+
+    /**
+     * The verbatim request URI, query string included — what a form posts
+     * back to and what the profiler records. {@see $path} is the same value
+     * with the query string stripped.
+     */
+    public function uri(): string
+    {
+        return $this->uri ?? $this->path;
     }
 
     public function isMethod(string $method): bool
@@ -153,6 +167,7 @@ final readonly class Request
             headers: $this->headers,
             cookies: $this->cookies,
             locale: $this->locale,
+            uri: $this->uri,
         );
     }
 
@@ -169,6 +184,7 @@ final readonly class Request
             headers: $this->headers,
             cookies: $this->cookies,
             locale: $locale,
+            uri: $this->uri,
         );
     }
 

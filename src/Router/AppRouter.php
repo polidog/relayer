@@ -257,7 +257,7 @@ final class AppRouter
 
     public function run(): void
     {
-        $path = self::readPath();
+        $path = $this->readPath();
 
         // Dev profiler viewer — only when storage is bound (dev only).
         // Intercepted BEFORE beginProfile so visiting the viewer does
@@ -276,22 +276,22 @@ final class AppRouter
         // the inline fetch wrapper on the parent page can forward it
         // back on any `<X defer />` fetch (and so HTTP-inspector tooling
         // can deep-link to /_profiler/<token>).
-        if (null !== $this->recording && !$this->isProfilerExcluded($path)) {
-            $profile = $this->recording->beginProfile(self::readUrl(), self::readMethod(), $this->readProfilerParentToken());
-            if (!\headers_sent()) {
-                \header('X-Debug-Token: ' . $profile->token);
-            }
-            if ($this->document instanceof HtmlDocument) {
-                $this->document->addHeadHtml(self::buildDebugBridgeScript($profile->token));
-            }
-        }
-
         // Build a snapshot of the request once per dispatch and stash it so
         // page factories / page constructors can be injected with it by type
         // — pages should never read $_GET / $_POST / $_SERVER directly.
         $request = $this->currentRequest = Request::fromGlobals();
         if ($this->container instanceof InjectorContainer) {
             $this->container->setCurrentRequest($this->currentRequest);
+        }
+
+        if (null !== $this->recording && !$this->isProfilerExcluded($path)) {
+            $profile = $this->recording->beginProfile($this->readUrl(), $this->readMethod(), $this->readProfilerParentToken());
+            if (!\headers_sent()) {
+                \header('X-Debug-Token: ' . $profile->token);
+            }
+            if ($this->document instanceof HtmlDocument) {
+                $this->document->addHeadHtml(self::buildDebugBridgeScript($profile->token));
+            }
         }
 
         // Resolve the locale up front — before the deferred handler and any
@@ -481,7 +481,7 @@ final class AppRouter
     {
         $this->profiler?->collect('route', 'api', [
             'pattern' => $match->route->pattern,
-            'method' => self::readMethod(),
+            'method' => $this->readMethod(),
             'params' => $match->getParams(),
             'routePath' => $match->getPagePath(),
         ]);
@@ -498,13 +498,8 @@ final class AppRouter
 
         $handlers = RouteHandlers::fromFile($file);
 
-        // run() always builds currentRequest before dispatch; its `method`
-        // is already upper-cased by Request::fromGlobals(). The $_SERVER
-        // fallback only matters if a subclass dispatches without run().
-        $request = $this->currentRequest;
-        $method = null !== $request
-            ? $request->method
-            : \strtoupper(\is_string($_SERVER['REQUEST_METHOD'] ?? null) ? $_SERVER['REQUEST_METHOD'] : 'GET');
+        $request = $this->request();
+        $method = $request->method;
 
         $handler = $handlers->handlerFor($method);
 
@@ -639,7 +634,7 @@ final class AppRouter
             'directives' => CachePolicy::buildDirectives($effective),
         ]);
 
-        if (CachePolicy::isNotModified($effective)) {
+        if (CachePolicy::isNotModified($effective, $this->request())) {
             $this->profiler?->collect('cache', 'hit_304', [
                 'etag' => $effective->etag,
             ]);
@@ -723,7 +718,7 @@ final class AppRouter
     private function handleNotFound(): void
     {
         $this->profiler?->collect('route', 'not_found', [
-            'path' => self::readUrl(),
+            'path' => $this->readUrl(),
         ]);
         $this->handleErrorResponse(404, $this->tr('relayer.http.page_not_found', 'Page not found'));
     }
@@ -810,7 +805,7 @@ final class AppRouter
         // non-404 aborts need their own profiler event so the two cases
         // stay distinct on the timeline.
         $this->profiler?->collect('route', 'abort', [
-            'path' => self::readUrl(),
+            'path' => $this->readUrl(),
             'status' => $exception->status,
         ]);
 
@@ -947,6 +942,7 @@ final class AppRouter
             if ($instance instanceof ComponentInterface) {
                 if ($instance instanceof PageComponent) {
                     $instance->setParams($params);
+                    $instance->setRequest($this->request());
                 }
 
                 return $instance;
@@ -967,7 +963,7 @@ final class AppRouter
 
         // Surface server-action (form POST hitting `$ctx->action()` or a
         // class-style `actionXyz` handler) and useState setState as
-        // profiler events. Both detect the dispatch by sniffing $_POST
+        // profiler events. Both detect the dispatch by sniffing the POST body
         // here (the token shape is the same across page kinds) instead
         // of duplicating the dispatcher logic. No-op when no profiler
         // is bound — guarded at the single call site.
@@ -1046,7 +1042,7 @@ final class AppRouter
             $this->document->setMetadata($page->getMetadata());
         }
 
-        $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
+        $requestUri = $this->request()->uri();
         // Pass the configured SnapshotSerializer so the inner Renderer can
         // HMAC-sign snapshot-backed component state rendered into the page.
         // Defer placeholders (`/_defer/{name}` GET endpoint) do NOT use the
@@ -1072,12 +1068,12 @@ final class AppRouter
         }
         $renderer = new LayoutRenderer(
             $componentId,
-            \is_string($requestUri) ? $requestUri : '/',
+            $requestUri,
             $snapshotSerializer,
         );
         $html = $renderer->render($pageElement, $layouts);
 
-        if (isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
+        if (null !== $this->request()->header('X-UsePHP-Partial')) {
             echo $html;
 
             return;
@@ -1110,12 +1106,13 @@ final class AppRouter
      */
     private function dispatchStateAction(string $componentId, ComponentState $state): void
     {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        $request = $this->request();
+        if (!$request->isPost()) {
             return;
         }
 
-        $actionJson = $_POST['_usephp_action'] ?? null;
-        $postComponentId = $_POST['_usephp_component'] ?? null;
+        $actionJson = $request->post('_usephp_action');
+        $postComponentId = $request->post('_usephp_component');
 
         if (!\is_string($actionJson) || !\is_string($postComponentId)) {
             return;
@@ -1152,9 +1149,8 @@ final class AppRouter
         }
 
         // PRG pattern: redirect after state change (non-AJAX)
-        if (!isset($_SERVER['HTTP_X_USEPHP_PARTIAL'])) {
-            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-            $redirectUrl = \strtok(\is_string($requestUri) ? $requestUri : '/', '?');
+        if (null === $this->request()->header('X-UsePHP-Partial')) {
+            $redirectUrl = \strtok($this->request()->uri(), '?');
             \header('Location: ' . $redirectUrl, true, 303);
 
             // The redirect IS the response — abandon the render. See
@@ -1403,7 +1399,7 @@ final class AppRouter
             throw new RuntimeException("Page factory must return a Closure or Element: {$pagePath}");
         }
 
-        return new FunctionPage($renderFn, $context, $pageId);
+        return new FunctionPage($renderFn, $context, $pageId, $this->request());
     }
 
     /**
@@ -1750,12 +1746,13 @@ final class AppRouter
     {
         \assert(null !== $this->profiler);
 
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        $request = $this->request();
+        if (!$request->isPost()) {
             return;
         }
 
-        $token = $_POST['_usephp_action'] ?? null;
-        if (!\is_string($token)) {
+        $token = $request->post('_usephp_action');
+        if (null === $token) {
             return;
         }
 
@@ -1769,7 +1766,7 @@ final class AppRouter
         }
 
         // Match the dispatchStateAction gating: same-component, JSON shape.
-        $postComponentId = $_POST['_usephp_component'] ?? null;
+        $postComponentId = $request->post('_usephp_component');
         if (\is_string($postComponentId) && $postComponentId === $componentId) {
             $this->profiler->collect('state', 'action', [
                 'componentId' => $componentId,
@@ -1801,8 +1798,8 @@ final class AppRouter
      */
     private function readProfilerParentToken(): ?string
     {
-        $raw = $_SERVER['HTTP_X_DEBUG_PARENT_TOKEN'] ?? null;
-        if (!\is_string($raw) || '' === $raw) {
+        $raw = $this->request()->header('X-Debug-Parent-Token');
+        if (null === $raw || '' === $raw) {
             return null;
         }
 
@@ -1814,29 +1811,33 @@ final class AppRouter
      * gate matches against, and what the profiler excluded-prefix list
      * compares.
      */
-    private static function readPath(): string
+    private function readPath(): string
     {
-        $path = \parse_url(self::readUrl(), \PHP_URL_PATH);
-
-        return \is_string($path) ? $path : '/';
+        return $this->request()->path;
     }
 
     /**
      * The verbatim REQUEST_URI — what the profiler records as the
      * request's full URL (including query string).
      */
-    private static function readUrl(): string
+    private function readUrl(): string
     {
-        $uri = $_SERVER['REQUEST_URI'] ?? '/';
-
-        return \is_string($uri) ? $uri : '/';
+        return $this->request()->uri();
     }
 
-    private static function readMethod(): string
+    private function readMethod(): string
     {
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+        return $this->request()->method;
+    }
 
-        return \is_string($method) ? $method : 'GET';
+    /**
+     * The request snapshot for this dispatch. run() always builds one before
+     * dispatching; the fallback only matters if a subclass dispatches without
+     * run() (and is the single place the framework re-reads the superglobals).
+     */
+    private function request(): Request
+    {
+        return $this->currentRequest ?? Request::fromGlobals();
     }
 
     /**

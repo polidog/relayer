@@ -1000,6 +1000,7 @@ return function (PageContext $ctx, Request $req): Closure {
 | ---------------------------- | ------------------------------------------------- |
 | `$req->method`               | 大文字化済み HTTP メソッド                        |
 | `$req->path`                 | クエリ文字列を除いたパス                          |
+| `$req->uri()`                | クエリ文字列込みの生のリクエスト URI              |
 | `$req->isGet()` / `isPost()` | `bool`                                            |
 | `$req->isMethod('PUT')`      | `bool`                                            |
 | `$req->post($key)`           | `?string` (存在しない / 文字列でないと null)      |

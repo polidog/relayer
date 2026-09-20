@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Router\Component;
 
 use Closure;
 use Polidog\Relayer\Http\Cache;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
@@ -20,7 +21,17 @@ final class FunctionPage
         private Closure $renderFn,
         private PageContext $context,
         private string $pageId,
+        private ?Request $request = null,
     ) {}
+
+    /**
+     * The request snapshot the router handed this page. Falls back to reading
+     * the superglobals only when the page was built outside a dispatch.
+     */
+    public function request(): Request
+    {
+        return $this->request ??= Request::fromGlobals();
+    }
 
     /**
      * Return true when the current request is a POST that carries a form-action
@@ -29,12 +40,13 @@ final class FunctionPage
      */
     public function hasPendingAction(): bool
     {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        $request = $this->request();
+        if (!$request->isPost()) {
             return false;
         }
 
-        $token = $_POST[self::FORM_ACTION_FIELD] ?? null;
-        if (!\is_string($token)) {
+        $token = $request->post(self::FORM_ACTION_FIELD);
+        if (null === $token) {
             return false;
         }
 
@@ -57,9 +69,9 @@ final class FunctionPage
 
         // Validate CSRF only when a pre-render pass is actually needed, so
         // malformed/forged POSTs do not trigger the expensive double-render.
-        $csrf = $_POST[self::FORM_CSRF_FIELD] ?? null;
+        $csrf = $request->post(self::FORM_CSRF_FIELD);
 
-        return \is_string($csrf) && CsrfToken::validate($csrf);
+        return null !== $csrf && CsrfToken::validate($csrf);
     }
 
     /**
@@ -69,13 +81,14 @@ final class FunctionPage
      */
     public function dispatchActionFromRequest(): void
     {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        $request = $this->request();
+        if (!$request->isPost()) {
             return;
         }
 
-        $token = $_POST[self::FORM_ACTION_FIELD] ?? null;
+        $token = $request->post(self::FORM_ACTION_FIELD);
 
-        if (!\is_string($token)) {
+        if (null === $token) {
             return;
         }
 
@@ -89,8 +102,8 @@ final class FunctionPage
             return;
         }
 
-        $csrf = $_POST[self::FORM_CSRF_FIELD] ?? null;
-        if (!\is_string($csrf) || !CsrfToken::validate($csrf)) {
+        $csrf = $request->post(self::FORM_CSRF_FIELD);
+        if (null === $csrf || !CsrfToken::validate($csrf)) {
             \http_response_code(403);
 
             return;
@@ -106,7 +119,7 @@ final class FunctionPage
             return;
         }
 
-        $formData = $_POST;
+        $formData = $request->allPost();
         unset($formData[self::FORM_ACTION_FIELD], $formData[self::FORM_CSRF_FIELD]);
 
         $args = $payload['args'] ?? [];

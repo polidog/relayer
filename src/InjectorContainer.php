@@ -95,7 +95,7 @@ final class InjectorContainer implements ContainerInterface
                     'directives' => CachePolicy::buildDirectives($cache),
                 ]);
 
-                if (CachePolicy::isNotModified($cache)) {
+                if (CachePolicy::isNotModified($cache, $this->currentRequest)) {
                     $profiler?->collect('cache', 'hit_304', [
                         'etag' => $cache->etag,
                     ]);

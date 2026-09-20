@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Component;
 
 use InvalidArgumentException;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
@@ -17,6 +18,8 @@ abstract class PageComponent extends BaseComponent
 
     /** @var array<string, string> */
     private array $params = [];
+
+    private ?Request $request = null;
 
     /** @var array<string, string> */
     private array $metadata = [];
@@ -32,6 +35,17 @@ abstract class PageComponent extends BaseComponent
     public function setParams(array $params): void
     {
         $this->params = $params;
+    }
+
+    /**
+     * Hand the page the request snapshot for this dispatch, so nothing below
+     * has to read the superglobals.
+     *
+     * @internal
+     */
+    public function setRequest(Request $request): void
+    {
+        $this->request = $request;
     }
 
     /**
@@ -54,18 +68,19 @@ abstract class PageComponent extends BaseComponent
 
     public function dispatchActionFromRequest(): void
     {
-        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+        $request = $this->request();
+        if (!$request->isPost()) {
             return;
         }
 
-        $token = $_POST[self::FORM_ACTION_FIELD] ?? null;
+        $token = $request->post(self::FORM_ACTION_FIELD);
 
-        if (!\is_string($token)) {
+        if (null === $token) {
             return;
         }
 
-        $csrf = $_POST[self::FORM_CSRF_FIELD] ?? null;
-        if (!\is_string($csrf) || !CsrfToken::validate($csrf)) {
+        $csrf = $request->post(self::FORM_CSRF_FIELD);
+        if (null === $csrf || !CsrfToken::validate($csrf)) {
             \http_response_code(403);
 
             return;
@@ -87,7 +102,7 @@ abstract class PageComponent extends BaseComponent
             return;
         }
 
-        $formData = $_POST;
+        $formData = $request->allPost();
         unset($formData[self::FORM_ACTION_FIELD], $formData[self::FORM_CSRF_FIELD]);
 
         $args = $payload['args'] ?? [];
@@ -146,13 +161,16 @@ abstract class PageComponent extends BaseComponent
 
     protected function getQuery(string $name): ?string
     {
-        if (!isset($_GET[$name])) {
-            return null;
-        }
+        return $this->request()->query($name);
+    }
 
-        $value = $_GET[$name];
-
-        return \is_string($value) ? $value : null;
+    /**
+     * The request snapshot the router handed this page. Falls back to reading
+     * the superglobals only when the page was built outside a dispatch.
+     */
+    protected function request(): Request
+    {
+        return $this->request ??= Request::fromGlobals();
     }
 
     protected function getSession(string $key): mixed
