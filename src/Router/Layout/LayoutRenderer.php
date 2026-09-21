@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Layout;
 
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Form\FormActionTransformer;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\Renderer;
@@ -27,11 +28,7 @@ final class LayoutRenderer
         // throws a clear LogicException rather than emitting forgeable
         // unsigned state.
         $this->renderer = new Renderer($componentId, $snapshotSerializer);
-        if (null === $formActionUrl) {
-            $requestUri = $_SERVER['REQUEST_URI'] ?? '/';
-            $formActionUrl = \is_string($requestUri) ? $requestUri : '/';
-        }
-        $this->formActionUrl = $formActionUrl;
+        $this->formActionUrl = $formActionUrl ?? Request::fromGlobals()->uri();
     }
 
     public function render(Element $pageContent, LayoutStack $layouts): string

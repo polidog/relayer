@@ -6,6 +6,8 @@ namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\I18n\LocaleResolver;
+use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
@@ -164,6 +166,45 @@ final class DeferDispatchTest extends TestCase
         self::assertStringContainsString('<span data-id="profile">header:Alice</span>', $output);
     }
 
+    public function testDeferredComponentReceivesTheRequestFromContainer(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/src/Components/LocaleBadge.psx',
+            <<<'PSX'
+                <?php
+                namespace App\Components;
+                use Polidog\Relayer\Http\Request;
+                use Polidog\UsePhp\Component\Defer;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\fc;
+
+                return fc(
+                    fn(array $props, Request $request): Element => <span data-id="locale">{$request->path}:{$request->header('x-viewer')}</span>,
+                    defer: new Defer(name: 'locale-badge'),
+                );
+                PSX,
+        );
+
+        $builder = new ContainerBuilder();
+        // i18n is not under test here, but a container-backed router resolves
+        // the locale on every dispatch — bind trivial i18n services so
+        // autowiring doesn't go looking for app catalogs.
+        $builder->set(LocaleResolver::class, new LocaleResolver(['en'], 'en', pathPrefix: false));
+        $builder->set(Translator::class, new Translator([], 'en'));
+        $container = new InjectorContainer($builder);
+        $usephp = $this->bootUsePhp($container);
+
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/_defer/locale-badge';
+        $_SERVER['HTTP_X_VIEWER'] = 'Alice';
+        $_GET = [];
+
+        $output = $this->runApp($usephp, $container);
+
+        self::assertStringContainsString('<span data-id="locale">/_defer/locale-badge:Alice</span>', $output);
+    }
+
     private function bootUsePhp(?ContainerInterface $container = null): UsePHP
     {
         $cacheDir = $this->workDir . '/var/cache/psx';
@@ -197,7 +238,7 @@ final class DeferDispatchTest extends TestCase
         return $usephp;
     }
 
-    private function runApp(UsePHP $usephp): string
+    private function runApp(UsePHP $usephp, ?InjectorContainer $container = null): string
     {
         \http_response_code(200);
 
@@ -207,6 +248,12 @@ final class DeferDispatchTest extends TestCase
             psxCacheDir: $this->workDir . '/var/cache/psx',
         );
         $app->setUsePhp($usephp);
+        // Mirrors Relayer::boot(): the router and the PSX registrar share one
+        // container, which is how a deferred component reaches the per-request
+        // Request the router stashes on it.
+        if (null !== $container) {
+            $app->setContainer($container);
+        }
 
         \ob_start();
 

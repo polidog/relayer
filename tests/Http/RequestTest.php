@@ -71,4 +71,117 @@ final class RequestTest extends TestCase
 
         self::assertSame(['email' => 'a@b.co', 'tags' => ['x', 'y']], $req->allPost());
     }
+
+    public function testJsonDecodesTheBody(): void
+    {
+        $req = new Request(method: 'POST', path: '/api/todos', body: '{"title":"buy milk","done":false}');
+
+        self::assertSame(['title' => 'buy milk', 'done' => false], $req->json());
+        self::assertSame('{"title":"buy milk","done":false}', $req->body());
+    }
+
+    public function testJsonReturnsNullForEmptyMalformedOrScalarBody(): void
+    {
+        self::assertNull((new Request(method: 'POST', path: '/api', body: ''))->json());
+        self::assertNull((new Request(method: 'POST', path: '/api', body: '{"a":'))->json());
+        self::assertNull((new Request(method: 'POST', path: '/api', body: '42'))->json());
+    }
+
+    public function testFromGlobalsNormalizesASingleUpload(): void
+    {
+        $_SERVER = ['REQUEST_METHOD' => 'POST', 'REQUEST_URI' => '/avatar'];
+        $_GET = $_POST = [];
+        $_FILES = [
+            'avatar' => [
+                'name' => 'me.png',
+                'type' => 'image/png',
+                'size' => 1024,
+                'tmp_name' => '/tmp/phpXXXX',
+                'error' => \UPLOAD_ERR_OK,
+            ],
+        ];
+
+        $file = Request::fromGlobals()->file('avatar');
+
+        self::assertNotNull($file);
+        self::assertSame('me.png', $file->clientName);
+        self::assertSame('image/png', $file->clientMimeType);
+        self::assertSame(1024, $file->size);
+        self::assertTrue($file->isValid());
+    }
+
+    public function testFromGlobalsTransposesAMultiFileField(): void
+    {
+        $_SERVER = ['REQUEST_METHOD' => 'POST', 'REQUEST_URI' => '/gallery'];
+        $_GET = $_POST = [];
+        $_FILES = [
+            'shots' => [
+                'name' => ['a.png', 'b.png'],
+                'type' => ['image/png', 'image/png'],
+                'size' => [10, 20],
+                'tmp_name' => ['/tmp/a', '/tmp/b'],
+                'error' => [\UPLOAD_ERR_OK, \UPLOAD_ERR_OK],
+            ],
+        ];
+
+        $req = Request::fromGlobals();
+
+        // A `name[]` field is a list, so file() (single) declines it.
+        self::assertNull($req->file('shots'));
+
+        $shots = $req->files()['shots'];
+        self::assertIsArray($shots);
+        self::assertCount(2, $shots);
+        self::assertSame('b.png', $shots[1]->clientName);
+        self::assertSame(20, $shots[1]->size);
+    }
+
+    public function testFromGlobalsCapturesIpHostAndScheme(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/dashboard?tab=1',
+            'REMOTE_ADDR' => '203.0.113.7',
+            'HTTP_HOST' => 'example.com:8080',
+            'HTTPS' => 'on',
+        ];
+        $_GET = $_POST = $_FILES = [];
+
+        $req = Request::fromGlobals();
+
+        self::assertSame('203.0.113.7', $req->ip());
+        self::assertSame('example.com:8080', $req->host());
+        self::assertSame('https', $req->scheme());
+        self::assertSame('https://example.com:8080/dashboard?tab=1', $req->url());
+    }
+
+    public function testSchemeIsHttpWhenHttpsIsOffAndUrlIsNullWithoutAHost(): void
+    {
+        $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'HTTPS' => 'off'];
+        $_GET = $_POST = $_FILES = [];
+
+        $req = Request::fromGlobals();
+
+        self::assertSame('http', $req->scheme());
+        self::assertNull($req->host());
+        self::assertNull($req->url());
+    }
+
+    public function testUriKeepsTheQueryStringAndSurvivesWithPath(): void
+    {
+        $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/ja/posts?page=2'];
+        $_GET = $_POST = $_FILES = [];
+
+        $req = Request::fromGlobals();
+
+        self::assertSame('/ja/posts?page=2', $req->uri());
+        self::assertSame('/ja/posts', $req->path);
+        // Stripping the locale prefix rewrites the path, not the URI a form posts back to.
+        self::assertSame('/ja/posts?page=2', $req->withPath('/posts')->uri());
+    }
+
+    public function testUriFallsBackToPathForASyntheticRequest(): void
+    {
+        self::assertSame('/signup', (new Request(method: 'GET', path: '/signup'))->uri());
+    }
 }

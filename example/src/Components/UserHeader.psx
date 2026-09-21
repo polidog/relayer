@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Components;
 
+use Polidog\Relayer\Auth\Authenticator;
 use Polidog\UsePhp\Html\H;
 use Polidog\UsePhp\Runtime\Element;
 
@@ -13,18 +14,11 @@ use Polidog\UsePhp\Runtime\Element;
 // separate GET to `/_defer/user-header` — the cacheable main page never
 // varies by user.
 //
-// Reads $_SESSION directly (not the Authenticator service) because deferred
-// components are rendered inside UsePHP::handleDeferred() which doesn't have
-// DI container access. The session key matches Authenticator::SESSION_KEY.
-return function (array $props): Element {
-    if (\PHP_SESSION_NONE === \session_status()) {
-        \session_start();
-    }
-
-    $raw = $_SESSION['relayer.auth.identity'] ?? null;
-    $displayName = (\is_array($raw) && isset($raw['displayName']) && \is_string($raw['displayName']))
-        ? $raw['displayName']
-        : null;
+// Deferred components are autowired from the DI container just like pages, so
+// this takes the Authenticator by type instead of reading $_SESSION — no
+// session_start(), no session-key knowledge.
+return function (array $props, Authenticator $auth): Element {
+    $displayName = $auth->user()?->displayName;
 
     if (null === $displayName) {
         return (

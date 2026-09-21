@@ -130,16 +130,15 @@ final class CachePolicy
      * True if the current request's conditional headers indicate the client
      * already has a fresh copy. Only honors safe methods (GET, HEAD).
      */
-    public static function isNotModified(Cache $cache): bool
+    public static function isNotModified(Cache $cache, ?Request $request = null): bool
     {
-        $rawMethod = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-        $method = \is_string($rawMethod) ? \strtoupper($rawMethod) : 'GET';
-        if ('GET' !== $method && 'HEAD' !== $method) {
+        $request ??= Request::fromGlobals();
+        if (!$request->isGet() && !$request->isMethod('HEAD')) {
             return false;
         }
 
         if (null !== $cache->etag) {
-            $ifNoneMatch = self::requestHeader('IF_NONE_MATCH');
+            $ifNoneMatch = self::requestHeader($request, 'if-none-match');
             if (null !== $ifNoneMatch) {
                 if ('*' === $ifNoneMatch) {
                     return true;
@@ -152,7 +151,7 @@ final class CachePolicy
 
         $lastModified = self::parseLastModified($cache->lastModified);
         if (null !== $lastModified) {
-            $ifModifiedSince = self::requestHeader('IF_MODIFIED_SINCE');
+            $ifModifiedSince = self::requestHeader($request, 'if-modified-since');
             if (null !== $ifModifiedSince) {
                 $clientTime = \strtotime($ifModifiedSince);
                 if (false !== $clientTime && $lastModified <= $clientTime) {
@@ -276,11 +275,10 @@ final class CachePolicy
         return \str_starts_with($etag, 'W/') ? \substr($etag, 2) : $etag;
     }
 
-    private static function requestHeader(string $name): ?string
+    private static function requestHeader(Request $request, string $name): ?string
     {
-        $key = 'HTTP_' . $name;
-        $value = $_SERVER[$key] ?? null;
+        $value = $request->header($name);
 
-        return \is_string($value) && '' !== $value ? $value : null;
+        return null !== $value && '' !== $value ? $value : null;
     }
 }
