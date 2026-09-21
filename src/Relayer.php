@@ -198,7 +198,8 @@ final class Relayer
 
         $compiledRoutesFile = $isDev ? null : $projectRoot . '/' . self::COMPILED_ROUTES_FILE;
 
-        if ($warm && null !== $compiledRoutesFile && !\is_file($compiledRoutesFile)) {
+        // `$warm` already implies !$isDev, so $compiledRoutesFile is non-null here.
+        if ($warm && !\is_file($compiledRoutesFile)) {
             self::warmRoutes($appDir, $compiledRoutesFile);
         }
 
