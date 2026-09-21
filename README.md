@@ -1010,9 +1010,58 @@ return function (PageContext $ctx, Request $req): Closure {
 | `$req->allPost()`            | `array<string, mixed>` (raw body)             |
 | `$req->allQuery()`           | `array<string, mixed>`                        |
 | `$req->allHeaders()`         | `array<string, string>` (lowercased keys)     |
+| `$req->body()`               | raw request body (`php://input`, read lazily) |
+| `$req->json()`               | `?array` — body as JSON, null if absent/invalid |
+| `$req->file($name)`          | `?UploadedFile` (null for a `name[]` field)   |
+| `$req->files()`              | `array<string, UploadedFile\|list<UploadedFile>>` |
+| `$req->ip()`                 | `?string` — `REMOTE_ADDR` as reported          |
+| `$req->host()` / `scheme()`  | `?string` / `'http'\|'https'`                  |
+| `$req->url()`                | `?string` — absolute URL of this request      |
 
 Tests use `new Request(method: 'POST', path: '/signup', post: [...])`
 directly — no superglobal manipulation needed.
+
+**You never need a superglobal.** `$_GET` / `$_POST` / `$_SERVER` /
+`$_FILES` / `php://input` are all reachable through the injected `Request`,
+including from a `<X defer />` fragment — deferred components are autowired
+from the container exactly like pages, so they take `Request`,
+`Authenticator`, or any bound service by type:
+
+```php
+// src/Components/UserHeader.psx — no session_start(), no $_SESSION
+return function (array $props, Authenticator $auth): Element {
+    $name = $auth->user()?->displayName;
+    …
+};
+```
+
+A JSON API route and an upload, end to end:
+
+```php
+// src/Pages/api/todos/route.php
+return [
+    'POST' => function (Request $req, TodoRepository $todos): Response {
+        $payload = $req->json();
+        if (null === $payload) {
+            return Response::json(['error' => 'invalid JSON body'], 400);
+        }
+
+        return Response::json($todos->create($payload), 201);
+    },
+];
+
+// an upload — $_FILES normalized, `name[]` included
+$avatar = $req->file('avatar');
+if (null !== $avatar && $avatar->isValid()) {
+    $avatar->moveTo(__DIR__ . '/../var/uploads/' . \bin2hex(\random_bytes(8)));
+}
+```
+
+`UploadedFile` carries `clientName`, `clientMimeType`, `size`, `tmpName`,
+`error`, plus `isValid()`, `contents()`, and `moveTo()` (which refuses
+anything that isn't a real upload). `ip()` reports `REMOTE_ADDR` only —
+`X-Forwarded-For` is client-supplied, so read it yourself (via
+`$req->header()`) once you know you're behind a proxy you trust.
 
 ## Authentication
 

@@ -1009,9 +1009,59 @@ return function (PageContext $ctx, Request $req): Closure {
 | `$req->allPost()`            | `array<string, mixed>` (生のボディ全体)           |
 | `$req->allQuery()`           | `array<string, mixed>`                            |
 | `$req->allHeaders()`         | `array<string, string>` (キーは小文字化)          |
+| `$req->body()`               | 生のリクエストボディ (`php://input` を遅延読み)   |
+| `$req->json()`               | `?array` — ボディを JSON として解釈、不正なら null |
+| `$req->file($name)`          | `?UploadedFile` (`name[]` のフィールドは null)    |
+| `$req->files()`              | `array<string, UploadedFile\|list<UploadedFile>>` |
+| `$req->ip()`                 | `?string` — サーバが報告した `REMOTE_ADDR`        |
+| `$req->host()` / `scheme()`  | `?string` / `'http'\|'https'`                     |
+| `$req->url()`                | `?string` — このリクエストの絶対 URL              |
 
 テストでは `new Request(method: 'POST', path: '/signup', post: [...])` を
 直接構築すれば良く、スーパーグローバルを書き換える必要はありません。
+
+**スーパーグローバルは一切触る必要がありません。** `$_GET` / `$_POST` /
+`$_SERVER` / `$_FILES` / `php://input` はすべて注入された `Request` から
+取れます。`<X defer />` フラグメントの中でも同じで、deferred コンポーネントは
+ページと同様にコンテナから autowire されるため、`Request` や
+`Authenticator` などのサービスを型で受け取れます:
+
+```php
+// src/Components/UserHeader.psx — session_start() も $_SESSION も不要
+return function (array $props, Authenticator $auth): Element {
+    $name = $auth->user()?->displayName;
+    …
+};
+```
+
+JSON API とアップロードの例:
+
+```php
+// src/Pages/api/todos/route.php
+return [
+    'POST' => function (Request $req, TodoRepository $todos): Response {
+        $payload = $req->json();
+        if (null === $payload) {
+            return Response::json(['error' => 'invalid JSON body'], 400);
+        }
+
+        return Response::json($todos->create($payload), 201);
+    },
+];
+
+// アップロード — $_FILES は正規化済み (`name[]` も含む)
+$avatar = $req->file('avatar');
+if (null !== $avatar && $avatar->isValid()) {
+    $avatar->moveTo(__DIR__ . '/../var/uploads/' . \bin2hex(\random_bytes(8)));
+}
+```
+
+`UploadedFile` は `clientName` / `clientMimeType` / `size` / `tmpName` /
+`error` と、`isValid()` / `contents()` / `moveTo()` を持ちます
+(`moveTo()` は本物のアップロード以外を拒否します)。`ip()` は
+`REMOTE_ADDR` のみを返します — `X-Forwarded-For` はクライアントが
+自由に送れるので、信頼できるプロキシ配下だと分かっている場合に
+`$req->header()` で自分で読んでください。
 
 ## 認証
 

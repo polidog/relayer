@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Http;
 
+use JsonException;
+
 /**
  * Immutable snapshot of the current HTTP request.
  *
@@ -14,16 +16,22 @@ namespace Polidog\Relayer\Http;
 final readonly class Request
 {
     /**
-     * @param array<string, mixed>  $query   parsed query parameters
-     * @param array<string, mixed>  $post    parsed form body
-     * @param array<string, string> $headers header names lowercased
-     * @param array<string, string> $cookies request cookies
-     * @param null|string           $locale  locale resolved for this request
-     *                                       (set by the framework once the
-     *                                       LocaleResolver has run; null when
-     *                                       i18n is not configured)
-     * @param null|string           $uri     verbatim request URI including the
-     *                                       query string; defaults to `path`
+     * @param array<string, mixed>                           $query   parsed query parameters
+     * @param array<string, mixed>                           $post    parsed form body
+     * @param array<string, string>                          $headers header names lowercased
+     * @param array<string, string>                          $cookies request cookies
+     * @param null|string                                    $locale  locale resolved for this request
+     *                                                                (set by the framework once the
+     *                                                                LocaleResolver has run; null when
+     *                                                                i18n is not configured)
+     * @param null|string                                    $uri     verbatim request URI including the
+     *                                                                query string; defaults to `path`
+     * @param array<string, list<UploadedFile>|UploadedFile> $files   normalized upload table
+     * @param null|string                                    $body    raw request body; null reads
+     *                                                                `php://input` on demand
+     * @param null|string                                    $ip      client IP as the server reported it
+     * @param null|string                                    $host    request host including any port
+     * @param null|string                                    $scheme  `http` or `https`
      */
     public function __construct(
         public string $method,
@@ -34,6 +42,11 @@ final readonly class Request
         private array $cookies = [],
         private readonly ?string $locale = null,
         private readonly ?string $uri = null,
+        private readonly array $files = [],
+        private readonly ?string $body = null,
+        private readonly ?string $ip = null,
+        private readonly ?string $host = null,
+        private readonly ?string $scheme = null,
     ) {}
 
     public static function fromGlobals(): self
@@ -67,6 +80,9 @@ final readonly class Request
             }
         }
 
+        $https = $_SERVER['HTTPS'] ?? null;
+        $scheme = \is_string($https) && '' !== $https && 'off' !== \strtolower($https) ? 'https' : 'http';
+
         return new self(
             method: $method,
             path: $path,
@@ -75,6 +91,10 @@ final readonly class Request
             headers: $headers,
             cookies: $cookies,
             uri: $uri,
+            files: self::normalizeFiles($_FILES),
+            ip: \is_string($_SERVER['REMOTE_ADDR'] ?? null) ? $_SERVER['REMOTE_ADDR'] : null,
+            host: \is_string($_SERVER['HTTP_HOST'] ?? null) ? $_SERVER['HTTP_HOST'] : null,
+            scheme: $scheme,
         );
     }
 
@@ -168,6 +188,11 @@ final readonly class Request
             cookies: $this->cookies,
             locale: $this->locale,
             uri: $this->uri,
+            files: $this->files,
+            body: $this->body,
+            ip: $this->ip,
+            host: $this->host,
+            scheme: $this->scheme,
         );
     }
 
@@ -185,6 +210,11 @@ final readonly class Request
             cookies: $this->cookies,
             locale: $locale,
             uri: $this->uri,
+            files: $this->files,
+            body: $this->body,
+            ip: $this->ip,
+            host: $this->host,
+            scheme: $this->scheme,
         );
     }
 
@@ -214,6 +244,155 @@ final readonly class Request
     public function allHeaders(): array
     {
         return $this->headers;
+    }
+
+    /**
+     * The raw request body. Read from `php://input` on demand (never for a
+     * request that doesn't ask for it), or the value handed to the
+     * constructor — which is what tests and workers pass.
+     */
+    public function body(): string
+    {
+        if (null !== $this->body) {
+            return $this->body;
+        }
+
+        $body = \file_get_contents('php://input');
+
+        return \is_string($body) ? $body : '';
+    }
+
+    /**
+     * The body decoded as a JSON object, or null when it is absent, invalid,
+     * or not an object/array — so a malformed payload is a null check, not an
+     * exception. `application/json` is not required, matching how clients
+     * actually behave.
+     *
+     * @return null|array<string, mixed>
+     */
+    public function json(): ?array
+    {
+        $body = $this->body();
+        if ('' === $body) {
+            return null;
+        }
+
+        try {
+            $decoded = \json_decode($body, true, 512, \JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return null;
+        }
+
+        if (!\is_array($decoded)) {
+            return null;
+        }
+
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
+    }
+
+    /**
+     * A single uploaded file. Returns null for a missing field, for an empty
+     * one (`UPLOAD_ERR_NO_FILE`), and for a multi-file field — use
+     * {@see files()} for `name[]`.
+     */
+    public function file(string $name): ?UploadedFile
+    {
+        $file = $this->files[$name] ?? null;
+
+        return $file instanceof UploadedFile ? $file : null;
+    }
+
+    /**
+     * The whole upload table, normalized: one {@see UploadedFile} per field,
+     * or a list of them for a `name[]` field.
+     *
+     * @return array<string, list<UploadedFile>|UploadedFile>
+     */
+    public function files(): array
+    {
+        return $this->files;
+    }
+
+    /**
+     * The client IP exactly as the server reported it (`REMOTE_ADDR`).
+     *
+     * Deliberately does NOT consult `X-Forwarded-For`: that header is
+     * client-supplied and only trustworthy behind a proxy you control, so
+     * honoring it by default would hand every caller a spoofable IP. Behind a
+     * trusted proxy, read `$request->header('x-forwarded-for')` yourself.
+     */
+    public function ip(): ?string
+    {
+        return $this->ip;
+    }
+
+    /**
+     * The request host including any non-default port (`example.com:8080`).
+     */
+    public function host(): ?string
+    {
+        return $this->host ?? $this->header('host');
+    }
+
+    /**
+     * `https` when the server reported a TLS connection, `http` otherwise.
+     */
+    public function scheme(): string
+    {
+        return $this->scheme ?? 'http';
+    }
+
+    /**
+     * The absolute URL of this request — what you build redirects, canonical
+     * links, and webhook callbacks from. Null when the host is unknown (a
+     * HTTP/1.0 request without a `Host` header, or a synthetic Request).
+     */
+    public function url(): ?string
+    {
+        $host = $this->host();
+
+        return null === $host ? null : $this->scheme() . '://' . $host . $this->uri();
+    }
+
+    /**
+     * Flatten `$_FILES` into one {@see UploadedFile} per field. PHP reports a
+     * `name[]` field as parallel arrays per key (`name`, `tmp_name`, …)
+     * rather than a list of files, so those get transposed back.
+     *
+     * @param array<mixed> $files
+     *
+     * @return array<string, list<UploadedFile>|UploadedFile>
+     */
+    private static function normalizeFiles(array $files): array
+    {
+        $normalized = [];
+
+        foreach ($files as $field => $file) {
+            if (!\is_string($field) || !\is_array($file) || !isset($file['name'])) {
+                continue;
+            }
+
+            if (!\is_array($file['name'])) {
+                /** @var array<string, mixed> $file */
+                $normalized[$field] = UploadedFile::fromArray($file);
+
+                continue;
+            }
+
+            $list = [];
+            foreach (\array_keys($file['name']) as $index) {
+                $leaf = [];
+                foreach (['name', 'type', 'size', 'tmp_name', 'error'] as $key) {
+                    $values = $file[$key] ?? null;
+                    $leaf[$key] = \is_array($values) ? ($values[$index] ?? null) : null;
+                }
+                $list[] = UploadedFile::fromArray($leaf);
+            }
+            $normalized[$field] = $list;
+        }
+
+        return $normalized;
     }
 
     /**
