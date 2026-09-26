@@ -1880,6 +1880,7 @@ clone を返すので部品として再利用できます）:
 | `required(?$message)`        | 必須に戻す＋未入力メッセージの上書き             |
 | `refine($predicate, $msg)`   | 任意の述語で追加検証                            |
 | `transform($fn)`             | 検証通過後に最終変換                            |
+| `satisfies($judge, $cond, $msg, $t)` | `Judge` による意味的チェック（後述）        |
 
 `StringSchema` / `IntSchema` / `EnumSchema` では空文字を「未入力」として
 扱うため、`optional` / `required` / `default` がフォームで直感的に効きます。
@@ -1922,6 +1923,35 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
     // $result->data は coercion 済み
 });
 ```
+
+### 意味的なチェック（TypeSafe Jev）
+
+`satisfies($judge, $condition, $message, $threshold = 0.5)` は、コードでは
+書けない検証（「スパムか」「本当に問い合わせ内容か」）を行います。値は
+state `{"value": …}` として `Judge` に渡り、条件が成り立つ確率が
+`$threshold` 以上なら通過します。
+
+`TYPESAFE_API_KEY`（任意で `TYPESAFE_MODEL`、既定 `jev-latest`）を設定すると
+`Polidog\Relayer\Validation\Judge` が `JevJudge` にバインドされ、
+`HttpClient` 経由で [TypeSafe](https://docs.typesafe.ai/) の Jev に `noul`
+質問を投げます。キー未設定なら `Judge` は登録されません。
+
+```php
+use Polidog\Relayer\Validation\Judge;
+
+$schema = Validator::object([
+    'body' => Validator::string()->trim()->min(10)
+        ->satisfies($judge, '`value` is a genuine support question, not spam or ads', 'スパムと判定されました。', 0.7),
+]);
+```
+
+- 安いチェック（`min`, `regex` 等）は `satisfies()` の前に置く — 手前で
+  落ちればリモート呼び出しは発生しません。
+- 呼び出しごとにネットワーク往復とトークン課金が発生します。閾値は自分の
+  データで調整してください。
+- API 失敗時は `safeParse()`/`parse()` から `JudgeException` が投げられます。
+  障害時にフォームを止めるかはアプリ側で catch して決めてください。
+- 別バックエンドは `Judge::probability(string $condition, mixed $state): float` を実装。
 
 ## 多言語化 (i18n)
 

@@ -99,6 +99,25 @@ abstract class Schema
     }
 
     /**
+     * Semantic refinement: pass when `$judge` says `$condition` holds for
+     * the value with probability >= `$threshold`. The value is sent as
+     * state `{"value": …}`, so write the condition against `` `value` ``,
+     * e.g. "`value` is a genuine support question, not spam or ads".
+     *
+     * Runs after the type check and earlier refinements, so cheap checks
+     * (min/max/regex) placed before it short-circuit the remote call.
+     *
+     * @throws JudgeException from parse/safeParse when the judge fails
+     */
+    public function satisfies(Judge $judge, string $condition, string $message, float $threshold = 0.5): static
+    {
+        return $this->refine(
+            static fn (mixed $v): bool => $judge->probability($condition, ['value' => $v]) >= $threshold,
+            $message,
+        );
+    }
+
+    /**
      * Run a final transformation on a successfully-validated value. The
      * callable receives the parsed value and returns the value that will
      * be exposed via {@see ParseResult::$data}.
