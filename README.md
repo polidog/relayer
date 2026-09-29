@@ -1886,6 +1886,7 @@ base schema is reusable as a building block):
 | `required(?$message)`        | Force required + override the "absent" message       |
 | `refine($predicate, $msg)`   | Arbitrary extra validation predicate                 |
 | `transform($fn)`             | Final transform after a value validates              |
+| `satisfies($judge, $cond, $msg, $t)` | Semantic check via a `Judge` (see below)     |
 
 For `StringSchema` / `IntSchema` / `EnumSchema` an empty string counts as
 "not provided", so `optional` / `required` / `default` behave intuitively
@@ -1930,6 +1931,35 @@ $signup = $ctx->action('signup', function (array $form) use ($schema, &$errors):
     // $result->data is coerced
 });
 ```
+
+### Semantic checks (TypeSafe Jev)
+
+`satisfies($judge, $condition, $message, $threshold = 0.5)` validates what
+code can't — "is this spam?", "is this a real support question?". The value
+is sent to a `Judge` as state `{"value": …}`; the field passes when the
+condition holds with probability `>= $threshold`.
+
+Set `TYPESAFE_API_KEY` (optionally `TYPESAFE_MODEL`, default `jev-latest`)
+and `Polidog\Relayer\Validation\Judge` is bound to `JevJudge`, which asks
+[TypeSafe](https://docs.typesafe.ai/)'s Jev a `noul` question via the
+`HttpClient`. Without the key `Judge` is not registered.
+
+```php
+use Polidog\Relayer\Validation\Judge;
+
+$schema = Validator::object([
+    'body' => Validator::string()->trim()->min(10)
+        ->satisfies($judge, '`value` is a genuine support question, not spam or ads', 'Looks like spam.', 0.7),
+]);
+```
+
+- Put cheap checks (`min`, `regex`, …) before `satisfies()` — a failing
+  earlier check skips the remote call.
+- Every call is a network round-trip that costs tokens; tune the threshold
+  on your own data.
+- An API failure throws `JudgeException` out of `safeParse()`/`parse()`;
+  catch it and decide whether an outage blocks the form.
+- Any other backend: implement `Judge::probability(string $condition, mixed $state): float`.
 
 ## Internationalization (i18n)
 

@@ -42,6 +42,8 @@ use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Scaffold\ContainerCompileCommand;
+use Polidog\Relayer\Validation\JevJudge;
+use Polidog\Relayer\Validation\Judge;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
 use RuntimeException;
@@ -574,6 +576,23 @@ final class ContainerFactory
         $container->setAlias(HttpClient::class, CachingHttpClient::class)
             ->setPublic(true)
         ;
+
+        // Semantic validation judge (Schema::satisfies). Registered only
+        // when TYPESAFE_API_KEY is set, mirroring the Database opt-in.
+        $typesafeKey = self::readEnv('TYPESAFE_API_KEY');
+        if ('' !== $typesafeKey) {
+            $container->register(JevJudge::class)
+                ->setArguments([
+                    new Reference(HttpClient::class),
+                    $typesafeKey,
+                    self::readEnv('TYPESAFE_MODEL') ?: 'jev-latest',
+                ])
+                ->setPublic(true)
+            ;
+            $container->setAlias(Judge::class, JevJudge::class)
+                ->setPublic(true)
+            ;
+        }
 
         // Logger. Always registered — like the HTTP client it needs no
         // required config, so any page/component can inject
