@@ -30,6 +30,7 @@ use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
+use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
@@ -1124,6 +1125,18 @@ final class AppRouter
         }
 
         if ($postComponentId !== $componentId) {
+            return;
+        }
+
+        // The component id is rendered into the page and is not a secret, so
+        // it cannot authenticate the request on its own. Require the
+        // session-bound CSRF token (embedded by LayoutRenderer into every
+        // setState form) before touching state — same 403 contract as the
+        // form-action dispatchers in PageComponent / FunctionPage.
+        $csrf = $request->post('_usephp_csrf');
+        if (null === $csrf || !CsrfToken::validate($csrf)) {
+            \http_response_code(403);
+
             return;
         }
 

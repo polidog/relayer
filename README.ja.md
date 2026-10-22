@@ -725,6 +725,13 @@ public function save(array $form): void
 
 CSRF トークンが無効な場合は `403` が返ります。
 
+`useState` の状態更新（`onClick={fn() => $setX(...)}`）も同様に保護されます。
+描画される `setState` フォームにはセッションに結び付いた `_usephp_csrf` が
+自動で埋め込まれ（usePHP のクライアントは `X-UsePHP-Partial` の部分更新でも
+これを送ります）、トークンが無い・不正な状態更新 POST は状態を変更せずに
+`403` を返します。`_usephp_action` / `_usephp_component` を手書きのクライアント
+から POST する場合はこのフィールドも含めてください。
+
 ### 関数型: `PageContext::action()`
 
 関数スタイルのページでは `PageContext::action()` でサーバアクションを宣言します。

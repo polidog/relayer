@@ -722,6 +722,13 @@ public function save(array $form): void
 
 Invalid CSRF tokens return a `403`.
 
+`useState` updates (`onClick={fn() => $setX(...)}`) are protected the same
+way: the rendered `setState` form carries the session-bound `_usephp_csrf`
+field automatically (usePHP's client sends it on the partial
+`X-UsePHP-Partial` update too), and a state POST with a missing or invalid
+token is answered with `403` without changing any state. Hand-written
+clients that POST `_usephp_action` / `_usephp_component` must include it.
+
 ### Function-style: `PageContext::action()`
 
 Function-style pages declare server actions through `PageContext::action()`.
