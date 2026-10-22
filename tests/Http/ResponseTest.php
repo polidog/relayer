@@ -238,6 +238,26 @@ final class ResponseTest extends TestCase
         yield 'unknown samesite' => ['a', ['samesite' => 'Loose'], 'Invalid cookie samesite'];
 
         yield 'SameSite=None without Secure' => ['a', ['samesite' => 'None'], 'SameSite=None'];
+
+        yield 'domain as URL' => ['a', ['domain' => 'https://example.com'], 'Invalid cookie domain'];
+
+        yield 'domain with port' => ['a', ['domain' => 'example.com:443'], 'Invalid cookie domain'];
+
+        yield 'domain with path' => ['a', ['domain' => 'example.com/app'], 'Invalid cookie domain'];
+
+        yield 'domain label starting with -' => ['a', ['domain' => '-example.com'], 'Invalid cookie domain'];
+
+        yield 'domain with empty label' => ['a', ['domain' => 'example..com'], 'Invalid cookie domain'];
+
+        yield '__Secure- without Secure' => ['__Secure-a', ['secure' => false], '__Secure- / __Host- prefix'];
+
+        yield '__Host- without Secure' => ['__Host-a', ['secure' => false], '__Secure- / __Host- prefix'];
+
+        yield '__Host- prefix is case-insensitive' => ['__host-a', ['secure' => false], '__Secure- / __Host- prefix'];
+
+        yield '__Host- with domain' => ['__Host-a', ['domain' => 'example.com'], '__Host- prefix'];
+
+        yield '__Host- with non-root path' => ['__Host-a', ['path' => '/admin'], '__Host- prefix'];
     }
 
     public function testSameSiteNoneIsAcceptedWithSecure(): void
@@ -245,6 +265,65 @@ final class ResponseTest extends TestCase
         $cookie = Response::noContent()->withCookie('a', '1', ['samesite' => 'none', 'secure' => true])->cookies[0];
 
         self::assertSame('None', $cookie->sameSite);
+    }
+
+    #[DataProvider('provideWithCookieAcceptsHostNameDomainsCases')]
+    public function testWithCookieAcceptsHostNameDomains(string $domain): void
+    {
+        $cookie = Response::noContent()->withCookie('a', '1', ['domain' => $domain])->cookies[0];
+
+        self::assertSame($domain, $cookie->domain);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideWithCookieAcceptsHostNameDomainsCases(): iterable
+    {
+        yield 'host-only (empty)' => [''];
+
+        yield 'registrable domain' => ['example.com'];
+
+        yield 'subdomain' => ['www.example.co.jp'];
+
+        yield 'legacy leading dot' => ['.example.com'];
+
+        yield 'punycode' => ['xn--wgv71a119e.jp'];
+
+        yield 'localhost' => ['localhost'];
+
+        yield 'IPv4' => ['127.0.0.1'];
+    }
+
+    public function testPrefixedCookiesDefaultToSecure(): void
+    {
+        $response = Response::noContent()
+            ->withCookie('__Secure-a', '1')
+            ->withCookie('__Host-b', '2')
+        ;
+
+        self::assertTrue($response->cookies[0]->secure);
+        self::assertTrue($response->cookies[1]->secure);
+        self::assertSame('/', $response->cookies[1]->path);
+        self::assertSame('', $response->cookies[1]->domain);
+    }
+
+    public function testWithoutCookieOnPrefixedNameDeletesWithSecure(): void
+    {
+        // A deletion without Secure would be ignored by the browser and the
+        // cookie would survive a logout.
+        $cookie = Response::redirect('/')->withoutCookie('__Secure-session')->cookies[0];
+
+        self::assertTrue($cookie->secure);
+        self::assertSame('', $cookie->value);
+    }
+
+    public function testWithoutCookieRejectsBrokenHostPrefix(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('__Host- prefix');
+
+        Response::redirect('/')->withoutCookie('__Host-session', ['domain' => 'example.com']);
     }
 
     /**

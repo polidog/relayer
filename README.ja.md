@@ -506,9 +506,12 @@ return [
 
   既定は `path` `/`、`httponly` true、`samesite` `Lax`、`secure` false、
   `expires` 0（ブラウザセッション Cookie）で、`$options` でどれも（`domain`
-  も）上書きできます。ブラウザが受け付けない名前／パス／ドメインや、
-  `secure` 無しの `SameSite=None` は、レスポンスを組み立てた時点で
-  `InvalidArgumentException` になります。Cookie に
+  も。スキームやポートを含まないホスト名）上書きできます。名前が
+  `__Secure-` / `__Host-` で始まる Cookie は `secure` の既定が true です。
+  ブラウザが受け付けない名前／パス／ドメイン、`secure` 無しの
+  `SameSite=None`、プレフィックスの規則違反（`secure` 無しの
+  `__Secure-` / `__Host-`、`domain` 付きや `path` が `/` 以外の `__Host-`）
+  は、レスポンスを組み立てた時点で `InvalidArgumentException` になります。Cookie に
   `withHeader('Set-Cookie', …)` は使わないでください — 1 つしか持てず、
   この検証も通りません（ただし他の `Set-Cookie` を置き換えることはもう
   ありません）。

@@ -503,8 +503,11 @@ return [
 
   Defaults are `path` `/`, `httponly` true, `samesite` `Lax`, `secure`
   false and `expires` 0 (a browser-session cookie); override any of them
-  (plus `domain`) via `$options`. A name / path / domain the browser would
-  reject, or `SameSite=None` without `secure`, throws
+  (plus `domain`, a bare host name — no scheme or port) via `$options`.
+  `__Secure-` / `__Host-` prefixed names default to `secure` true. A
+  name / path / domain the browser would reject, `SameSite=None` without
+  `secure`, or a broken prefix rule (`__Secure-` / `__Host-` without
+  `secure`; `__Host-` with a `domain` or a `path` other than `/`) throws
   `InvalidArgumentException` when the response is built. Don't use
   `withHeader('Set-Cookie', …)` for cookies — it holds only one and skips
   that validation (it no longer replaces other `Set-Cookie` headers,
