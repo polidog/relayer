@@ -494,6 +494,24 @@ return [
   （既定は本文なしの `204`）、`Response::redirect($location, $status)`、
   生ボディ用の `Response::make()` で生成します。ステータスとヘッダは常に
   明示 — 生データを返す経路はなく、それ以外を返すと即サーバエラーです。
+- Cookie は `->withCookie($name, $value, $options)` で設定し、
+  `->withoutCookie($name, ['path' => …])` で削除します。`setcookie()` で
+  **追記** して出すので、PHP が先に積んだセッション Cookie（例:
+  `Authenticator::login()` のセッション ID 再生成）も消えません:
+
+  ```php
+  return Response::redirect('/admin')
+      ->withCookie('staff', '1', ['expires' => new DateTimeImmutable('+1 year')]);
+  ```
+
+  既定は `path` `/`、`httponly` true、`samesite` `Lax`、`secure` false、
+  `expires` 0（ブラウザセッション Cookie）で、`$options` でどれも（`domain`
+  も）上書きできます。ブラウザが受け付けない名前／パス／ドメインや、
+  `secure` 無しの `SameSite=None` は、レスポンスを組み立てた時点で
+  `InvalidArgumentException` になります。Cookie に
+  `withHeader('Set-Cookie', …)` は使わないでください — 1 つしか持てず、
+  この検証も通りません（ただし他の `Set-Cookie` を置き換えることはもう
+  ありません）。
 - `OPTIONS` / `HEAD` は Next.js に合わせて自動合成します。未定義の
   `OPTIONS` は `204` ＋ `Allow`、未定義の `HEAD` は `GET` ハンドラを実行し
   本文を落とします。どちらも明示的に定義すればそちらが優先。ハンドラの無い
@@ -2000,6 +2018,8 @@ public）。ただしロケールの*切り替え*（Cookie / `Accept-Language` 
    それをしません。既にセッションを持つログイン済みフローでは保存済みの
    `_locale` が尊重されます。
 3. **Cookie** — `LOCALE_COOKIE`（CDN セーフ、セッション不要）。
+   `route.php` のハンドラから `Response::withCookie()` で設定します。例:
+   `->withCookie('locale', 'ja', ['expires' => new DateTimeImmutable('+1 year')])`。
 4. **`Accept-Language`** — サポートリストに対し q 値でネゴシエート。
 5. **デフォルト** — `APP_LOCALE`。
 

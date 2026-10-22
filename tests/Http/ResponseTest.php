@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Http;
 
+use DateTimeImmutable;
+use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Response;
 use RuntimeException;
@@ -118,6 +122,165 @@ final class ResponseTest extends TestCase
 
         $replaced = $with->withHeader('allow', 'GET');
         self::assertSame(['allow' => 'GET'], $replaced->headers);
+    }
+
+    public function testWithCookieAppliesSafeDefaults(): void
+    {
+        $base = Response::noContent();
+        $with = $base->withCookie('staff', '1');
+
+        self::assertNotSame($base, $with);
+        self::assertSame([], $base->cookies);
+        self::assertCount(1, $with->cookies);
+
+        $cookie = $with->cookies[0];
+        self::assertSame('staff', $cookie->name);
+        self::assertSame('1', $cookie->value);
+        self::assertSame(0, $cookie->expires);
+        self::assertSame('/', $cookie->path);
+        self::assertSame('', $cookie->domain);
+        self::assertFalse($cookie->secure);
+        self::assertTrue($cookie->httpOnly);
+        self::assertSame('Lax', $cookie->sameSite);
+        // Cookies never leak into the plain header map.
+        self::assertSame([], $with->headers);
+    }
+
+    public function testWithCookieHonoursOptions(): void
+    {
+        $expires = new DateTimeImmutable('2030-01-01 00:00:00 UTC');
+        $cookie = Response::noContent()->withCookie('locale', 'ja', [
+            'expires' => $expires,
+            'path' => '/app',
+            'domain' => 'example.com',
+            'secure' => true,
+            'httponly' => false,
+            'samesite' => 'strict',
+        ])->cookies[0];
+
+        self::assertSame($expires->getTimestamp(), $cookie->expires);
+        self::assertSame('/app', $cookie->path);
+        self::assertSame('example.com', $cookie->domain);
+        self::assertTrue($cookie->secure);
+        self::assertFalse($cookie->httpOnly);
+        self::assertSame('Strict', $cookie->sameSite);
+    }
+
+    public function testWithCookieReplacesOnlySameNamePathAndDomain(): void
+    {
+        $response = Response::noContent()
+            ->withCookie('a', '1')
+            ->withCookie('b', '2')
+            ->withCookie('a', '1-admin', ['path' => '/admin'])
+            ->withCookie('a', '3')
+        ;
+
+        $pairs = \array_map(
+            static fn ($c): string => $c->name . '=' . $c->value . '@' . $c->path,
+            $response->cookies,
+        );
+        self::assertSame(['b=2@/', 'a=1-admin@/admin', 'a=3@/'], $pairs);
+    }
+
+    public function testCookiesSurviveOtherCopies(): void
+    {
+        $response = Response::json(['ok' => true])
+            ->withCookie('a', '1')
+            ->withHeader('X-Foo', 'bar')
+            ->withoutBody()
+        ;
+
+        self::assertCount(1, $response->cookies);
+        self::assertSame('a', $response->cookies[0]->name);
+    }
+
+    public function testWithoutCookieExpiresItInThePast(): void
+    {
+        $cookie = Response::redirect('/')
+            ->withoutCookie('staff', ['path' => '/admin', 'expires' => \time() + 3600])
+            ->cookies[0]
+        ;
+
+        self::assertSame('staff', $cookie->name);
+        self::assertSame('', $cookie->value);
+        self::assertSame('/admin', $cookie->path);
+        self::assertLessThan(\time(), $cookie->expires);
+        self::assertGreaterThan(0, $cookie->expires);
+    }
+
+    /**
+     * @param array{path?: string, domain?: string, secure?: bool, samesite?: string} $options
+     */
+    #[DataProvider('provideWithCookieRejectsWhatBrowsersWouldDropCases')]
+    public function testWithCookieRejectsWhatBrowsersWouldDrop(string $name, array $options, string $message): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
+
+        Response::noContent()->withCookie($name, 'v', $options);
+    }
+
+    /**
+     * @return iterable<string, array{string, array{path?: string, domain?: string, secure?: bool, samesite?: string}, string}>
+     */
+    public static function provideWithCookieRejectsWhatBrowsersWouldDropCases(): iterable
+    {
+        yield 'empty name' => ['', [], 'Invalid cookie name'];
+
+        yield 'name with =' => ['a=b', [], 'Invalid cookie name'];
+
+        yield 'name with ;' => ['a;b', [], 'Invalid cookie name'];
+
+        yield 'path with ;' => ['a', ['path' => '/; Secure'], 'Invalid cookie path'];
+
+        yield 'domain with newline' => ['a', ['domain' => "example.com\r\nX: y"], 'Invalid cookie domain'];
+
+        yield 'unknown samesite' => ['a', ['samesite' => 'Loose'], 'Invalid cookie samesite'];
+
+        yield 'SameSite=None without Secure' => ['a', ['samesite' => 'None'], 'SameSite=None'];
+    }
+
+    public function testSameSiteNoneIsAcceptedWithSecure(): void
+    {
+        $cookie = Response::noContent()->withCookie('a', '1', ['samesite' => 'none', 'secure' => true])->cookies[0];
+
+        self::assertSame('None', $cookie->sameSite);
+    }
+
+    /**
+     * Regression for #64: a login regenerates the session id (PHP queues the
+     * session `Set-Cookie`), then the handler returns a redirect that also
+     * sets an app cookie. Both must reach the browser. Run in a separate
+     * process so no output has been sent and the header list starts empty.
+     */
+    #[RunInSeparateProcess]
+    public function testCookiesDoNotClobberAnAlreadyQueuedSessionCookie(): void
+    {
+        // xdebug_get_headers() only records headers in Xdebug's `develop`
+        // mode; probe instead of trusting that the function exists.
+        \header('X-Header-Probe: 1');
+        if (!\function_exists('xdebug_get_headers') || !\in_array('X-Header-Probe: 1', \xdebug_get_headers(), true)) {
+            self::markTestSkipped('Needs Xdebug in develop mode to inspect sent headers.');
+        }
+
+        // Stand-in for what session_regenerate_id() queues.
+        \header('Set-Cookie: PHPSESSID=regenerated; path=/; HttpOnly');
+
+        $this->send(
+            Response::redirect('/admin')
+                ->withCookie('staff', '1', ['expires' => 2000000000])
+                ->withHeader('Set-Cookie', 'legacy=1; Path=/'),
+        );
+
+        $headers = \xdebug_get_headers();
+        self::assertContains('Set-Cookie: PHPSESSID=regenerated; path=/; HttpOnly', $headers);
+        self::assertContains('Set-Cookie: legacy=1; Path=/', $headers);
+        // Max-Age is relative to "now", so match it loosely.
+        self::assertMatchesRegularExpression(
+            '/^Set-Cookie: staff=1; expires=Wed, 18 May 2033 03:33:20 GMT; Max-Age=\d+; path=\/; HttpOnly; SameSite=Lax$/m',
+            \implode("\n", \array_filter($headers, \is_string(...))),
+        );
+        self::assertContains('Location: /admin', $headers);
     }
 
     private function send(Response $response): string

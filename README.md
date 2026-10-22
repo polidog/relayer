@@ -491,6 +491,24 @@ return [
   default), `Response::redirect($location, $status)`, or `Response::make()`
   for a raw body. Status and headers are always explicit — there is no
   raw-data return path; returning anything else is a hard server error.
+- Set cookies with `->withCookie($name, $value, $options)` and delete them
+  with `->withoutCookie($name, ['path' => …])`. They are emitted with
+  `setcookie()`, which **appends** — so a session cookie PHP already queued
+  (e.g. by `Authenticator::login()` regenerating the session id) survives:
+
+  ```php
+  return Response::redirect('/admin')
+      ->withCookie('staff', '1', ['expires' => new DateTimeImmutable('+1 year')]);
+  ```
+
+  Defaults are `path` `/`, `httponly` true, `samesite` `Lax`, `secure`
+  false and `expires` 0 (a browser-session cookie); override any of them
+  (plus `domain`) via `$options`. A name / path / domain the browser would
+  reject, or `SameSite=None` without `secure`, throws
+  `InvalidArgumentException` when the response is built. Don't use
+  `withHeader('Set-Cookie', …)` for cookies — it holds only one and skips
+  that validation (it no longer replaces other `Set-Cookie` headers,
+  though).
 - `OPTIONS` and `HEAD` are synthesized to match Next.js: an undeclared
   `OPTIONS` → `204` + `Allow`, an undeclared `HEAD` runs the `GET` handler
   and drops the body. An explicit handler for either always wins. A method
@@ -2007,7 +2025,9 @@ first:
    `Set-Cookie` and break CDN caching of anonymous pages, so the resolver
    never does that; logged-in flows that already have a session get their
    stored `_locale` honored.
-3. **Cookie** — `LOCALE_COOKIE` (CDN-safe; no session).
+3. **Cookie** — `LOCALE_COOKIE` (CDN-safe; no session). Set it from a
+   `route.php` handler with `Response::withCookie()`, e.g.
+   `->withCookie('locale', 'ja', ['expires' => new DateTimeImmutable('+1 year')])`.
 4. **`Accept-Language`** — q-value negotiated against the supported list.
 5. **Default** — `APP_LOCALE`.
 
