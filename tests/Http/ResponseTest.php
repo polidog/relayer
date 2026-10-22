@@ -16,9 +16,10 @@ final class ResponseTest extends TestCase
 {
     protected function setUp(): void
     {
-        // http_response_code() is process-global in the CLI SAPI; reset it
-        // so each case starts from the default 200.
+        // http_response_code() and the header list are process-global in
+        // the CLI SAPI; reset them so each case starts clean.
         \http_response_code(200);
+        \header_remove();
     }
 
     public function testJsonEncodesBodySetsStatusAndContentType(): void
@@ -95,11 +96,13 @@ final class ResponseTest extends TestCase
 
     public function testMakeEmitsRawBodyWithNoImplicitContentType(): void
     {
-        $output = $this->send(Response::make('a,b,c', 201, ['Content-Type' => 'text/csv']));
+        // An explicit charset: for a bare `text/*` type PHP appends
+        // `;charset=UTF-8` (default_charset) to the header it actually sends.
+        $output = $this->send(Response::make('a,b,c', 201, ['Content-Type' => 'text/csv; charset=utf-8']));
 
         self::assertSame('a,b,c', $output);
         self::assertSame(201, \http_response_code());
-        $this->assertHeaderSent('Content-Type: text/csv');
+        $this->assertHeaderSent('Content-Type: text/csv; charset=utf-8');
     }
 
     public function testWithoutBodyKeepsStatusAndHeadersDropsBody(): void
@@ -335,10 +338,7 @@ final class ResponseTest extends TestCase
     #[RunInSeparateProcess]
     public function testCookiesDoNotClobberAnAlreadyQueuedSessionCookie(): void
     {
-        // xdebug_get_headers() only records headers in Xdebug's `develop`
-        // mode; probe instead of trusting that the function exists.
-        \header('X-Header-Probe: 1');
-        if (!\function_exists('xdebug_get_headers') || !\in_array('X-Header-Probe: 1', \xdebug_get_headers(), true)) {
+        if (!self::headersObservable()) {
             self::markTestSkipped('Needs Xdebug in develop mode to inspect sent headers.');
         }
 
@@ -377,10 +377,28 @@ final class ResponseTest extends TestCase
 
     private function assertHeaderSent(string $header): void
     {
-        if (!\function_exists('xdebug_get_headers')) {
+        if (!self::headersObservable()) {
             return;
         }
 
         self::assertContains($header, \xdebug_get_headers());
+    }
+
+    /**
+     * Whether sent headers can be inspected: xdebug_get_headers() only
+     * records them in Xdebug's `develop` mode (CI runs without Xdebug), so
+     * probe instead of trusting that the function exists.
+     */
+    private static function headersObservable(): bool
+    {
+        if (!\function_exists('xdebug_get_headers')) {
+            return false;
+        }
+
+        \header('X-Header-Probe: 1');
+        $observable = \in_array('X-Header-Probe: 1', \xdebug_get_headers(), true);
+        \header_remove('X-Header-Probe');
+
+        return $observable;
     }
 }
