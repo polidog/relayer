@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Http;
 
+use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 
@@ -31,6 +32,14 @@ use RuntimeException;
  * surface), so a value that cannot be encoded fails loudly at the point the
  * handler builds the response — a server bug, surfaced as a
  * {@see RuntimeException}, not a half-sent body.
+ *
+ * Cookies go through {@see withCookie()} / {@see withoutCookie()}, never
+ * `withHeader('Set-Cookie', …)`: they are emitted with `setcookie()`, which
+ * appends, so a session cookie PHP already queued (e.g. by
+ * `session_regenerate_id()` during login) survives a redirect that also
+ * sets an app cookie.
+ *
+ * @phpstan-import-type CookieOptions from Cookie
  */
 final readonly class Response
 {
@@ -41,11 +50,13 @@ final readonly class Response
     /**
      * @param array<string, string> $headers header name => value, kept in
      *                                       the case the caller gave
+     * @param list<Cookie>          $cookies
      */
     private function __construct(
         public int $status,
         public array $headers,
         public ?string $body,
+        public array $cookies = [],
     ) {}
 
     /**
@@ -124,6 +135,10 @@ final readonly class Response
     /**
      * A copy with one header set/overridden (case-insensitive). Used by the
      * router to attach `Allow` to synthesized `OPTIONS` / `405` responses.
+     *
+     * Not for cookies — use {@see withCookie()}. (A raw `Set-Cookie` given
+     * here is still sent without replacing other `Set-Cookie` headers, but
+     * only one can be held, and it skips {@see Cookie}'s validation.)
      */
     public function withHeader(string $name, string $value): self
     {
@@ -131,7 +146,52 @@ final readonly class Response
             $this->status,
             self::mergeHeaders($this->headers, [$name => $value]),
             $this->body,
+            $this->cookies,
         );
+    }
+
+    /**
+     * A copy that also sets cookie $name. Setting a cookie with the same
+     * name + path + domain again replaces the earlier one; others are kept.
+     *
+     *   return Response::redirect('/admin')
+     *       ->withCookie('staff', '1', ['expires' => new DateTimeImmutable('+1 year')]);
+     *
+     * Defaults: `path` `/`, `httponly` true, `samesite` `Lax`, `secure`
+     * false, `expires` 0 (browser-session cookie).
+     *
+     * @param CookieOptions $options
+     *
+     * @throws InvalidArgumentException on a cookie the browser would reject
+     *                                  (see {@see Cookie::create()})
+     */
+    public function withCookie(string $name, string $value, array $options = []): self
+    {
+        $cookie = Cookie::create($name, $value, $options);
+
+        $cookies = [];
+        foreach ($this->cookies as $existing) {
+            if (!$existing->sameIdentityAs($cookie)) {
+                $cookies[] = $existing;
+            }
+        }
+        $cookies[] = $cookie;
+
+        return new self($this->status, $this->headers, $this->body, $cookies);
+    }
+
+    /**
+     * A copy that tells the browser to delete cookie $name (empty value,
+     * `expires` in the past). Pass the same `path` / `domain` the cookie was
+     * set with — a browser only deletes the exact match.
+     *
+     * @param CookieOptions $options `expires` is ignored
+     *
+     * @throws InvalidArgumentException see {@see withCookie()}
+     */
+    public function withoutCookie(string $name, array $options = []): self
+    {
+        return $this->withCookie($name, '', ['expires' => 1] + $options);
     }
 
     /**
@@ -140,7 +200,7 @@ final readonly class Response
      */
     public function withoutBody(): self
     {
-        return new self($this->status, $this->headers, null);
+        return new self($this->status, $this->headers, null, $this->cookies);
     }
 
     /**
@@ -154,7 +214,12 @@ final readonly class Response
 
         if (!\headers_sent()) {
             foreach ($this->headers as $name => $value) {
-                \header($name . ': ' . $value);
+                // Never let a raw Set-Cookie replace one PHP already queued
+                // (the session cookie); every other header replaces as usual.
+                \header($name . ': ' . $value, 'set-cookie' !== \strtolower($name));
+            }
+            foreach ($this->cookies as $cookie) {
+                $cookie->send();
             }
         }
 
