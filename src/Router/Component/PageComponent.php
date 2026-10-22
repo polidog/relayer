@@ -10,6 +10,7 @@ use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\UsePhp\Component\BaseComponent;
+use ReflectionMethod;
 
 abstract class PageComponent extends BaseComponent
 {
@@ -86,9 +87,17 @@ abstract class PageComponent extends BaseComponent
             return;
         }
 
+        // Verified decode: only a token this server minted via action() for
+        // this session passes, so the method name and bound args cannot be
+        // forged or rewritten by the client.
         $payload = FormAction::decode($token);
 
         if (null === $payload) {
+            if (FormAction::isToken($token)) {
+                // Forged or tampered token: refuse, like a bad CSRF token.
+                \http_response_code(403);
+            }
+
             return;
         }
 
@@ -98,25 +107,14 @@ abstract class PageComponent extends BaseComponent
 
         $method = $payload['method'] ?? null;
 
-        if (!\is_string($method) || !\method_exists($this, $method)) {
+        if (!\is_string($method) || !$this->isDispatchableAction($method)) {
             return;
         }
 
         $formData = $request->allPost();
         unset($formData[self::FORM_ACTION_FIELD], $formData[self::FORM_CSRF_FIELD]);
 
-        $args = $payload['args'] ?? [];
-        if (!\is_array($args)) {
-            $args = [];
-        }
-
-        if (\array_is_list($args)) {
-            $callArgs = \array_merge([$formData], $args);
-        } else {
-            $callArgs = \array_merge(['formData' => $formData], $args);
-        }
-
-        $this->{$method}(...$callArgs);
+        $this->{$method}(...FormAction::callArguments($formData, $payload));
     }
 
     protected function getParam(string $name): ?string
@@ -181,8 +179,8 @@ abstract class PageComponent extends BaseComponent
     }
 
     /**
-     * @param callable             $handler use [$this, 'methodName']
-     * @param array<string, mixed> $args
+     * @param callable                $handler use [$this, 'methodName']
+     * @param array<array-key, mixed> $args
      */
     protected function action(callable $handler, array $args = []): string
     {
@@ -198,15 +196,35 @@ abstract class PageComponent extends BaseComponent
         }
     }
 
+    /**
+     * Defense in depth on top of the token signature: only instance methods
+     * the concrete page itself declares are form actions. Framework
+     * internals inherited from PageComponent / BaseComponent (setParams,
+     * setRequest, dispatchActionFromRequest, ...) and magic methods are
+     * never dispatchable, even through a validly signed token.
+     */
+    private function isDispatchableAction(string $method): bool
+    {
+        if (\str_starts_with($method, '__') || !\method_exists($this, $method)) {
+            return false;
+        }
+
+        $reflection = new ReflectionMethod($this, $method);
+
+        return !$reflection->isStatic()
+            && !$reflection->isAbstract()
+            && $reflection->getDeclaringClass()->isSubclassOf(self::class);
+    }
+
     private function resolveHandlerMethod(callable $handler): string
     {
         if (\is_array($handler)) {
             [$target, $method] = $handler;
-            if ($target === $this) {
+            if ($target === $this && $this->isDispatchableAction($method)) {
                 return $method;
             }
         }
 
-        throw new InvalidArgumentException('Form action handler must be [$this, "methodName"].');
+        throw new InvalidArgumentException('Form action handler must be [$this, "methodName"] naming a method declared on the page class.');
     }
 }

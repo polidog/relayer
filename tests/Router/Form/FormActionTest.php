@@ -47,6 +47,40 @@ final class FormActionTest extends TestCase
         self::assertSame([], $decoded['args']);
     }
 
+    public function testDecodeRejectsUnsignedToken(): void
+    {
+        FormAction::create('App\Page', 'submit'); // seed the signing key
+
+        $payload = \rtrim(\strtr(\base64_encode('{"class":"App\\\Page","method":"submit","args":[]}'), '+/', '-_'), '=');
+
+        self::assertNull(FormAction::decode(FormAction::PREFIX . $payload));
+        self::assertNotNull(FormAction::peek(FormAction::PREFIX . $payload . '.x'));
+    }
+
+    public function testDecodeRejectsTamperedPayload(): void
+    {
+        $token = FormAction::createForPage('/users', 'delete', ['id' => 1]);
+        [$encoded, $signature] = \explode('.', \substr($token, \strlen(FormAction::PREFIX)));
+
+        $tampered = \rtrim(\strtr(\base64_encode('{"page":"/users","name":"delete","args":{"id":2}}'), '+/', '-_'), '=');
+
+        self::assertNotNull(FormAction::decode($token));
+        self::assertNull(FormAction::decode(FormAction::PREFIX . $tampered . '.' . $signature));
+        self::assertNull(FormAction::decode(FormAction::PREFIX . $encoded . '.' . $signature . 'A'));
+    }
+
+    public function testCallArgumentsKeepsFormDataFirstAndBoundArgsIntact(): void
+    {
+        self::assertSame(
+            [['a' => 1], 42],
+            FormAction::callArguments(['a' => 1], ['args' => [42]]),
+        );
+        self::assertSame(
+            ['formData' => ['id' => '999'], 'id' => 123],
+            FormAction::callArguments(['id' => '999'], ['args' => ['id' => 123]]),
+        );
+    }
+
     public function testCreateForPageEncodesPageScopedPayload(): void
     {
         $token = FormAction::createForPage('/users', 'save', ['extra' => 1]);

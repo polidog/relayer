@@ -50,7 +50,9 @@ final class FunctionPage
             return false;
         }
 
-        $payload = FormAction::decode($token);
+        // Unverified peek: this only decides whether a pre-render pass is
+        // worth doing and must not start the session for foreign tokens.
+        $payload = FormAction::peek($token);
 
         if (null === $payload || ($payload['page'] ?? null) !== $this->pageId) {
             return false;
@@ -69,9 +71,12 @@ final class FunctionPage
 
         // Validate CSRF only when a pre-render pass is actually needed, so
         // malformed/forged POSTs do not trigger the expensive double-render.
+        // A forged token (bad signature) must not trigger it either.
         $csrf = $request->post(self::FORM_CSRF_FIELD);
 
-        return null !== $csrf && CsrfToken::validate($csrf);
+        return null !== $csrf
+            && CsrfToken::validate($csrf)
+            && null !== FormAction::decode($token);
     }
 
     /**
@@ -92,18 +97,26 @@ final class FunctionPage
             return;
         }
 
-        $payload = FormAction::decode($token);
+        // Cheap unverified routing check first, so a token aimed at another
+        // page (or a class-style token) is ignored without touching the
+        // session. Nothing from this peek is trusted beyond that.
+        $peeked = FormAction::peek($token);
 
-        if (null === $payload || !isset($payload['page'])) {
-            return;
-        }
-
-        if ($payload['page'] !== $this->pageId) {
+        if (null === $peeked || !isset($peeked['page']) || $peeked['page'] !== $this->pageId) {
             return;
         }
 
         $csrf = $request->post(self::FORM_CSRF_FIELD);
         if (null === $csrf || !CsrfToken::validate($csrf)) {
+            \http_response_code(403);
+
+            return;
+        }
+
+        // Verified decode: the name and the bound args below come only from
+        // a token this server signed, so a client cannot rewrite them.
+        $payload = FormAction::decode($token);
+        if (null === $payload || ($payload['page'] ?? null) !== $this->pageId) {
             \http_response_code(403);
 
             return;
@@ -122,18 +135,7 @@ final class FunctionPage
         $formData = $request->allPost();
         unset($formData[self::FORM_ACTION_FIELD], $formData[self::FORM_CSRF_FIELD]);
 
-        $args = $payload['args'] ?? [];
-        if (!\is_array($args)) {
-            $args = [];
-        }
-
-        if (\array_is_list($args)) {
-            $callArgs = \array_merge([$formData], $args);
-        } else {
-            $callArgs = \array_merge(['formData' => $formData], $args);
-        }
-
-        $handler(...$callArgs);
+        $handler(...FormAction::callArguments($formData, $payload));
     }
 
     public function render(): Element

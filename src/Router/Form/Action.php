@@ -21,7 +21,7 @@ use Polidog\Relayer\Router\Component\PageContext;
  *   $token = Action::register($this);          // component is the action
  *   $token = Action::register($this->action);  // component has the action
  *
- * Both return an encoded token (base64 JSON with a prefix) that identifies the
+ * Both return a signed token (prefixed base64 JSON + HMAC) that identifies the
  * page and action name; embed it in a hidden `_usephp_action` field so the
  * framework can dispatch on POST.
  *
@@ -31,7 +31,7 @@ use Polidog\Relayer\Router\Component\PageContext;
 final class Action
 {
     /**
-     * @param array<string, mixed> $args
+     * @param array<array-key, mixed> $args
      */
     public static function create(string $name, callable $handler, array $args = []): string
     {

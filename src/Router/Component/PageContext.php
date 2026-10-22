@@ -151,9 +151,12 @@ final class PageContext
      * submitted with the returned token reaches this page. The factory
      * closure of a function-style page is re-executed on every request, so
      * the action table is rebuilt before dispatch and the token only needs
-     * to encode `(pageId, name)`.
+     * to encode `(pageId, name)` plus the bound `$args`. The token is
+     * HMAC-signed with a per-session key ({@see FormAction}), so the client
+     * can neither retarget it nor rewrite `$args`; POSTed fields only reach
+     * the handler's first (form data) argument.
      *
-     * @param array<string, mixed> $args
+     * @param array<array-key, mixed> $args
      */
     public function action(string $name, Closure $handler, array $args = []): string
     {

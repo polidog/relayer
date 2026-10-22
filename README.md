@@ -729,6 +729,12 @@ field automatically (usePHP's client sends it on the partial
 token is answered with `403` without changing any state. Hand-written
 clients that POST `_usephp_action` / `_usephp_component` must include it.
 
+Only methods the page class itself declares can be actions: passing an
+inherited framework method (or anything other than `[$this, 'method']`)
+to `action()` throws, and the dispatcher only runs a method named by a token
+the server signed (see [Binding arguments](#binding-arguments)) — a
+hand-crafted token naming some other public/protected method is ignored.
+
 ### Function-style: `PageContext::action()`
 
 Function-style pages declare server actions through `PageContext::action()`.
@@ -784,10 +790,16 @@ $delete = $ctx->action('delete', function (array $form, int $id) use ($repo): vo
 $ctx->action('delete', fn (array $formData, int $id) => $repo->delete($id), ['id' => $user->id]);
 ```
 
-`$args` is embedded **verbatim** in the base64 action token (it is *not*
-signed — tamper detection is the CSRF token's job). Keep bound values to
-identifiers and always re-validate authorization/integrity inside the
-handler (e.g. verify ownership of the incoming `$id` server-side).
+The action token (target page/class + action name/method + `$args`) is
+**HMAC-signed** with a random per-session key kept in `$_SESSION` (next to
+the CSRF token) and verified before dispatch. A token whose target or
+`$args` were edited client-side — or one minted for another session — is
+rejected with a `403` and the handler never runs. POSTed fields only ever
+reach the first (form data) argument, so a form field named like a bound
+argument cannot override it. `$args` is signed, **not encrypted** — it is
+readable in the page source, so don't bind secrets; and still authorize
+inside the handler (a valid token proves the server bound the value, not
+that the current user may act on it).
 
 ### Re-rendering after a failed submit
 
