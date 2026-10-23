@@ -12,6 +12,7 @@ use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\Relayer\Router\RedirectException;
+use Polidog\Relayer\Tests\Fixtures\FormActionTokens;
 use Polidog\UsePhp\Runtime\Element;
 
 /**
@@ -105,6 +106,119 @@ final class FunctionPageActionDispatchTest extends TestCase
             self::assertSame('/users', $exception->location);
             self::assertSame(303, $exception->status);
         }
+    }
+
+    #[RunInSeparateProcess]
+    public function testDispatchPassesBoundArgsAndKeepsThemSeparateFromPost(): void
+    {
+        $captured = [];
+
+        $context = new PageContext([], '/users');
+        $token = $context->action('delete', static function (array $formData, int $recordId) use (&$captured): void {
+            $captured = ['formData' => $formData, 'recordId' => $recordId];
+        }, ['recordId' => 123]);
+
+        $page = $this->makePage($context, '/users');
+
+        $_POST = [
+            '_usephp_action' => $token,
+            '_usephp_csrf' => CsrfToken::getToken(),
+            'recordId' => '999',
+        ];
+
+        $page->dispatchActionFromRequest();
+
+        self::assertSame(['formData' => ['recordId' => '999'], 'recordId' => 123], $captured);
+    }
+
+    #[RunInSeparateProcess]
+    public function testDispatchPassesPositionalBoundArgs(): void
+    {
+        $captured = null;
+
+        $context = new PageContext([], '/users');
+        $token = $context->action('delete', static function (array $form, int $id) use (&$captured): void {
+            $captured = $id;
+        }, [42]);
+
+        $page = $this->makePage($context, '/users');
+
+        $_POST = [
+            '_usephp_action' => $token,
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        $page->dispatchActionFromRequest();
+
+        self::assertSame(42, $captured);
+    }
+
+    #[RunInSeparateProcess]
+    public function testDispatchRejectsTamperedArgs(): void
+    {
+        $called = false;
+
+        $context = new PageContext([], '/users');
+        $token = $context->action('delete', static function () use (&$called): void {
+            $called = true;
+        }, ['recordId' => 123]);
+
+        $page = $this->makePage($context, '/users');
+
+        $_POST = [
+            '_usephp_action' => FormActionTokens::withPayload($token, [
+                'page' => '/users',
+                'name' => 'delete',
+                'args' => ['recordId' => 999],
+            ]),
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        $page->dispatchActionFromRequest();
+
+        self::assertFalse($called);
+        self::assertSame(403, \http_response_code());
+    }
+
+    #[RunInSeparateProcess]
+    public function testDispatchRejectsUnsignedToken(): void
+    {
+        $called = false;
+
+        $context = new PageContext([], '/users');
+        $context->action('delete', static function () use (&$called): void {
+            $called = true;
+        }, ['recordId' => 123]);
+
+        $page = $this->makePage($context, '/users');
+
+        $_POST = [
+            '_usephp_action' => FormActionTokens::unsigned([
+                'page' => '/users',
+                'name' => 'delete',
+                'args' => ['recordId' => 999],
+            ]),
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        $page->dispatchActionFromRequest();
+
+        self::assertFalse($called);
+    }
+
+    #[RunInSeparateProcess]
+    public function testHasPendingActionReturnsFalseForForgedToken(): void
+    {
+        $context = new PageContext([], '/users');
+        $page = $this->makePage($context, '/users');
+        FormAction::createForPage('/users', 'other'); // seed the signing key
+
+        $_POST = [
+            '_usephp_action' => FormActionTokens::unsigned(['page' => '/users', 'name' => 'save', 'args' => []]),
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        self::assertFalse($page->hasPendingAction());
     }
 
     public function testDispatchSkipsTokenForDifferentPage(): void
