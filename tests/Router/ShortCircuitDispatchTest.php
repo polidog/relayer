@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Tests\Router;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\AppRouter;
+use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\StopRequest;
 
 /**
@@ -98,6 +99,7 @@ final class ShortCircuitDispatchTest extends TestCase
             // Root page → pageId '/' → component id 'page:/'.
             '_usephp_component' => 'page:/',
             '_usephp_action' => '{"type":"setState","payload":{"index":0,"value":"x"}}',
+            '_usephp_csrf' => CsrfToken::getToken(),
         ];
 
         $output = $this->dispatch();
