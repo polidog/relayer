@@ -309,7 +309,9 @@ final class AppRouter
 
     private function dispatchRequest(Request $request): void
     {
-        $path = $this->readPath();
+        // The guard may have substituted the Request: route by what it
+        // handed us, not by a fresh read of the superglobals.
+        $path = $request->path;
 
         // Dev profiler viewer — only when storage is bound (dev only).
         // Intercepted BEFORE beginProfile so visiting the viewer does
@@ -1868,16 +1870,6 @@ final class AppRouter
         }
 
         return \preg_match(self::PROFILER_TOKEN_PATTERN, $raw) ? $raw : null;
-    }
-
-    /**
-     * The request path (no query string) — what the `/_profiler` viewer
-     * gate matches against, and what the profiler excluded-prefix list
-     * compares.
-     */
-    private function readPath(): string
-    {
-        return $this->request()->path;
     }
 
     /**

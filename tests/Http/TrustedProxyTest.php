@@ -60,6 +60,18 @@ final class TrustedProxyTest extends TestCase
         self::assertSame('198.51.100.7', $this->dispatch($proxy, $this->req('203.0.113.5', ['fly-client-ip' => '198.51.100.7']))->clientIp());
     }
 
+    public function testTrustAnyHopDoesNotNeedARemoteAddrAtAll(): void
+    {
+        // A synthetic Request (worker / test) without REMOTE_ADDR: the
+        // hop is not consulted, so the header is still honored.
+        $proxy = TrustedProxy::middleware(['preset' => 'fly', 'trustAnyHop' => true]);
+
+        $seen = $this->dispatch($proxy, new Request(method: 'GET', path: '/', headers: ['fly-client-ip' => '198.51.100.7']));
+
+        self::assertSame('198.51.100.7', $seen->clientIp());
+        self::assertNull($seen->ip());
+    }
+
     public function testIpv4MappedIpv6HopMatchesAnIpv4Range(): void
     {
         // A `[::]`-listening server reports IPv4 peers as ::ffff:a.b.c.d.

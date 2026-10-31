@@ -749,8 +749,10 @@ Relayer::boot(__DIR__ . '/..')
   通します —— `enforce` に切り替える前の様子見に使ってください。
 - ログ（両モード共通の PSR-3 `warning` 1 本。context の `outcome` が
   `rejected` / `reported`。渡した DI ロガー、無ければ SAPI のエラーログ）
-  に出るのはメソッド / パス / `REMOTE_ADDR` だけで、設定したシークレットも
-  クライアントが送ってきた値も決して出しません。
+  に出るのはメソッド / パス / クライアント IP だけで、設定したシークレットも
+  クライアントが送ってきた値も決して出しません。IP は `clientIp()` なので、
+  `TrustedProxy` がガードの外側で動く（`boot()` の配線順）と、迂回の試みが
+  実際の発信元で記録されます。
 - シークレットは環境変数で渡してください（`fly secrets set`、gitignore 済みの
   `.env.local`）。コミットする設定ファイルに直書きしないこと。
 
@@ -824,9 +826,10 @@ fly secrets set \
 ```
 
    ローテーションは新しい `ORIGIN_SECRET` に加えて `ORIGIN_SECRET_PREVIOUS=<旧値>`
-   を設定し、後で後者を外す。`Relayer::boot()` は OriginGuard → `fly → cloudflare`
-   の TrustedProxy チェーンの順でルーターの guard に組み込むので、`/_defer/*`
-   とプロファイラも覆われます。
+   を設定し、後で後者を外す。`Relayer::boot()` は `fly → cloudflare` の
+   TrustedProxy チェーンを OriginGuard の外側に置いてルーターの guard に組み込む
+   ので、`/_defer/*` とプロファイラも覆われ、直叩きの拒否ログには Fly Proxy の
+   アドレスではなく実際の発信元 IP が残ります。
 
 3. 確認: `curl -I https://<app>.fly.dev/` が `403`、独自ドメイン（Cloudflare
    経由）が `200`、`/healthz` はどちらからでも `200` になること。
@@ -1212,6 +1215,7 @@ return function (PageContext $ctx, Request $req): Closure {
 | `$req->file($name)`          | `?UploadedFile` (`name[]` のフィールドは null)    |
 | `$req->files()`              | `array<string, UploadedFile\|list<UploadedFile>>` |
 | `$req->ip()`                 | `?string` — サーバが報告した `REMOTE_ADDR`        |
+| `$req->clientIp()`           | `?string` — `TrustedProxy` が解決した IP、無ければ `ip()` |
 | `$req->host()` / `scheme()`  | `?string` / `'http'\|'https'`                     |
 | `$req->url()`                | `?string` — このリクエストの絶対 URL              |
 
@@ -1258,8 +1262,9 @@ if (null !== $avatar && $avatar->isValid()) {
 `error` と、`isValid()` / `contents()` / `moveTo()` を持ちます
 (`moveTo()` は本物のアップロード以外を拒否します)。`ip()` は
 `REMOTE_ADDR` のみを返します — `X-Forwarded-For` はクライアントが
-自由に送れるので、信頼できるプロキシ配下だと分かっている場合に
-`$req->header()` で自分で読んでください。
+自由に送れるためです。信頼できるプロキシ配下では `TrustedProxy`
+（ミドルウェア節参照）を配線し、`clientIp()` を読んでください（何も解決
+されなければ `ip()` にフォールバックします）。
 
 ## 認証
 

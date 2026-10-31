@@ -745,8 +745,10 @@ request and answers `403` when it is missing or wrong:
   — run it for a while before switching to `enforce`.
 - Log lines (one PSR-3 `warning` template for both modes, `outcome` =
   `rejected` / `reported` in the context; via the DI logger you pass, else
-  the SAPI error log) carry method / path / `REMOTE_ADDR` only — never a
-  configured secret nor the value the client sent.
+  the SAPI error log) carry method / path / client IP only — never a
+  configured secret nor the value the client sent. The IP is `clientIp()`,
+  so with `TrustedProxy` running outside the guard (how `boot()` wires them)
+  a bypass attempt is logged with its real source.
 - Pass secrets in from the environment (`fly secrets set`, a gitignored
   `.env.local`); don't write them into a committed config file.
 
@@ -820,9 +822,10 @@ fly secrets set \
 ```
 
    Rotate by setting the new `ORIGIN_SECRET` plus `ORIGIN_SECRET_PREVIOUS=<old>`,
-   then dropping the latter. `Relayer::boot()` installs OriginGuard first, then
-   the `fly → cloudflare` TrustedProxy chain, as the router guard — so
-   `/_defer/*` and the profiler are covered too.
+   then dropping the latter. `Relayer::boot()` installs the `fly → cloudflare`
+   TrustedProxy chain outside OriginGuard as the router guard — so `/_defer/*`
+   and the profiler are covered too, and a rejected direct hit is logged with
+   its real source IP rather than the Fly proxy's address.
 
 3. Verify: `curl -I https://<app>.fly.dev/` is `403`, the custom domain
    (through Cloudflare) is `200`, and `/healthz` is `200` either way.
@@ -1214,6 +1217,7 @@ return function (PageContext $ctx, Request $req): Closure {
 | `$req->file($name)`          | `?UploadedFile` (null for a `name[]` field)   |
 | `$req->files()`              | `array<string, UploadedFile\|list<UploadedFile>>` |
 | `$req->ip()`                 | `?string` — `REMOTE_ADDR` as reported          |
+| `$req->clientIp()`           | `?string` — resolved by `TrustedProxy`, else `ip()` |
 | `$req->host()` / `scheme()`  | `?string` / `'http'\|'https'`                  |
 | `$req->url()`                | `?string` — absolute URL of this request      |
 
@@ -1259,8 +1263,9 @@ if (null !== $avatar && $avatar->isValid()) {
 `UploadedFile` carries `clientName`, `clientMimeType`, `size`, `tmpName`,
 `error`, plus `isValid()`, `contents()`, and `moveTo()` (which refuses
 anything that isn't a real upload). `ip()` reports `REMOTE_ADDR` only —
-`X-Forwarded-For` is client-supplied, so read it yourself (via
-`$req->header()`) once you know you're behind a proxy you trust.
+`X-Forwarded-For` is client-supplied. Behind a proxy you trust, wire
+`TrustedProxy` (see the Middleware section) and read `clientIp()`, which
+falls back to `ip()` when nothing was resolved.
 
 ## Authentication
 

@@ -232,7 +232,7 @@ final class Relayer
         if (null !== $profiler) {
             $router->setProfiler($profiler, self::resolveProfilerStorage($psr));
 
-            $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
+            $extraExcludes = Env::readList('PROFILER_EXCLUDED_PATHS');
             if ([] !== $extraExcludes) {
                 $router->setProfilerExcludedPrefixes($extraExcludes);
             }
@@ -403,17 +403,6 @@ final class Relayer
     }
 
     /**
-     * Read a comma-separated env var into a normalized list. Empty entries
-     * are dropped. Returns `[]` when the var is unset or empty.
-     *
-     * @return list<string>
-     */
-    private static function readEnvList(string $name): array
-    {
-        return Env::readList($name);
-    }
-
-    /**
      * Load env vars via Symfony Dotenv. `loadEnv()` walks the standard
      * cascade — `.env` → `.env.local` → `.env.{APP_ENV}` → `.env.{APP_ENV}.local`
      * — and skips files that are missing. Existing $_ENV / $_SERVER /
@@ -466,6 +455,6 @@ final class Relayer
             return false;
         }
 
-        return \in_array(\strtolower(\trim($raw)), ['1', 'true', 'yes', 'on'], true);
+        return \in_array(\strtolower($raw), ['1', 'true', 'yes', 'on'], true);
     }
 }

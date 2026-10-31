@@ -26,9 +26,11 @@ use Psr\Log\LoggerInterface;
  *   TRUSTED_PROXY_PRESET=fly             # fly | cloudflare | xff (default)
  *   CLOUDFLARE_IP_RANGES=173.245.48.0/20,... # adds a Cloudflare layer behind it
  *
- * Nothing set → no guard. Both set → OriginGuard runs first, then
- * TrustedProxy. `AppRouter::setGuard()` replaces whatever this produced,
- * for apps that want to compose their own.
+ * Nothing set → no guard. Both set → TrustedProxy runs outside OriginGuard:
+ * it never rejects anything, and resolving the client IP first means a
+ * rejected bypass attempt is logged with its real source instead of the
+ * proxy's address. `AppRouter::setGuard()` replaces whatever this
+ * produced, for apps that want to compose their own.
  */
 final class GuardFactory
 {
@@ -47,9 +49,9 @@ final class GuardFactory
             return $guard;
         }
 
-        return static fn (Request $request, Closure $next) => $guard(
+        return static fn (Request $request, Closure $next) => $proxy(
             $request,
-            static fn (Request $r) => $proxy($r, $next),
+            static fn (Request $r) => $guard($r, $next),
         );
     }
 

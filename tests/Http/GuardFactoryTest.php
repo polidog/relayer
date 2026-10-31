@@ -8,6 +8,7 @@ use Closure;
 use InvalidArgumentException;
 use Monolog\Handler\TestHandler;
 use Monolog\Logger;
+use Monolog\Processor\PsrLogMessageProcessor;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\Http\Request;
@@ -132,23 +133,37 @@ final class GuardFactoryTest extends TestCase
         self::assertSame('198.51.100.7', $seen->clientIp());
     }
 
-    public function testBothRunGuardFirstThenProxy(): void
+    public function testBothResolveTheClientIpBeforeTheGuardLogsARejection(): void
     {
         $_ENV['ORIGIN_SECRET'] = 's3cret';
         $_ENV['TRUSTED_PROXIES'] = 'fdaa::/16';
         $_ENV['TRUSTED_PROXY_PRESET'] = 'fly';
+        $log = new TestHandler();
 
-        $guard = GuardFactory::fromEnv();
+        $guard = GuardFactory::fromEnv(new Logger('t', [$log], [new PsrLogMessageProcessor()]));
         self::assertNotNull($guard);
 
         \ob_start();
         $seen = $this->dispatch($guard, $this->req('/', ['fly-client-ip' => '198.51.100.7'], 'fdaa::1'));
         \ob_end_clean();
-        self::assertNull($seen, 'a request without the secret is rejected before any IP resolution');
+        self::assertNull($seen, 'a request without the secret is rejected');
+        // TrustedProxy sits outside the guard, so the bypass attempt is
+        // logged with its real source, not the Fly proxy's 6PN address.
+        self::assertTrue($log->hasWarningThatContains('from 198.51.100.7'));
 
         $seen = $this->dispatch($guard, $this->req('/', ['fly-client-ip' => '198.51.100.7', 'x-origin-secret' => 's3cret'], 'fdaa::1'));
         self::assertNotNull($seen);
         self::assertSame('198.51.100.7', $seen->clientIp());
+    }
+
+    public function testUnknownGuardModeFailsLoudly(): void
+    {
+        $_ENV['ORIGIN_SECRET'] = 's3cret';
+        $_ENV['ORIGIN_GUARD_MODE'] = 'Report';
+
+        $this->expectException(InvalidArgumentException::class);
+
+        GuardFactory::fromEnv();
     }
 
     public function testUnknownPresetFailsLoudly(): void

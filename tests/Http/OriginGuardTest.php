@@ -223,6 +223,18 @@ final class OriginGuardTest extends TestCase
         self::assertStringNotContainsString('presented-value', $serialized);
     }
 
+    public function testRejectionIsLoggedWithTheResolvedClientIpWhenAProxyRanFirst(): void
+    {
+        $guard = $this->guard(['secrets' => ['s3cret']]);
+        [$next] = $this->next();
+
+        \ob_start();
+        $guard($this->req()->withClientIp('198.51.100.7'), $next);
+        \ob_end_clean();
+
+        self::assertTrue($this->log->hasWarningThatContains('from 198.51.100.7'));
+    }
+
     public function testCustomHeaderName(): void
     {
         $guard = $this->guard(['secrets' => ['s3cret'], 'header' => 'X-Edge-Token']);

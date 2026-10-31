@@ -8,6 +8,7 @@ use Closure;
 use InvalidArgumentException;
 use Monolog\Handler\ErrorLogHandler;
 use Monolog\Logger;
+use Monolog\Processor\PsrLogMessageProcessor;
 use Polidog\Relayer\Env;
 use Polidog\Relayer\Relayer;
 use Psr\Log\LoggerInterface;
@@ -60,8 +61,11 @@ use Psr\Log\LoggerInterface;
  *   (`/_health/*`).
  * - `mode: report` logs what *would* be rejected and lets the request
  *   continue — use it to dry-run before enforcing.
- * - Log lines carry the method, path and `REMOTE_ADDR` only — never a
- *   configured secret nor the value the client presented.
+ * - Log lines carry the method, path and client IP only — never a
+ *   configured secret nor the value the client presented. The IP is
+ *   {@see Request::clientIp()}: when a {@see TrustedProxy} runs outside the
+ *   guard (how the framework wires them) a bypass attempt is logged with
+ *   its real source rather than the proxy's address.
  *
  * Pass the secrets in from the environment (`fly secrets set`, a gitignored
  * `.env.local`); do not write them into a committed config file.
@@ -146,7 +150,10 @@ final class OriginGuard
                 'header' => $header,
                 'method' => $request->method,
                 'path' => $request->path,
-                'ip' => $request->ip(),
+                // The resolved client IP when a TrustedProxy ran outside
+                // this guard (so a bypass attempt is logged with its real
+                // source, not the proxy's address), else REMOTE_ADDR.
+                'ip' => $request->clientIp(),
             ]);
 
             if (!$enforce) {
@@ -155,12 +162,8 @@ final class OriginGuard
                 return;
             }
 
-            if (!\headers_sent()) {
-                \header('Content-Type: text/plain; charset=utf-8');
-            }
-            \http_response_code(403);
-            echo 'Forbidden';
             // The route never runs.
+            Response::text('Forbidden', 403)->send();
         };
     }
 
@@ -235,6 +238,8 @@ final class OriginGuard
      */
     private static function fallbackLogger(): LoggerInterface
     {
-        return new Logger('origin-guard', [new ErrorLogHandler()]);
+        // The processor interpolates `{placeholders}` (Monolog does not on
+        // its own) so the one-line message is searchable in error_log too.
+        return new Logger('origin-guard', [new ErrorLogHandler()], [new PsrLogMessageProcessor()]);
     }
 }

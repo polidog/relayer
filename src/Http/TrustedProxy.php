@@ -110,6 +110,22 @@ final class TrustedProxy
      */
     public static function ipMatches(string $ip, array $ranges): bool
     {
+        $parsed = [];
+        foreach ($ranges as $range) {
+            $one = self::parseRange($range);
+            if (null !== $one) {
+                $parsed[] = $one;
+            }
+        }
+
+        return self::matchesParsed($ip, $parsed);
+    }
+
+    /**
+     * @param list<array{string, int}> $ranges packed address + prefix length
+     */
+    private static function matchesParsed(string $ip, array $ranges): bool
+    {
         $packed = self::pack($ip);
         if (null === $packed) {
             return false;
@@ -125,11 +141,13 @@ final class TrustedProxy
     }
 
     /**
-     * Validate one layer's config into `[header, proxies, trustAnyHop, walkXff]`.
+     * Validate one layer's config into `[header, proxies, trustAnyHop, walkXff]`,
+     * with the proxies parsed once (packed address + prefix) so per-request
+     * matching is a byte comparison, not a re-parse of every CIDR.
      *
      * @param array{preset?: string, header?: string, proxies?: list<string>, trustAnyHop?: bool} $config
      *
-     * @return array{string, list<string>, bool, bool}
+     * @return array{string, list<array{string, int}>, bool, bool}
      */
     private static function layer(array $config): array
     {
@@ -163,12 +181,15 @@ final class TrustedProxy
             throw new InvalidArgumentException('TrustedProxy: pass a "preset" or a non-empty "header".');
         }
 
+        $parsed = [];
         foreach ($proxies as $range) {
-            if (null === self::parseRange($range)) {
+            $one = self::parseRange($range);
+            if (null === $one) {
                 throw new InvalidArgumentException(\sprintf('TrustedProxy: "%s" is not a valid IP address or CIDR range.', $range));
             }
+            $parsed[] = $one;
         }
-        if ([] === $proxies && !$trustAnyHop) {
+        if ([] === $parsed && !$trustAnyHop) {
             throw new InvalidArgumentException(\sprintf(
                 'TrustedProxy: "proxies" is required for the %s header — without a trust list it is client-supplied. '
                 . 'Set "trustAnyHop" => true only when the proxy is provably the sole ingress to this process.',
@@ -176,25 +197,24 @@ final class TrustedProxy
             ));
         }
 
-        return [$header, $proxies, $trustAnyHop, self::PRESET_XFF === $preset];
+        return [$header, $parsed, $trustAnyHop, self::PRESET_XFF === $preset];
     }
 
     /**
-     * @param list<array{string, list<string>, bool, bool}> $layers
+     * @param list<array{string, list<array{string, int}>, bool, bool}> $layers
      */
     private static function resolve(Request $request, array $layers): ?string
     {
         $hop = $request->ip();
-        if (null === $hop) {
-            return null;
-        }
 
         $resolved = null;
         foreach ($layers as [$header, $proxies, $trustAnyHop, $walkXff]) {
             // The address resolved so far must be one of this layer's
             // proxies, or the layer does not apply and resolution stops:
-            // whatever we verified last is the client.
-            if (!$trustAnyHop && !self::ipMatches($hop, $proxies)) {
+            // whatever we verified last is the client. `trustAnyHop` does
+            // not look at the hop at all — not even at whether there is
+            // one (a synthetic Request without REMOTE_ADDR).
+            if (!$trustAnyHop && (null === $hop || !self::matchesParsed($hop, $proxies))) {
                 break;
             }
 
@@ -221,7 +241,7 @@ final class TrustedProxy
      * proxy and is the client. Anything further left is client-controlled
      * and ignored. Null when a hop is malformed or every hop is trusted.
      *
-     * @param list<string> $proxies
+     * @param list<array{string, int}> $proxies
      */
     private static function walkForwardedFor(string $value, array $proxies): ?string
     {
@@ -230,7 +250,7 @@ final class TrustedProxy
             if (null === $candidate) {
                 return null;
             }
-            if (!self::ipMatches($candidate, $proxies)) {
+            if (!self::matchesParsed($candidate, $proxies)) {
                 return $candidate;
             }
         }
@@ -289,13 +309,12 @@ final class TrustedProxy
         return $packed;
     }
 
-    private static function inRange(string $packedIp, string $range): bool
+    /**
+     * @param array{string, int} $range packed address + prefix length
+     */
+    private static function inRange(string $packedIp, array $range): bool
     {
-        $parsed = self::parseRange($range);
-        if (null === $parsed) {
-            return false;
-        }
-        [$packedRange, $prefix] = $parsed;
+        [$packedRange, $prefix] = $range;
         if (\strlen($packedRange) !== \strlen($packedIp)) {
             return false; // v4 vs v6 never match
         }
