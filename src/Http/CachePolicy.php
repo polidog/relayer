@@ -16,6 +16,8 @@ use ReflectionClass;
  */
 final class CachePolicy
 {
+    private static ?string $limiterBeforePolicy = null;
+
     /**
      * Convenience: read the attribute, resolve any dynamic `etagKey` via the
      * given store, and emit headers in one call. Returns the *effective* Cache
@@ -107,6 +109,8 @@ final class CachePolicy
             return;
         }
 
+        self::reconcileWithSession($cache);
+
         $directives = self::buildDirectives($cache);
         if ([] !== $directives) {
             \header('Cache-Control: ' . \implode(', ', $directives));
@@ -124,6 +128,25 @@ final class CachePolicy
         if (null !== $lastModified) {
             \header('Last-Modified: ' . \gmdate('D, d M Y H:i:s', $lastModified) . ' GMT');
         }
+    }
+
+    /**
+     * Undo the limiter change from an earlier request. A FrankenPHP worker
+     * keeps ini changes between requests, so a page declaring a policy would
+     * otherwise strip PHP's `no-store` from later session pages that declare
+     * none. A no-op in the classic per-request model.
+     */
+    public static function restoreSessionCacheLimiter(): void
+    {
+        if (null === self::$limiterBeforePolicy
+            || \PHP_SESSION_NONE !== \session_status()
+            || \headers_sent()
+        ) {
+            return;
+        }
+
+        \session_cache_limiter(self::$limiterBeforePolicy);
+        self::$limiterBeforePolicy = null;
     }
 
     /**
@@ -224,6 +247,50 @@ final class CachePolicy
         }
 
         return $quoted;
+    }
+
+    /**
+     * A declared policy and a PHP session disagree in both directions.
+     *
+     * PHP's default `session.cache_limiter` makes `session_start()` overwrite
+     * `Cache-Control` with `no-store`, even on a page that only happens to
+     * touch the session. The limiter is therefore switched off once a policy
+     * is declared; pages without one keep PHP's `no-store`.
+     *
+     * With the limiter off, nothing would stop a response that used a session
+     * from going out as declared, and a CDN could then serve one visitor's
+     * rendering (or their `Set-Cookie`) to everyone. A policy that allows
+     * shared storage is therefore withdrawn at the last moment if a session is
+     * active by the time headers go out. It has to be that late: layouts render
+     * after this runs, and the session may be started by code the framework
+     * does not own. A `private` / `no-store` policy is already safe and stays
+     * as declared.
+     */
+    private static function reconcileWithSession(Cache $cache): void
+    {
+        if (!\extension_loaded('session')) {
+            return;
+        }
+
+        if (\PHP_SESSION_NONE === \session_status()) {
+            $previous = \session_cache_limiter('');
+            self::$limiterBeforePolicy ??= false === $previous ? null : $previous;
+        } elseif ([] !== self::buildDirectives($cache)) {
+            // Started before this ran: the limiter's leftovers would contradict
+            // the Cache-Control about to replace its own.
+            \header_remove('Expires');
+            \header_remove('Pragma');
+        }
+
+        if ($cache->noStore || ($cache->private && !$cache->public)) {
+            return;
+        }
+
+        \header_register_callback(static function (): void {
+            if (\PHP_SESSION_ACTIVE === \session_status()) {
+                \header('Cache-Control: private, no-store');
+            }
+        });
     }
 
     /**

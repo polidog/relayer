@@ -1727,10 +1727,29 @@ $container->register(NativePasswordHasher::class)
     ->setArguments([\PASSWORD_ARGON2ID]);
 ```
 
-`NativeSession` は最初の read/write で `session_start()` を遅延起動する
-ので、DI で解決しただけでは `Set-Cookie` は送りません。既存の CSRF
-トークン機構と `$_SESSION` を共有するため、`session_start` の重複も
-起きません。
+`NativeSession` はセッションを遅延起動するので、DI で解決しただけでは
+`Set-Cookie` は送りません。セッションを新しく作るのは書き込みだけです。
+セッション Cookie のないリクエストでは、読み取りは空として扱い何も開始
+しないため、`$auth->user()` を確認するだけのページでは、匿名の訪問者に
+`Set-Cookie` が付かず CDN でキャッシュできます。既存の CSRF トークン機構と
+`$_SESSION` を共有するため、`session_start` の重複も起きません。
+
+セッション Cookie には `HttpOnly` と `SameSite=Lax` を付け、
+`$_SERVER['HTTPS']` が TLS 接続を示すときは `Secure` も付けます。TLS を
+終端するプロキシの背後では `session.cookie_secure=1` を設定するか、PHP に
+`HTTPS=on` を渡してください（`X-Forwarded-Proto` は見ません）。補うのは PHP
+の既定値のままの属性だけなので、アプリの設定が優先されます。セッション開始
+前の `session_set_cookie_params()` で指定した値（`SameSite=Strict`、
+`lifetime`、`path`、`domain`）と、`php.ini` / `-d` の値（明示した
+`session.cookie_httponly=0` を含む）はそのまま使います。`php.ini` で無効に
+するときは `0` と書いてください（PHP は `Off` を空として読むため、標準の
+`php.ini` と区別できません）。実行時の `httponly => false` は既定値と区別
+できないので、Cookie の既定値をすべて無効にしたい場合は `run()` の前に次を
+呼びます。
+
+```php
+Polidog\Relayer\Http\SessionStarter::leaveCookieParamsToApp();
+```
 
 ### 注意点
 
@@ -2087,6 +2106,18 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   や一般サービスに付けても無視されます（意図しないヘッダー送出を避ける
   ため）。
 - `headers_sent()` が `true` の段階ではヘッダー書き込みはスキップされます。
+- 宣言したキャッシュ方針は `session_start()` に上書きされません。方針を適用
+  した時点でフレームワークが `session_cache_limiter('')` を設定します。方針の
+  ないページがセッションを使う場合は、PHP の `no-store` のままです。
+- セッションを使ったレスポンスは、共有キャッシュに保存できる状態では返しま
+  せん。ヘッダー送出時にセッションが有効なら、`private` / `noStore` 以外の
+  方針は `Cache-Control: private, no-store` に置き換えます。レイアウトで
+  `$auth->user()` を読む `#[Cache(public: true)]` のページは、ログイン中の
+  訪問者にはキャッシュされない形で返り、匿名の訪問者には宣言どおりの方針で
+  返ります。ログイン中もブラウザにキャッシュさせたいページは `private: true`
+  を宣言してください。この処理は `header_register_callback()` を使います。
+  コールバックは 1 リクエストに 1 つだけなので、アプリが後から登録すると
+  置き換えられます（先に登録したものはこの処理が置き換えます）。
 - 304 短絡時の `exit;` は PSR-11 アダプタから出ます。**ページのコンスト
   ラクタも依存サービスも実行されない** 段階で短絡するので、DB アクセス
   を完全に回避できます。

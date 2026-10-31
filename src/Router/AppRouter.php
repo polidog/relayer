@@ -17,6 +17,7 @@ use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Http\Response;
+use Polidog\Relayer\Http\SessionStarter;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\I18n\Translators;
@@ -313,6 +314,9 @@ final class AppRouter
 
     public function run(): void
     {
+        CachePolicy::restoreSessionCacheLimiter();
+        SessionStarter::applyCookieDefaults();
+
         // Build the request snapshot once; the guard (if any) sees it first
         // and may hand a substituted one to the dispatch below.
         $request = Request::fromGlobals();
