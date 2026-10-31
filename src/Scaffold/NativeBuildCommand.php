@@ -100,6 +100,9 @@ final class NativeBuildCommand
         // handler is a more useful first complaint than a missing `go`.
         /** @var list<array{Route, string, list<string>}> $jobs route, source, declared methods */
         $jobs = [];
+
+        /** @var array<string, string> $slugSources slug => the source that claimed it */
+        $slugSources = [];
         foreach ($natives as $route) {
             $relativeSource = self::relative($root, $route->pagePath);
 
@@ -131,7 +134,23 @@ final class NativeBuildCommand
                 return 1;
             }
 
-            if ($hasMiddleware && NativeSlug::MIDDLEWARE === NativeSlug::forPattern($route->pattern)) {
+            // Slugs fold characters (`/a/b` and `/a__b` are both `a__b`). Two
+            // routes on one binary would silently answer with the same code.
+            $slug = NativeSlug::forPattern($route->pattern);
+            if (isset($slugSources[$slug])) {
+                $write(\sprintf(
+                    '%s and %s would be built to the same binary (%s/%s). Rename one of the routes.',
+                    $slugSources[$slug],
+                    $relativeSource,
+                    Relayer::NATIVE_BIN_DIR,
+                    $slug,
+                ));
+
+                return 1;
+            }
+            $slugSources[$slug] = $relativeSource;
+
+            if ($hasMiddleware && NativeSlug::MIDDLEWARE === $slug) {
                 $write(\sprintf(
                     '%s would be built to the same binary as %s (%s/%s). Rename the route.',
                     $relativeSource,

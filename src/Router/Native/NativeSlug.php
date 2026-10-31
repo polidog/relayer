@@ -13,7 +13,8 @@ namespace Polidog\Relayer\Router\Native;
  * cannot drift. `/api/users/[id]` becomes `api__users__[id]`: segments
  * joined with `__`, bracketed params kept (they are legal in a file name
  * and keep the listing readable), anything outside `[A-Za-z0-9_.\-\[\]]`
- * folded to `_`.
+ * folded to `_`. That folding is lossy (`/a/b` and `/a__b` share a slug), so
+ * `relayer native:build` refuses routes whose slugs collide.
  */
 final class NativeSlug
 {

@@ -22,7 +22,8 @@ use Psr\Log\LoggerInterface;
  *    `Relayer-Rewrite-Path: /other` (one) and
  *    `Relayer-Request-Header-<Name>: value` (any number — added to or
  *    replacing request headers). Every other response header (`Set-Cookie`,
- *    `X-*`, …) is **merged into the final response**: it is emitted with
+ *    `X-*`, …) except `Content-Type` / `Content-Length`, which describe the
+ *    ignored body, is **merged into the final response**: it is emitted with
  *    `header()` before the route runs, which is how pages and API routes
  *    write theirs too (the Next.js `NextResponse.next({ headers })`
  *    shape).
@@ -53,6 +54,13 @@ final class NativeProxy
 
     /** Environment variable: the pattern the request would match, or empty. */
     public const ENV_MATCHED_PATTERN = 'RELAYER_MATCHED_PATTERN';
+
+    /**
+     * Describe the proxy's own (ignored) body, so they are never merged on
+     * continue. Go's `net/http/cgi` adds `Content-Type: text/plain` to every
+     * empty response; merged, it would relabel the HTML page that follows.
+     */
+    private const BODY_HEADERS = ['content-type', 'content-length'];
 
     /** Every `Relayer-*` header is protocol, never output. */
     private const PROTOCOL_PREFIX = 'relayer-';
@@ -159,7 +167,7 @@ final class NativeProxy
                 continue;
             }
 
-            if (\str_starts_with($lower, self::PROTOCOL_PREFIX)) {
+            if (\str_starts_with($lower, self::PROTOCOL_PREFIX) || \in_array($lower, self::BODY_HEADERS, true)) {
                 continue;
             }
 
