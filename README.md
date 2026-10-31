@@ -220,12 +220,16 @@ with the standard Symfony cascade:
 4. `.env.{APP_ENV}.local`  — per-environment local overrides (gitignored)
 
 Missing files are skipped silently. Variables already in `$_ENV` /
-`$_SERVER` / `getenv()` win over the base `.env`; the `.local` files
-override the committed counterparts.
+`$_SERVER` / `getenv()` (real environment variables) win over every one of
+these files, `.local` included; among the files, the `.local` ones override
+the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
-(including unset) treats the app as production: pre-compile with
-`vendor/bin/usephp compile src/Pages` during deploy.
+treats the app as production, as does `APP_ENV` being set nowhere: neither in
+the real environment nor in any of these files. The scaffolded `.env` sets
+`APP_ENV=dev`, so unsetting the real variable is not enough to leave dev mode.
+In production, pre-compile with `vendor/bin/usephp compile src/Pages` during
+deploy.
 
 ## Routing & Pages
 
@@ -284,8 +288,10 @@ vendor/bin/relayer routes:compile                     # route map -> PHP
 vendor/bin/relayer container:compile                  # DI container -> PHP
 ```
 
-Then run with `APP_ENV` unset and OPcache `validate_timestamps=0` (the
-scaffolded `php.ini` carries the production block). Each step is
+Then set `APP_ENV=prod`, in `.env.local` or as a real environment variable,
+and run with OPcache `validate_timestamps=0` (the scaffolded `php.ini` carries
+the production block). Leaving `APP_ENV` unset does not select production: the
+scaffolded `.env` sets `APP_ENV=dev`, which exposes `/_profiler`. Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
 
