@@ -512,6 +512,23 @@ final class AppRouter
             'layoutPaths' => $match->getLayoutPaths(),
         ]);
 
+        // Decided here — after the middleware, so a CORS preflight is still
+        // answered by it — and before any layout or page code runs.
+        $method = $this->request()->method;
+        if ('OPTIONS' === $method) {
+            // Same auto `OPTIONS` as a `route.php` without an explicit handler.
+            Response::noContent(204)->withHeader('Allow', 'GET, HEAD, OPTIONS, POST')->send();
+
+            return;
+        }
+        if (!\in_array($method, ['GET', 'HEAD', 'POST'], true)) {
+            if (!\headers_sent()) {
+                \header('Allow: GET, HEAD, POST');
+            }
+
+            throw new HttpException(405);
+        }
+
         $layoutStack = $this->loadLayouts($match->getLayoutPaths(), $match->getParams());
 
         $pageComponent = $this->loadPage($match->getPagePath(), $match->getParams());

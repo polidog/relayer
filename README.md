@@ -240,7 +240,7 @@ the Next.js App Router. The conventions:
 | -------------------- | ------------------------------------------------------------------- |
 | `page.psx`           | Renders the route. One per directory.                               |
 | `layout.psx`         | Wraps every nested page; layouts stack from root to leaf.           |
-| `error.psx`          | Error page for 404 / `$ctx->abort()` / auth `401`+`403` (root only). |
+| `error.psx`          | Error page for 404 / 405 / `$ctx->abort()` / auth `401`+`403` (root only). |
 | `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
 | `(group)/`           | Route group: organises files without adding a URL segment. May hold its own `layout.psx`. |
@@ -436,12 +436,12 @@ src/Pages/
 ### Error pages
 
 A root `error.psx` (extending `ErrorPageComponent`) renders error responses
-inside the root layout — an unmatched route (404), every `$ctx->abort()`
-status, and the `401` / `403` from `#[Auth]` / `$ctx->requireAuth()`. If the
-root layout itself fails an auth guard or aborts while rendering the error,
-`error.psx` renders without it; if `error.psx` fails the same way, the default
-document is used. The status is unchanged either way. It receives the status
-and message via `ErrorPageComponent`, so one
+inside the root layout — an unmatched route (404), an unsupported method on a
+page (405), every `$ctx->abort()` status, and the `401` / `403` from `#[Auth]` /
+`$ctx->requireAuth()`. If the root layout itself fails an auth guard or aborts
+while rendering the error, `error.psx` renders without it; if `error.psx` fails
+the same way, the default document is used. The status is unchanged either way.
+It receives the status and message via `ErrorPageComponent`, so one
 `error.psx` can branch on `getStatusCode()` for a 404 vs. 403 vs. 500 page.
 Without one, the framework emits a minimal default document.
 
@@ -1084,7 +1084,12 @@ middleware  src/Pages/middleware.php  (php)
 ```
 
 Pages report `GET,POST` (POST is how server actions / `useState` reach a
-page); API routes list their declared methods, and native routes
+page). `HEAD` and `OPTIONS` are not listed, as for `route.php`: a page answers
+`HEAD` like `GET` without a body, and `OPTIONS` with `204` + `Allow: GET, HEAD,
+OPTIONS, POST` without running page code. Any other method gets `405` + `Allow:
+GET, HEAD, POST`, rendered by `error.psx`. Both are decided after the root
+middleware, so a CORS preflight is still answered by `Cors::middleware()`. API
+routes list their declared methods, and native routes
 (`route.go`) the `func GET` & co. found by a text scan — no build needed.
 A `route.php` that fails to load, or a `route.go` that declares no
 handler, is shown as `?` with a warning line, not silently hidden. The
