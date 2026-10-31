@@ -507,7 +507,9 @@ return [
 ```
 
 - ページと同じ `src/Pages/` 配下に置き、動的セグメント `[param]` も同じ規約
-  （`$ctx->params['id']` で取得）。1 ディレクトリはページ **か** ルートの
+  （`$ctx->params['id']` で取得）。params はパーセントデコードを 1 回行った
+  値です（`a%20b` → `a b`、`a%2Fb` → `a/b` で 1 セグメントのまま）。信頼できない
+  文字列として扱ってください。1 ディレクトリはページ **か** ルートの
   どちらか一方（両方あるとスキャナがエラーにします）。
 - ハンドラは **必ず `Response` を返します**。`Response::json($data,
   $status, $headers)`（JSON 化＋`Content-Type: application/json`、スラッシュ
@@ -813,6 +815,12 @@ return function (Request $request, Closure $next): void {
   エンドポイントは意図的にこの外で動きます —— それらも覆う必要があるもの
   （オリジン保護）は、同じクロージャを受け取ってすべての前に走る
   `AppRouter::setGuard()` に置きます（後述）。
+- `$request->path` は 1 つのルートにつき 1 つの表記になります。`/%61dmin` も
+  `/admin/` も `/admin` として届きます。パーセントエンコードは残るので、
+  非 ASCII のパスは `$request->decodedPath()` で比較します:
+  `str_starts_with($request->decodedPath(), '/管理')`。ドットセグメント
+  （`..`、`%2e%2e`、`..%2Fx`）、制御文字（`%00`、`%0A`）、不正な UTF-8、
+  不正なエスケープを含むパスはどのルートにもマッチしません（404）。
 
 **CORS** は同梱ミドルウェアとして提供 — 提供実装は 1 個で、別系統では
 ありません:
@@ -1436,7 +1444,8 @@ return function (PageContext $ctx, Request $req): Closure {
 | メソッド                     | 戻り値                                            |
 | ---------------------------- | ------------------------------------------------- |
 | `$req->method`               | 大文字化済み HTTP メソッド                        |
-| `$req->path`                 | クエリ文字列を除いたパス                          |
+| `$req->path`                 | クエリ文字列を除いたパス（パーセントエンコードされた正規の表記） |
+| `$req->decodedPath()`        | `$req->path` をデコードした値。比較用（例: `/日本語`） |
 | `$req->uri()`                | クエリ文字列込みの生のリクエスト URI              |
 | `$req->isGet()` / `isPost()` | `bool`                                            |
 | `$req->isMethod('PUT')`      | `bool`                                            |

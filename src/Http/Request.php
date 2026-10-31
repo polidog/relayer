@@ -59,7 +59,7 @@ final readonly class Request
 
         $uri = \is_string($_SERVER['REQUEST_URI'] ?? null) ? $_SERVER['REQUEST_URI'] : '/';
         $parsed = \parse_url($uri, \PHP_URL_PATH);
-        $path = \is_string($parsed) && '' !== $parsed ? $parsed : '/';
+        $path = RequestPath::canonicalize(\is_string($parsed) && '' !== $parsed ? $parsed : '/');
 
         $headers = [];
         foreach ($_SERVER as $key => $value) {
@@ -104,12 +104,22 @@ final readonly class Request
 
     /**
      * The verbatim request URI, query string included — what a form posts
-     * back to and what the profiler records. {@see $path} is the same value
-     * with the query string stripped.
+     * back to and what the profiler records. {@see $path} is the same path
+     * without the query string, percent-encoded in its canonical spelling
+     * ({@see RequestPath::canonicalize()}).
      */
     public function uri(): string
     {
         return $this->uri ?? $this->path;
+    }
+
+    /**
+     * {@see $path} decoded, for comparing against a non-ASCII path in
+     * middleware: `str_starts_with($req->decodedPath(), '/管理')`.
+     */
+    public function decodedPath(): string
+    {
+        return RequestPath::decode($this->path);
     }
 
     public function isMethod(string $method): bool
