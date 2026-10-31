@@ -52,6 +52,10 @@ $document = HtmlDocument::create()
     ->addHeadHtml(Island::loaderScript())
     ->addHeadHtml('<script type="module" src="/islands.js"></script>');
 
+// The origin guard and trusted-proxy resolution are wired by the
+// framework from the environment (ORIGIN_SECRET / TRUSTED_PROXIES …, see
+// .env) as the router guard — which runs before everything, /_defer and
+// the profiler included — so there is nothing to compose here.
 Relayer::boot(__DIR__ . '/..')
     ->setDocument($document)
     ->run();

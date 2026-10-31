@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests;
 
+use Closure;
 use LogicException;
 use Monolog\Logger;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\AppConfigurator;
 use Polidog\Relayer\Http\Client\CachingHttpClient;
 use Polidog\Relayer\Http\Client\HttpClient;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Log\TraceableLogger;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
@@ -36,7 +38,14 @@ final class RelayerBootTest extends TestCase
     protected function tearDown(): void
     {
         $this->rrmdir($this->projectRoot);
-        unset($_ENV['APP_ENV'], $_ENV['FRAMEWORK_TEST_VALUE'], $_SERVER['APP_ENV'], $_SERVER['FRAMEWORK_TEST_VALUE']);
+        unset(
+            $_ENV['APP_ENV'],
+            $_ENV['FRAMEWORK_TEST_VALUE'],
+            $_ENV['ORIGIN_SECRET'],
+            $_SERVER['APP_ENV'],
+            $_SERVER['FRAMEWORK_TEST_VALUE'],
+            $_SERVER['ORIGIN_SECRET'],
+        );
         (new ReflectionProperty(Relayer::class, 'container'))->setValue(null, null);
     }
 
@@ -112,6 +121,34 @@ final class RelayerBootTest extends TestCase
         // Logger), so asserting the concrete Monolog Logger here proves
         // prod is unwrapped — the decorator is skipped entirely.
         self::assertInstanceOf(Logger::class, $container->get(LoggerInterface::class));
+    }
+
+    public function testBootInstallsTheOriginGuardFromEnv(): void
+    {
+        \file_put_contents($this->projectRoot . '/.env', "APP_ENV=dev\nORIGIN_SECRET=s3cret\n");
+        \http_response_code(200);
+
+        $router = Relayer::boot($this->projectRoot);
+
+        $guard = (new ReflectionProperty(AppRouter::class, 'guard'))->getValue($router);
+        self::assertInstanceOf(Closure::class, $guard, 'ORIGIN_SECRET must install a router guard');
+
+        $reached = false;
+        \ob_start();
+        $guard(new Request(method: 'GET', path: '/'), static function () use (&$reached): void {
+            $reached = true;
+        });
+        \ob_end_clean();
+        self::assertFalse($reached);
+        self::assertSame(403, \http_response_code());
+        \http_response_code(200);
+    }
+
+    public function testBootInstallsNoGuardWhenNothingIsConfigured(): void
+    {
+        $router = Relayer::boot($this->projectRoot);
+
+        self::assertNull((new ReflectionProperty(AppRouter::class, 'guard'))->getValue($router));
     }
 
     public function testBootWithoutEnvFileDoesNotFail(): void

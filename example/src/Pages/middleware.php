@@ -11,6 +11,11 @@ use Polidog\Relayer\Http\Request;
 // response with a request id, then delegate to the provided CORS
 // middleware (which answers OPTIONS preflights itself and otherwise
 // continues to the route).
+//
+// The origin guard and trusted-proxy resolution are NOT here: this file
+// wraps route dispatch only, and the deferred-component endpoint
+// (`/_defer/{name}`) runs before it. They are installed as the router
+// guard in public/index.php, which runs before everything.
 $cors = Cors::middleware([
     'origins' => ['*'],
     'methods' => ['GET', 'POST', 'OPTIONS'],

@@ -17,7 +17,10 @@
 - React アイランド (`Island::mount()`) — リッチ UI 用の脱出ハッチ。
   サーバ描画シェル＋クライアント React、props は PHP から、バンドルは自前
 - 任意のルートミドルウェア (`src/Pages/middleware.php`) が全ディスパッチを
-  ラップ。同梱の `Cors` ミドルウェアも提供
+  ラップ。同梱ミドルウェアとして `Cors`・`OriginGuard`（CDN を迂回した
+  リクエストの拒否）・`TrustedProxy`（プロキシ配下の実クライアント IP）を提供。
+  後者 2 つは `.env`（`ORIGIN_SECRET`・`TRUSTED_PROXIES`）からすべての前に走る
+  ルーター guard として自動配線
 - CSRF 保護付きサーバアクション（`$ctx->action()` /
   `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -655,7 +658,9 @@ return function (Request $request, Closure $next): void {
   ときは手で合成: `fn ($r, $next) => $a($r, fn ($r) => $b($r, $next))`。
 - リクエストごとに `require`（`route.php` 同様、宣言を置かない契約）。
   クロージャ以外を返すと明確なエラー。フレームワークの defer/profiler
-  エンドポイントは意図的にこの外で動きます。
+  エンドポイントは意図的にこの外で動きます —— それらも覆う必要があるもの
+  （オリジン保護）は、同じクロージャを受け取ってすべての前に走る
+  `AppRouter::setGuard()` に置きます（後述）。
 
 **CORS** は同梱ミドルウェアとして提供 — 提供実装は 1 個で、別系統では
 ありません:
@@ -675,6 +680,162 @@ return Cors::middleware([
 `Access-Control-Allow-Origin` を付与します。`credentials: true` と
 `origins: ['*']` の併用時はリクエスト Origin を反映します（仕様上 `*` と
 credentials は併用不可のため）。
+
+#### オリジン保護と trusted proxy（CDN の裏で動かす）
+
+Cloudflare やリバースプロキシの裏で動くアプリが毎回手書きしている 2 つ ——
+**CDN を迂回したリクエストを弾く** ことと **実クライアント IP を取り戻す**
+こと —— を同梱ミドルウェアで提供します。どちらも `Cors` と同じ
+`fn(Request, $next)` クロージャです。
+
+**配線はフレームワークが環境変数から行います。** `DATABASE_DSN` を置けば
+Db 層が組まれるのと同じで、`Relayer::boot()` が次の変数を読み、結果をルーターの
+**guard** —— deferred コンポーネントのエンドポイント（`/_defer/{name}`）・dev
+プロファイラ・`middleware.php` の **すべての前に**走るフック —— として設定
+します。何も設定しなければ何も入りません:
+
+```bash
+ORIGIN_SECRET=<長いランダム値>        # OriginGuard を有効化
+ORIGIN_SECRET_PREVIOUS=<旧値>         # ローテーション中はこれも受け付ける
+ORIGIN_GUARD_HEADER=X-Origin-Secret   # 既定値
+ORIGIN_GUARD_EXCEPT=/healthz,/_health/*   # 完全一致、または `/prefix/*`
+ORIGIN_GUARD_MODE=enforce             # または report
+
+TRUSTED_PROXIES=fdaa::/16             # TrustedProxy を有効化（CIDR のカンマ区切り）
+TRUSTED_PROXY_PRESET=fly              # fly | cloudflare | xff（既定）
+CLOUDFLARE_IP_RANGES=173.245.48.0/20,…  # 前段の後ろに Cloudflare レイヤーを足す（chain 参照）
+```
+
+オリジン保護を `middleware.php` に置いてはいけません。そこが包むのはルート
+ディスパッチだけで、defer / profiler のエンドポイントはその前に動くため、
+`/_defer/{name}` を直接叩けば迂回できてしまいます。自分で合成したい場合は
+`AppRouter::setGuard()` が同じ `fn(Request, $next)` クロージャを受け取り、
+環境変数から組まれたものを置き換えます:
+
+```php
+<?php
+// public/index.php
+use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Relayer;
+use Psr\Log\LoggerInterface;
+
+Relayer::boot(__DIR__ . '/..')
+    ->setGuard(OriginGuard::middleware([
+        'header'         => 'X-Origin-Secret',                 // 既定値
+        'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+        'except'         => ['/healthz'],                      // 完全一致、または `/prefix/*`
+        'mode'           => 'enforce',                         // または 'report'
+        'logger'         => Relayer::container()->get(LoggerInterface::class), // 任意
+    ]))
+    ->run();
+```
+
+**`OriginGuard`** は、CDN が転送時に付与するシークレットヘッダーを検証し、
+無い・一致しないリクエストに `403` を返します:
+
+- **デフォルトは無効** —— 空でないシークレットが 1 つも無ければ素通しなので、
+  ローカルの `php -S` や CI が突然 403 だらけになることはありません。
+- `secretsFromEnv` にはシークレットが入っている環境変数名を書きます。
+  フレームワーク自身の設定と同じ順（`$_ENV` → `$_SERVER` → `getenv()`、
+  trim 済み）で読むので、`.env.local` でも `fly secrets` の実環境変数でも
+  `variables_order` に関係なく効き、`fly secrets import` で末尾に改行が
+  入っても全リクエストが 403 になることはありません。空のものは無視します。
+  値を手元に持っているなら `secrets` に直接渡すこともできます。
+- どちらも複数書けます。ローテーション中は新旧両方の変数名を書いておけば
+  どちらも通ります。各候補は `hash_equals` で比較します。
+- `except` は、ヘッダー無しで来るのが正しいパス（プラットフォームの
+  ヘルスチェック）をチェック対象から外します。
+- `mode: 'report'` は拒否せず「拒否されるはずだった」ことをログに出して
+  通します —— `enforce` に切り替える前の様子見に使ってください。
+- ログ（両モード共通の PSR-3 `warning` 1 本。context の `outcome` が
+  `rejected` / `reported`。渡した DI ロガー、無ければ SAPI のエラーログ）
+  に出るのはメソッド / パス / クライアント IP だけで、設定したシークレットも
+  クライアントが送ってきた値も決して出しません。IP は `clientIp()` なので、
+  `TrustedProxy` がガードの外側で動く（`boot()` の配線順）と、迂回の試みが
+  実際の発信元で記録されます。
+- シークレットは環境変数で渡してください（`fly secrets set`、gitignore 済みの
+  `.env.local`）。コミットする設定ファイルに直書きしないこと。
+
+**`TrustedProxy`** は転送ヘッダーからクライアント IP を解決しますが、直前の
+ホップ（`REMOTE_ADDR`）が信頼するプロキシのときだけです。結果は
+`$request->clientIp()` で取れます。`$request->ip()` は **変わらず**
+`REMOTE_ADDR` を返し続け、`clientIp()` は何も解決されなければ `ip()` に
+フォールバックするので、ページ側は無条件に呼べます。
+
+```php
+use Polidog\Relayer\Http\TrustedProxy;
+
+// 前段が Cloudflare: CF-Connecting-IP。Cloudflare の IP レンジから来たときだけ信頼。
+// レンジは同梱しません（変わるため）—— https://www.cloudflare.com/ips-v4 と
+// /ips-v6 を取得して渡してください。
+TrustedProxy::middleware(['preset' => 'cloudflare', 'proxies' => $cloudflareRanges]);
+
+// Fly.io: Fly-Client-IP。Fly のプライベートネットワーク（6PN）から来たときだけ信頼。
+TrustedProxy::middleware(['preset' => 'fly', 'proxies' => ['fdaa::/16']]);
+
+// 自前のプロキシ: X-Forwarded-For を右から辿り、自分のプロキシを読み飛ばす。
+TrustedProxy::middleware(['preset' => 'xff', 'proxies' => ['10.0.0.0/8']]);
+
+// 任意の単一 IP ヘッダー（`preset` と `header` は同時指定不可）。
+TrustedProxy::middleware(['header' => 'X-Real-IP', 'proxies' => ['192.0.2.1']]);
+```
+
+- `proxies` は **必須** です。要素は単一アドレスか CIDR（IPv4 / IPv6。
+  `[::]` で listen するサーバーが IPv4 ピアを `::ffff:a.b.c.d` で報告する
+  IPv4-mapped アドレスは IPv4 レンジにマッチします）。不正なレンジは決して
+  マッチしません —— タイポが「全員を信頼」に化けることはありません。
+- 信頼しないホップから来たヘッダーや、IP として不正な値は無視します。
+- ホップ検証を省略できるのは明示的な `'trustAnyHop' => true` だけで、
+  プロセスへの経路がそのプロキシ 1 本しかないと証明できる場合に限ります。
+  直接到達できるサーバーで設定してはいけません —— 誰でも
+  `Fly-Client-IP: 127.0.0.1` を送るだけで IP 許可リストを通過できます。
+
+**多段プロキシ（`chain`）。** Cloudflare → Fly 構成では、ホップは Fly、
+`Fly-Client-IP` は *Cloudflare の*接続元 IP
+（[Fly のリクエストヘッダー仕様](https://fly.io/docs/networking/request-headers/)）
+で、利用者は `CF-Connecting-IP` に入っています。プリセット 1 つだけでは
+Cloudflare の IP が `clientIp()` に入り、利用者単位のレート制限が Cloudflare
+のエッジ IP 単位に潰れてしまいます。レイヤーを外側ほど後に並べると、各レイヤー
+は「ここまでに解決したアドレスがそのレイヤーのプロキシである」ときだけ適用
+され、最後に検証できたアドレスがクライアントになります:
+
+```php
+TrustedProxy::middleware(['chain' => [
+    ['preset' => 'fly',        'proxies' => ['fdaa::/16']],
+    ['preset' => 'cloudflare', 'proxies' => $cloudflareRanges],
+]]);
+```
+
+`xxx.fly.dev` へ直接来たリクエストは呼び出し元自身のアドレスに解決され
+（Fly レイヤーは適用、Cloudflare レイヤーは不適用）、Cloudflare 以外から
+来た偽の `CF-Connecting-IP` は無視されます。
+
+**レシピ: Cloudflare + Fly.io。**
+
+1. Cloudflare → Rules → Transform Rules → *Modify Request Header* で、
+   ゾーンに対して `X-Origin-Secret` に長いランダム値を設定する。
+2. シークレットと信頼チェーンをアプリに渡す —— PHP は書かない:
+
+```bash
+fly secrets set \
+  ORIGIN_SECRET=<その値> \
+  ORIGIN_GUARD_EXCEPT=/healthz \
+  TRUSTED_PROXIES=fdaa::/16 \
+  TRUSTED_PROXY_PRESET=fly \
+  CLOUDFLARE_IP_RANGES="$(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6 | paste -sd,)"
+```
+
+   ローテーションは新しい `ORIGIN_SECRET` に加えて `ORIGIN_SECRET_PREVIOUS=<旧値>`
+   を設定し、後で後者を外す。`Relayer::boot()` は `fly → cloudflare` の
+   TrustedProxy チェーンを OriginGuard の外側に置いてルーターの guard に組み込む
+   ので、`/_defer/*` とプロファイラも覆われ、直叩きの拒否ログには Fly Proxy の
+   アドレスではなく実際の発信元 IP が残ります。
+
+3. 確認: `curl -I https://<app>.fly.dev/` が `403`、独自ドメイン（Cloudflare
+   経由）が `200`、`/healthz` はどちらからでも `200` になること。
+
+`Cors` は従来どおり `src/Pages/middleware.php` に置きます。`example/`
+アプリは `.env.local` にこれらを設定するまでは無効のまま動きます。
 
 ### ルート確認
 
@@ -1054,6 +1215,7 @@ return function (PageContext $ctx, Request $req): Closure {
 | `$req->file($name)`          | `?UploadedFile` (`name[]` のフィールドは null)    |
 | `$req->files()`              | `array<string, UploadedFile\|list<UploadedFile>>` |
 | `$req->ip()`                 | `?string` — サーバが報告した `REMOTE_ADDR`        |
+| `$req->clientIp()`           | `?string` — `TrustedProxy` が解決した IP、無ければ `ip()` |
 | `$req->host()` / `scheme()`  | `?string` / `'http'\|'https'`                     |
 | `$req->url()`                | `?string` — このリクエストの絶対 URL              |
 
@@ -1100,8 +1262,9 @@ if (null !== $avatar && $avatar->isValid()) {
 `error` と、`isValid()` / `contents()` / `moveTo()` を持ちます
 (`moveTo()` は本物のアップロード以外を拒否します)。`ip()` は
 `REMOTE_ADDR` のみを返します — `X-Forwarded-For` はクライアントが
-自由に送れるので、信頼できるプロキシ配下だと分かっている場合に
-`$req->header()` で自分で読んでください。
+自由に送れるためです。信頼できるプロキシ配下では `TrustedProxy`
+（ミドルウェア節参照）を配線し、`clientIp()` を読んでください（何も解決
+されなければ `ip()` にフォールバックします）。
 
 ## 認証
 

@@ -14,6 +14,7 @@ use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
+use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Http\Response;
 use Polidog\Relayer\I18n\LocaleResolver;
@@ -116,6 +117,9 @@ final class AppRouter
 
     /** @var list<string> */
     private array $userExcludedProfilerPrefixes = [];
+
+    /** @var null|Closure(Request, Closure): void */
+    private ?Closure $guard = null;
 
     public function __construct(
         string $appDirectory,
@@ -256,9 +260,58 @@ final class AppRouter
         return $this->usephp;
     }
 
+    /**
+     * A middleware that runs before EVERYTHING in {@see run()} — the dev
+     * profiler viewer, deferred component fetches (`/_defer/{name}`) and the
+     * root `middleware.php` alike — so a request it refuses never reaches
+     * any framework-owned endpoint. Same contract as `middleware.php`:
+     * `fn(Request $request, Closure $next): void`; call `$next($request)`
+     * (optionally with a substituted Request) to continue, or don't.
+     *
+     * This is where an origin guard belongs: `middleware.php` wraps route
+     * dispatch only and is deliberately bypassed by the defer / profiler
+     * endpoints, so a guard placed there can be sidestepped by requesting
+     * `/_defer/{name}` directly.
+     *
+     * `Relayer::boot()` installs one from the environment (`ORIGIN_SECRET`,
+     * `TRUSTED_PROXIES` — see {@see GuardFactory});
+     * calling this replaces it with your own composition:
+     *
+     *   Relayer::boot(__DIR__ . '/..')
+     *       ->setGuard(OriginGuard::middleware([...]))
+     *       ->run();
+     *
+     * @param Closure(Request, Closure): void $guard
+     */
+    public function setGuard(Closure $guard): self
+    {
+        $this->guard = $guard;
+
+        return $this;
+    }
+
     public function run(): void
     {
-        $path = $this->readPath();
+        // Build the request snapshot once; the guard (if any) sees it first
+        // and may hand a substituted one to the dispatch below.
+        $request = Request::fromGlobals();
+
+        if (null === $this->guard) {
+            $this->dispatchRequest($request);
+
+            return;
+        }
+
+        ($this->guard)($request, function (Request $request): void {
+            $this->dispatchRequest($request);
+        });
+    }
+
+    private function dispatchRequest(Request $request): void
+    {
+        // The guard may have substituted the Request: route by what it
+        // handed us, not by a fresh read of the superglobals.
+        $path = $request->path;
 
         // Dev profiler viewer — only when storage is bound (dev only).
         // Intercepted BEFORE beginProfile so visiting the viewer does
@@ -277,10 +330,10 @@ final class AppRouter
         // the inline fetch wrapper on the parent page can forward it
         // back on any `<X defer />` fetch (and so HTTP-inspector tooling
         // can deep-link to /_profiler/<token>).
-        // Build a snapshot of the request once per dispatch and stash it so
-        // page factories / page constructors can be injected with it by type
-        // — pages should never read $_GET / $_POST / $_SERVER directly.
-        $request = $this->currentRequest = Request::fromGlobals();
+        // Stash the request snapshot so page factories / page constructors
+        // can be injected with it by type — pages should never read $_GET /
+        // $_POST / $_SERVER directly.
+        $this->currentRequest = $request;
         if ($this->container instanceof InjectorContainer) {
             $this->container->setCurrentRequest($this->currentRequest);
         }
@@ -1817,16 +1870,6 @@ final class AppRouter
         }
 
         return \preg_match(self::PROFILER_TOKEN_PATTERN, $raw) ? $raw : null;
-    }
-
-    /**
-     * The request path (no query string) — what the `/_profiler` viewer
-     * gate matches against, and what the profiler excluded-prefix list
-     * compares.
-     */
-    private function readPath(): string
-    {
-        return $this->request()->path;
     }
 
     /**

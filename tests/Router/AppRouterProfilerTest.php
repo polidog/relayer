@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router;
 
+use Closure;
 use PHPUnit\Framework\TestCase;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Profiler\NullProfiler;
 use Polidog\Relayer\Profiler\RecordingProfiler;
 use Polidog\Relayer\Router\AppRouter;
@@ -80,6 +82,26 @@ final class AppRouterProfilerTest extends TestCase
         // router served the view instead of attempting normal dispatch.
         self::assertSame(200, \http_response_code());
         self::assertStringContainsString('Profiler', $output);
+    }
+
+    public function testGuardRunsBeforeTheProfilerViewer(): void
+    {
+        // The viewer is intercepted before everything else in run(); the
+        // guard must still come first so it cannot be reached around an
+        // origin guard.
+        $storage = new InMemoryProfilerStorage();
+        $router = AppRouter::create($this->workDir)
+            ->setProfiler(new RecordingProfiler($storage), $storage)
+            ->setGuard(static function (Request $request, Closure $next): void {
+                \http_response_code(403);
+                echo 'guarded ' . $request->path;
+            })
+        ;
+
+        $output = $this->dispatch($router, '/_profiler', 'GET');
+
+        self::assertSame(403, \http_response_code());
+        self::assertSame('guarded /_profiler', $output);
     }
 
     public function testProfilerDetailReturns404ForUnknownToken(): void

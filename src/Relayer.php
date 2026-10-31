@@ -6,6 +6,7 @@ namespace Polidog\Relayer;
 
 use LogicException;
 use Polidog\Relayer\Di\ContainerFactory;
+use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\Profiler;
@@ -20,6 +21,7 @@ use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Symfony\Component\Dotenv\Dotenv;
 
@@ -230,13 +232,34 @@ final class Relayer
         if (null !== $profiler) {
             $router->setProfiler($profiler, self::resolveProfilerStorage($psr));
 
-            $extraExcludes = self::readEnvList('PROFILER_EXCLUDED_PATHS');
+            $extraExcludes = Env::readList('PROFILER_EXCLUDED_PATHS');
             if ([] !== $extraExcludes) {
                 $router->setProfilerExcludedPrefixes($extraExcludes);
             }
         }
 
+        // Origin guard / trusted proxy from the environment (ORIGIN_SECRET,
+        // TRUSTED_PROXIES, …) — see GuardFactory. Installed as the router
+        // guard so it also covers the defer + profiler endpoints. Nothing
+        // set → nothing installed; `->setGuard()` on the returned router
+        // replaces it.
+        $guard = GuardFactory::fromEnv(self::resolveLogger($psr));
+        if (null !== $guard) {
+            $router->setGuard($guard);
+        }
+
         return $router;
+    }
+
+    private static function resolveLogger(InjectorContainer $psr): ?LoggerInterface
+    {
+        if (!$psr->has(LoggerInterface::class)) {
+            return null;
+        }
+
+        $logger = $psr->get(LoggerInterface::class);
+
+        return $logger instanceof LoggerInterface ? $logger : null;
     }
 
     /**
@@ -353,17 +376,14 @@ final class Relayer
 
     private static function resolveSnapshotSecret(string $projectRoot, bool $isDev): string
     {
-        $explicit = $_ENV['USEPHP_SNAPSHOT_SECRET']
-            ?? $_SERVER['USEPHP_SNAPSHOT_SECRET']
-            ?? \getenv('USEPHP_SNAPSHOT_SECRET');
-
-        // Trim before return — secrets sourced from files often pick up a
-        // trailing newline. Without normalizing here, the HMAC would silently
+        // Env::read() trims — secrets sourced from files often pick up a
+        // trailing newline. Without normalizing, the HMAC would silently
         // diverge from the value an operator pasted into a .env file, and
         // every snapshot signature would fail verification with no obvious
         // cause.
-        if (\is_string($explicit) && '' !== \trim($explicit)) {
-            return \trim($explicit);
+        $explicit = Env::read('USEPHP_SNAPSHOT_SECRET');
+        if (null !== $explicit) {
+            return $explicit;
         }
 
         if (!$isDev) {
@@ -380,30 +400,6 @@ final class Relayer
         // work immediately. The project root path is unique to the checkout,
         // so two devs on the same machine don't share a key by accident.
         return 'relayer-dev:' . \hash('sha256', $projectRoot);
-    }
-
-    /**
-     * Read a comma-separated env var into a normalized list. Empty entries
-     * are dropped. Returns `[]` when the var is unset or empty.
-     *
-     * @return list<string>
-     */
-    private static function readEnvList(string $name): array
-    {
-        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
-        if (!\is_string($raw) || '' === \trim($raw)) {
-            return [];
-        }
-
-        $out = [];
-        foreach (\explode(',', $raw) as $entry) {
-            $entry = \trim($entry);
-            if ('' !== $entry) {
-                $out[] = $entry;
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -427,7 +423,7 @@ final class Relayer
 
     private static function isDev(): bool
     {
-        $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? \getenv('APP_ENV') ?: 'prod';
+        $env = Env::read('APP_ENV') ?? 'prod';
 
         return 'dev' === $env || 'development' === $env;
     }
@@ -453,12 +449,12 @@ final class Relayer
      */
     private static function isWarmEnabled(): bool
     {
-        $raw = $_ENV['RELAYER_WARM_CACHE'] ?? $_SERVER['RELAYER_WARM_CACHE'] ?? \getenv('RELAYER_WARM_CACHE');
+        $raw = Env::read('RELAYER_WARM_CACHE');
 
-        if (!\is_string($raw)) {
+        if (null === $raw) {
             return false;
         }
 
-        return \in_array(\strtolower(\trim($raw)), ['1', 'true', 'yes', 'on'], true);
+        return \in_array(\strtolower($raw), ['1', 'true', 'yes', 'on'], true);
     }
 }

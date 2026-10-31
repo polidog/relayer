@@ -16,22 +16,25 @@ use JsonException;
 final readonly class Request
 {
     /**
-     * @param array<string, mixed>                           $query   parsed query parameters
-     * @param array<string, mixed>                           $post    parsed form body
-     * @param array<string, string>                          $headers header names lowercased
-     * @param array<string, string>                          $cookies request cookies
-     * @param null|string                                    $locale  locale resolved for this request
-     *                                                                (set by the framework once the
-     *                                                                LocaleResolver has run; null when
-     *                                                                i18n is not configured)
-     * @param null|string                                    $uri     verbatim request URI including the
-     *                                                                query string; defaults to `path`
-     * @param array<string, list<UploadedFile>|UploadedFile> $files   normalized upload table
-     * @param null|string                                    $body    raw request body; null reads
-     *                                                                `php://input` on demand
-     * @param null|string                                    $ip      client IP as the server reported it
-     * @param null|string                                    $host    request host including any port
-     * @param null|string                                    $scheme  `http` or `https`
+     * @param array<string, mixed>                           $query    parsed query parameters
+     * @param array<string, mixed>                           $post     parsed form body
+     * @param array<string, string>                          $headers  header names lowercased
+     * @param array<string, string>                          $cookies  request cookies
+     * @param null|string                                    $locale   locale resolved for this request
+     *                                                                 (set by the framework once the
+     *                                                                 LocaleResolver has run; null when
+     *                                                                 i18n is not configured)
+     * @param null|string                                    $uri      verbatim request URI including the
+     *                                                                 query string; defaults to `path`
+     * @param array<string, list<UploadedFile>|UploadedFile> $files    normalized upload table
+     * @param null|string                                    $body     raw request body; null reads
+     *                                                                 `php://input` on demand
+     * @param null|string                                    $ip       client IP as the server reported it
+     * @param null|string                                    $host     request host including any port
+     * @param null|string                                    $scheme   `http` or `https`
+     * @param null|string                                    $clientIp client IP resolved by a trusted-proxy
+     *                                                                 middleware ({@see TrustedProxy}); null
+     *                                                                 when no proxy resolution has run
      */
     public function __construct(
         public string $method,
@@ -47,6 +50,7 @@ final readonly class Request
         private readonly ?string $ip = null,
         private readonly ?string $host = null,
         private readonly ?string $scheme = null,
+        private readonly ?string $clientIp = null,
     ) {}
 
     public static function fromGlobals(): self
@@ -193,6 +197,7 @@ final readonly class Request
             ip: $this->ip,
             host: $this->host,
             scheme: $this->scheme,
+            clientIp: $this->clientIp,
         );
     }
 
@@ -215,6 +220,32 @@ final readonly class Request
             ip: $this->ip,
             host: $this->host,
             scheme: $this->scheme,
+            clientIp: $this->clientIp,
+        );
+    }
+
+    /**
+     * A copy carrying the client IP a trusted-proxy middleware resolved from
+     * a forwarding header. {@see ip()} is untouched: it keeps reporting
+     * `REMOTE_ADDR`, so the two stay distinguishable in logs and tests.
+     */
+    public function withClientIp(string $clientIp): self
+    {
+        return new self(
+            method: $this->method,
+            path: $this->path,
+            query: $this->query,
+            post: $this->post,
+            headers: $this->headers,
+            cookies: $this->cookies,
+            locale: $this->locale,
+            uri: $this->uri,
+            files: $this->files,
+            body: $this->body,
+            ip: $this->ip,
+            host: $this->host,
+            scheme: $this->scheme,
+            clientIp: $clientIp,
         );
     }
 
@@ -320,11 +351,23 @@ final readonly class Request
      * Deliberately does NOT consult `X-Forwarded-For`: that header is
      * client-supplied and only trustworthy behind a proxy you control, so
      * honoring it by default would hand every caller a spoofable IP. Behind a
-     * trusted proxy, read `$request->header('x-forwarded-for')` yourself.
+     * proxy you control, wire the {@see TrustedProxy} middleware and read
+     * {@see clientIp()} instead.
      */
     public function ip(): ?string
     {
         return $this->ip;
+    }
+
+    /**
+     * The best-known client IP: the one a {@see TrustedProxy} middleware
+     * resolved from a forwarding header when it decided the immediate hop
+     * was trustworthy, otherwise plain {@see ip()}. Pages can call this
+     * unconditionally — without the middleware it is exactly `ip()`.
+     */
+    public function clientIp(): ?string
+    {
+        return $this->clientIp ?? $this->ip;
     }
 
     /**
