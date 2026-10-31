@@ -18,7 +18,9 @@
   サーバ描画シェル＋クライアント React、props は PHP から、バンドルは自前
 - 任意のルートミドルウェア (`src/Pages/middleware.php`) が全ディスパッチを
   ラップ。同梱ミドルウェアとして `Cors`・`OriginGuard`（CDN を迂回した
-  リクエストの拒否）・`TrustedProxy`（プロキシ配下の実クライアント IP）を提供
+  リクエストの拒否）・`TrustedProxy`（プロキシ配下の実クライアント IP）を提供。
+  後者 2 つは `.env`（`ORIGIN_SECRET`・`TRUSTED_PROXIES`）からすべての前に走る
+  ルーター guard として自動配線
 - CSRF 保護付きサーバアクション（`$ctx->action()` /
   `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -686,12 +688,29 @@ Cloudflare やリバースプロキシの裏で動くアプリが毎回手書き
 こと —— を同梱ミドルウェアで提供します。どちらも `Cors` と同じ
 `fn(Request, $next)` クロージャです。
 
-**置き場所はルーターの guard で、`middleware.php` ではありません。**
-`middleware.php` が包むのはルートディスパッチだけで、deferred コンポーネントの
-エンドポイント（`/_defer/{name}`）と dev プロファイラはその前に動きます。
-そこにオリジン保護を置いても `/_defer/{name}` を直接叩けば迂回できてしまい
-ます。`AppRouter::setGuard()` は同じ `fn(Request, $next)` クロージャを受け取り、
-**すべての前に**実行します:
+**配線はフレームワークが環境変数から行います。** `DATABASE_DSN` を置けば
+Db 層が組まれるのと同じで、`Relayer::boot()` が次の変数を読み、結果をルーターの
+**guard** —— deferred コンポーネントのエンドポイント（`/_defer/{name}`）・dev
+プロファイラ・`middleware.php` の **すべての前に**走るフック —— として設定
+します。何も設定しなければ何も入りません:
+
+```bash
+ORIGIN_SECRET=<長いランダム値>        # OriginGuard を有効化
+ORIGIN_SECRET_PREVIOUS=<旧値>         # ローテーション中はこれも受け付ける
+ORIGIN_GUARD_HEADER=X-Origin-Secret   # 既定値
+ORIGIN_GUARD_EXCEPT=/healthz,/_health/*   # 完全一致、または `/prefix/*`
+ORIGIN_GUARD_MODE=enforce             # または report
+
+TRUSTED_PROXIES=fdaa::/16             # TrustedProxy を有効化（CIDR のカンマ区切り）
+TRUSTED_PROXY_PRESET=fly              # fly | cloudflare | xff（既定）
+CLOUDFLARE_IP_RANGES=173.245.48.0/20,…  # 前段の後ろに Cloudflare レイヤーを足す（chain 参照）
+```
+
+オリジン保護を `middleware.php` に置いてはいけません。そこが包むのはルート
+ディスパッチだけで、defer / profiler のエンドポイントはその前に動くため、
+`/_defer/{name}` を直接叩けば迂回できてしまいます。自分で合成したい場合は
+`AppRouter::setGuard()` が同じ `fn(Request, $next)` クロージャを受け取り、
+環境変数から組まれたものを置き換えます:
 
 ```php
 <?php
@@ -793,44 +812,27 @@ TrustedProxy::middleware(['chain' => [
 
 1. Cloudflare → Rules → Transform Rules → *Modify Request Header* で、
    ゾーンに対して `X-Origin-Secret` に長いランダム値を設定する。
-2. `fly secrets set ORIGIN_SECRET=<その値>`（ローテーションは新しい値に加えて
-   `ORIGIN_SECRET_PREVIOUS=<旧値>` を設定し、後で後者を外す）。
-3. 先にガード、次に利用者 IP の解決 —— 手で合成し（チェーンランナーは無い）、
-   `/_defer/*` とプロファイラも覆うようにルーターの guard として設定する:
+2. シークレットと信頼チェーンをアプリに渡す —— PHP は書かない:
 
-```php
-<?php
-// public/index.php
-declare(strict_types=1);
-
-use Polidog\Relayer\Env;
-use Polidog\Relayer\Http\OriginGuard;
-use Polidog\Relayer\Http\Request;
-use Polidog\Relayer\Http\TrustedProxy;
-use Polidog\Relayer\Relayer;
-
-$router = Relayer::boot(__DIR__ . '/..');
-
-$guard = OriginGuard::middleware([
-    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
-    'except'         => ['/healthz'],
-]);
-$proxy = TrustedProxy::middleware(['chain' => [
-    ['preset' => 'fly',        'proxies' => ['fdaa::/16']],
-    ['preset' => 'cloudflare', 'proxies' => Env::readList('CLOUDFLARE_IP_RANGES')],
-]]);
-
-$router
-    ->setGuard(fn (Request $request, Closure $next) => $guard($request, fn (Request $r) => $proxy($r, $next)))
-    ->run();
+```bash
+fly secrets set \
+  ORIGIN_SECRET=<その値> \
+  ORIGIN_GUARD_EXCEPT=/healthz \
+  TRUSTED_PROXIES=fdaa::/16 \
+  TRUSTED_PROXY_PRESET=fly \
+  CLOUDFLARE_IP_RANGES="$(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6 | paste -sd,)"
 ```
 
-4. 確認: `curl -I https://<app>.fly.dev/` が `403`、独自ドメイン（Cloudflare
+   ローテーションは新しい `ORIGIN_SECRET` に加えて `ORIGIN_SECRET_PREVIOUS=<旧値>`
+   を設定し、後で後者を外す。`Relayer::boot()` は OriginGuard → `fly → cloudflare`
+   の TrustedProxy チェーンの順でルーターの guard に組み込むので、`/_defer/*`
+   とプロファイラも覆われます。
+
+3. 確認: `curl -I https://<app>.fly.dev/` が `403`、独自ドメイン（Cloudflare
    経由）が `200`、`/healthz` はどちらからでも `200` になること。
 
 `Cors` は従来どおり `src/Pages/middleware.php` に置きます。`example/`
-アプリにはこの合成が入っています。`ORIGIN_SECRET` を設定するまでは無効の
-まま動きます。
+アプリは `.env.local` にこれらを設定するまでは無効のまま動きます。
 
 ### ルート確認
 

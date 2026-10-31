@@ -19,7 +19,8 @@ Opinionated, batteries-included framework on top of
 - Optional root middleware (`src/Pages/middleware.php`) wrapping every
   dispatch, plus ready-made `Cors`, `OriginGuard` (reject requests that
   bypass your CDN) and `TrustedProxy` (real client IP behind a proxy)
-  middlewares
+  middlewares — the latter two wired from `.env` (`ORIGIN_SECRET`,
+  `TRUSTED_PROXIES`) as a router guard that runs before everything
 - CSRF-protected server actions (`$ctx->action()` /
   `PageComponent::action()` dispatch form posts to in-page handlers)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -682,11 +683,29 @@ Cloudflare / a reverse proxy otherwise hand-writes: *refuse requests that
 bypassed the CDN* and *recover the real client IP*. Both are plain
 `fn(Request, $next)` closures like `Cors`.
 
-**Where they go: the router's guard, not `middleware.php`.** `middleware.php`
-wraps route dispatch only — the deferred-component endpoint (`/_defer/{name}`)
-and the dev profiler run before it, so an origin guard placed there can be
-sidestepped by requesting `/_defer/{name}` directly. `AppRouter::setGuard()`
-takes the same `fn(Request, $next)` closure and runs it before *everything*:
+**The framework wires them from the environment.** Like `DATABASE_DSN`
+auto-wires the Db layer, `Relayer::boot()` reads these variables and installs
+the result as the router **guard** — the hook that runs before *everything*
+(the deferred-component endpoint `/_defer/{name}`, the dev profiler and
+`middleware.php`). Nothing set, nothing installed:
+
+```bash
+ORIGIN_SECRET=<long random value>     # turns OriginGuard on
+ORIGIN_SECRET_PREVIOUS=<old value>    # also accepted while rotating
+ORIGIN_GUARD_HEADER=X-Origin-Secret   # default
+ORIGIN_GUARD_EXCEPT=/healthz,/_health/*   # exact paths, or `/prefix/*`
+ORIGIN_GUARD_MODE=enforce             # or report
+
+TRUSTED_PROXIES=fdaa::/16             # turns TrustedProxy on (comma-separated CIDRs)
+TRUSTED_PROXY_PRESET=fly              # fly | cloudflare | xff (default)
+CLOUDFLARE_IP_RANGES=173.245.48.0/20,…  # adds a Cloudflare layer behind the first (see chain)
+```
+
+Don't put an origin guard in `middleware.php`: that wraps route dispatch
+only and is bypassed by the defer / profiler endpoints, so it could be
+sidestepped by requesting `/_defer/{name}` directly. To compose your own,
+`AppRouter::setGuard()` takes the same `fn(Request, $next)` closure and
+replaces what the environment produced:
 
 ```php
 <?php
@@ -789,44 +808,27 @@ A request straight to `xxx.fly.dev` resolves to the caller's own address
 
 1. Cloudflare → Rules → Transform Rules → *Modify Request Header*: set
    `X-Origin-Secret` to a long random value for your zone.
-2. `fly secrets set ORIGIN_SECRET=<that value>` (rotate by setting the new
-   value plus `ORIGIN_SECRET_PREVIOUS=<old>`, then dropping the latter).
-3. Guard first, then resolve the user's IP — composed by hand (no chain
-   runner) and installed as the router guard so `/_defer/*` and the profiler
-   are covered too:
+2. Hand the app the secret and the trust chain — no PHP involved:
 
-```php
-<?php
-// public/index.php
-declare(strict_types=1);
-
-use Polidog\Relayer\Env;
-use Polidog\Relayer\Http\OriginGuard;
-use Polidog\Relayer\Http\Request;
-use Polidog\Relayer\Http\TrustedProxy;
-use Polidog\Relayer\Relayer;
-
-$router = Relayer::boot(__DIR__ . '/..');
-
-$guard = OriginGuard::middleware([
-    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
-    'except'         => ['/healthz'],
-]);
-$proxy = TrustedProxy::middleware(['chain' => [
-    ['preset' => 'fly',        'proxies' => ['fdaa::/16']],
-    ['preset' => 'cloudflare', 'proxies' => Env::readList('CLOUDFLARE_IP_RANGES')],
-]]);
-
-$router
-    ->setGuard(fn (Request $request, Closure $next) => $guard($request, fn (Request $r) => $proxy($r, $next)))
-    ->run();
+```bash
+fly secrets set \
+  ORIGIN_SECRET=<that value> \
+  ORIGIN_GUARD_EXCEPT=/healthz \
+  TRUSTED_PROXIES=fdaa::/16 \
+  TRUSTED_PROXY_PRESET=fly \
+  CLOUDFLARE_IP_RANGES="$(curl -s https://www.cloudflare.com/ips-v4 https://www.cloudflare.com/ips-v6 | paste -sd,)"
 ```
 
-4. Verify: `curl -I https://<app>.fly.dev/` is `403`, the custom domain
+   Rotate by setting the new `ORIGIN_SECRET` plus `ORIGIN_SECRET_PREVIOUS=<old>`,
+   then dropping the latter. `Relayer::boot()` installs OriginGuard first, then
+   the `fly → cloudflare` TrustedProxy chain, as the router guard — so
+   `/_defer/*` and the profiler are covered too.
+
+3. Verify: `curl -I https://<app>.fly.dev/` is `403`, the custom domain
    (through Cloudflare) is `200`, and `/healthz` is `200` either way.
 
-`Cors` stays in `src/Pages/middleware.php` as before. The `example/` app ships
-this composition; it runs unguarded until you set `ORIGIN_SECRET`.
+`Cors` stays in `src/Pages/middleware.php` as before. The `example/` app runs
+unguarded until you set these in its `.env.local`.
 
 ### Inspecting routes
 

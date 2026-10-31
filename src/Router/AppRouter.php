@@ -14,6 +14,7 @@ use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
+use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Http\Response;
 use Polidog\Relayer\I18n\LocaleResolver;
@@ -271,6 +272,10 @@ final class AppRouter
      * dispatch only and is deliberately bypassed by the defer / profiler
      * endpoints, so a guard placed there can be sidestepped by requesting
      * `/_defer/{name}` directly.
+     *
+     * `Relayer::boot()` installs one from the environment (`ORIGIN_SECRET`,
+     * `TRUSTED_PROXIES` — see {@see GuardFactory});
+     * calling this replaces it with your own composition:
      *
      *   Relayer::boot(__DIR__ . '/..')
      *       ->setGuard(OriginGuard::middleware([...]))

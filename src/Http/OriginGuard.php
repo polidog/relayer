@@ -9,6 +9,7 @@ use InvalidArgumentException;
 use Monolog\Handler\ErrorLogHandler;
 use Monolog\Logger;
 use Polidog\Relayer\Env;
+use Polidog\Relayer\Relayer;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -20,18 +21,25 @@ use Psr\Log\LoggerInterface;
  * header and answers `403` when it is missing or wrong, so a request that
  * bypasses the CDN (`curl https://<app>.fly.dev`) never reaches a route.
  *
- * Wire it as the router's **guard**, not in `middleware.php`: the guard runs
- * before everything — deferred component fetches (`/_defer/{name}`), the dev
- * profiler and the root middleware — whereas `middleware.php` wraps route
- * dispatch only and is bypassed by those framework endpoints.
+ * The framework wires it for you from the environment (see
+ * {@see GuardFactory}): set `ORIGIN_SECRET` and {@see Relayer::boot()}
+ * installs it as the router **guard**, which runs before everything —
+ * deferred component fetches (`/_defer/{name}`), the dev profiler and the
+ * root `middleware.php`. Do not put it in `middleware.php`: that wraps
+ * route dispatch only and is bypassed by those framework endpoints.
  *
- *   // public/index.php
+ *   ORIGIN_SECRET=<long random>          # on
+ *   ORIGIN_SECRET_PREVIOUS=<old>         # also accepted while rotating
+ *   ORIGIN_GUARD_HEADER=X-Origin-Secret  # default
+ *   ORIGIN_GUARD_EXCEPT=/healthz
+ *   ORIGIN_GUARD_MODE=enforce            # or report
+ *
+ * To compose your own, build it by hand and hand it to the router:
+ *
  *   Relayer::boot(__DIR__ . '/..')
  *       ->setGuard(OriginGuard::middleware([
- *           'header'         => 'X-Origin-Secret',
  *           'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
  *           'except'         => ['/healthz'],
- *           'mode'           => 'enforce', // or 'report'
  *           'logger'         => Relayer::container()->get(LoggerInterface::class),
  *       ]))
  *       ->run();

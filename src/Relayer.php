@@ -6,6 +6,7 @@ namespace Polidog\Relayer;
 
 use LogicException;
 use Polidog\Relayer\Di\ContainerFactory;
+use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\Profiler\FileProfilerStorage;
 use Polidog\Relayer\Profiler\Profiler;
@@ -20,6 +21,7 @@ use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\Storage\StorageFactory;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Symfony\Component\Dotenv\Dotenv;
 
@@ -236,7 +238,28 @@ final class Relayer
             }
         }
 
+        // Origin guard / trusted proxy from the environment (ORIGIN_SECRET,
+        // TRUSTED_PROXIES, …) — see GuardFactory. Installed as the router
+        // guard so it also covers the defer + profiler endpoints. Nothing
+        // set → nothing installed; `->setGuard()` on the returned router
+        // replaces it.
+        $guard = GuardFactory::fromEnv(self::resolveLogger($psr));
+        if (null !== $guard) {
+            $router->setGuard($guard);
+        }
+
         return $router;
+    }
+
+    private static function resolveLogger(InjectorContainer $psr): ?LoggerInterface
+    {
+        if (!$psr->has(LoggerInterface::class)) {
+            return null;
+        }
+
+        $logger = $psr->get(LoggerInterface::class);
+
+        return $logger instanceof LoggerInterface ? $logger : null;
     }
 
     /**
