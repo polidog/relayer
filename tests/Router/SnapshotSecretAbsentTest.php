@@ -126,9 +126,11 @@ final class SnapshotSecretAbsentTest extends TestCase
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/';
 
-        $this->expectException(LogicException::class);
+        $output = $this->runApp($usephp);
 
-        $this->runApp($usephp);
+        self::assertSame(500, \http_response_code());
+        self::assertStringContainsString(LogicException::class, $output);
+        self::assertStringContainsString('Snapshot serializer secret is not configured', $output);
     }
 
     private function bootUsePhpWithoutSecret(): UsePHP
@@ -167,7 +169,7 @@ final class SnapshotSecretAbsentTest extends TestCase
             autoCompilePsx: true,
             psxCacheDir: $this->workDir . '/var/cache/psx',
         );
-        $app->setUsePhp($usephp);
+        $app->setUsePhp($usephp)->setDebug(true);
 
         \ob_start();
 

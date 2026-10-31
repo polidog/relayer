@@ -82,6 +82,40 @@ final class DeferDispatchTest extends TestCase
         self::assertStringContainsString('<span data-id="greeting">hi Alice</span>', $output);
     }
 
+    public function testAThrowingDeferredComponentAnswers500WithoutItsDetails(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/src/Components/Broken.psx',
+            <<<'PSX'
+                <?php
+                namespace App\Components;
+                use Polidog\UsePhp\Component\Defer;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\fc;
+
+                return fc(
+                    function (array $props): Element {
+                        throw new \RuntimeException('deferred-secret');
+                    },
+                    defer: new Defer(name: 'broken'),
+                );
+                PSX,
+        );
+
+        $usephp = $this->bootUsePhp();
+
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/_defer/broken';
+        $_GET = [];
+
+        \http_response_code(200);
+        $output = $this->runApp($usephp);
+
+        self::assertSame(500, \http_response_code());
+        self::assertStringNotContainsString('deferred-secret', $output);
+    }
+
     public function testGuardRunsBeforeDeferredDispatch(): void
     {
         // The deferred endpoint is dispatched before the root middleware, so

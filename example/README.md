@@ -23,7 +23,7 @@ A tiny app that exercises the main Relayer features:
 - Function-style page using `$ctx->action()` for server-side validation —
   `src/Pages/signup/page.psx`
 - Root layout — `src/Pages/layout.psx`
-- 404 error page — `src/Pages/error.psx`
+- Error page (404, `abort()`, uncaught exceptions) — `src/Pages/error.psx`
 
 `composer.json` wires `polidog/relayer` through a local path repository
 (`../`) so the example always runs against the working copy in this repo.

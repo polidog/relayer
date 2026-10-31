@@ -6,7 +6,6 @@ namespace Polidog\Relayer\Tests\Router;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\AppRouter;
-use RuntimeException;
 
 final class MiddlewareDispatchTest extends TestCase
 {
@@ -72,13 +71,22 @@ final class MiddlewareDispatchTest extends TestCase
         self::assertSame('method=GET', $this->dispatch('/ping', 'GET'));
     }
 
-    public function testNonClosureMiddlewareRaisesActionableError(): void
+    public function testNonClosureMiddlewareShowsAnActionableErrorInDev(): void
     {
         $this->middleware("return ['not' => 'a closure'];");
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('must return a Closure');
-        $this->dispatch('/ping', 'GET');
+        $_SERVER['REQUEST_URI'] = '/ping';
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        \ob_start();
+
+        try {
+            AppRouter::create($this->workDir)->setDebug(true)->run();
+        } finally {
+            $output = (string) \ob_get_clean();
+        }
+
+        self::assertSame(500, \http_response_code());
+        self::assertStringContainsString('must return a Closure', $output);
     }
 
     private function middleware(string $body): void

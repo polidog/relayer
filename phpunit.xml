@@ -4,6 +4,10 @@
          bootstrap="vendor/autoload.php"
          colors="true"
          cacheDirectory=".phpunit.cache">
+    <php>
+        <!-- AppRouter logs uncaught exceptions here when no logger is bound. -->
+        <ini name="error_log" value="/dev/null"/>
+    </php>
     <testsuites>
         <testsuite name="default">
             <directory>tests</directory>

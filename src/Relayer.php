@@ -270,6 +270,9 @@ final class Relayer
         // a hint; prod serves whatever the deploy built.
         $router->setNativeDispatcher(NativeDispatcher::forProject($projectRoot, $isDev, $logger));
 
+        // Stack traces on uncaught exceptions: dev only.
+        $router->setDebug($isDev);
+
         return $router;
     }
 
