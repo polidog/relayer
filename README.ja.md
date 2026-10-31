@@ -53,7 +53,7 @@
 ## 必要環境
 
 - PHP >= 8.5
-- [polidog/use-php](https://github.com/polidog/usePHP) ^0.1.0
+- [polidog/use-php](https://github.com/polidog/usePHP) ^0.10.0
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1
