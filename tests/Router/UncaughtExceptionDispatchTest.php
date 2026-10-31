@@ -167,11 +167,12 @@ final class UncaughtExceptionDispatchTest extends TestCase
             self::assertStringNotContainsString($this->workDir, $output, $path);
             self::assertStringNotContainsString('#0', $output, $path);
 
-            self::assertCount(1, $this->logger->records, $path);
-            self::assertSame('error', $this->logger->records[0]['level']);
-            self::assertStringContainsString(self::SECRET, $this->logger->records[0]['message']);
-            self::assertInstanceOf(RuntimeException::class, $this->logger->records[0]['context']['exception'] ?? null);
-            self::assertSame($path, $this->logger->records[0]['context']['path'] ?? null);
+            $records = $this->logRecords();
+            self::assertCount(1, $records, $path);
+            self::assertSame('error', $records[0]['level']);
+            self::assertStringContainsString(self::SECRET, $records[0]['message']);
+            self::assertInstanceOf(RuntimeException::class, $records[0]['context']['exception'] ?? null);
+            self::assertSame($path, $records[0]['context']['path'] ?? null);
         }
     }
 
@@ -579,6 +580,14 @@ final class UncaughtExceptionDispatchTest extends TestCase
         $saved = $storage->recent(10);
         self::assertCount(1, $saved);
         self::assertSame(500, $saved[0]->getStatusCode());
+    }
+
+    /**
+     * @return list<array{level: mixed, message: string, context: array<mixed>}>
+     */
+    private function logRecords(): array
+    {
+        return $this->logger->records;
     }
 
     private function router(): AppRouter
