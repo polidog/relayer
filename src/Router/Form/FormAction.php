@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Form;
 
 use JsonException;
+use Polidog\Relayer\Http\SessionStarter;
 
 /**
  * Encodes / decodes the form-action token a server action is bound to.
@@ -208,9 +209,7 @@ final class FormAction
 
     private static function existingKey(): ?string
     {
-        if (\PHP_SESSION_NONE === \session_status()) {
-            \session_start();
-        }
+        SessionStarter::start();
 
         $key = $_SESSION[self::SESSION_KEY] ?? null;
 

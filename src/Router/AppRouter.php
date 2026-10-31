@@ -17,6 +17,7 @@ use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\GuardFactory;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Http\Response;
+use Polidog\Relayer\Http\SessionStarter;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\I18n\Translators;
@@ -313,6 +314,9 @@ final class AppRouter
 
     public function run(): void
     {
+        CachePolicy::restoreSessionCacheLimiter();
+        SessionStarter::applyCookieDefaults();
+
         // Build the request snapshot once; the guard (if any) sees it first
         // and may hand a substituted one to the dispatch below.
         $request = Request::fromGlobals();
@@ -816,12 +820,12 @@ final class AppRouter
 
         switch ($exception->decision) {
             case AuthGuard::DECISION_UNAUTHORIZED:
-                \http_response_code(401);
+                $this->handleErrorResponse(401, $this->localizedReason(new HttpException(401)));
 
                 return;
 
             case AuthGuard::DECISION_FORBIDDEN:
-                \http_response_code(403);
+                $this->handleErrorResponse(403, $this->localizedReason(new HttpException(403)));
 
                 return;
 
@@ -959,34 +963,66 @@ final class AppRouter
      * via {@see ErrorPageComponent}) or fall back to the built-in error
      * document. This is the only place the page side touches
      * `http_response_code()` — `abort()` keeps it out of user code.
+     *
+     * Rendering the error page runs app code again, and that code can hit the
+     * same guard that got us here (a root layout that requires a role the
+     * user lacks). Attempts are bounded rather than re-entering the handlers:
+     * with the layout, then without it, then the built-in document — the
+     * status decided here always stands.
      */
     private function handleErrorResponse(int $status, string $message): void
     {
         \http_response_code($status);
 
-        $errorPagePath = $this->router->getErrorPagePath();
-
-        if (null !== $errorPagePath) {
-            $errorComponent = $this->loadErrorPage($errorPagePath, $status, $message);
-
-            if (null !== $errorComponent) {
-                $rootLayoutPath = $this->findRootLayoutPath();
-                $layoutStack = new LayoutStack();
-
-                if (null !== $rootLayoutPath) {
-                    $layout = $this->loadLayoutFromFile($rootLayoutPath, []);
-                    if (null !== $layout) {
-                        $layoutStack->push($layout);
-                    }
-                }
-
-                $this->renderPage($errorComponent, $layoutStack, []);
-
-                return;
-            }
+        if ($this->renderErrorPage($status, $message, true) || $this->renderErrorPage($status, $message, false)) {
+            return;
         }
 
         echo $this->document->renderError($status, $message);
+    }
+
+    /**
+     * One attempt at rendering the project's error page. Returns false when
+     * there is nothing to render, or when the page or layout raised a
+     * control-flow exception. Any other exception is a bug and propagates.
+     */
+    private function renderErrorPage(int $status, string $message, bool $withRootLayout): bool
+    {
+        $errorPagePath = $this->router->getErrorPagePath();
+
+        if (null === $errorPagePath) {
+            return false;
+        }
+
+        try {
+            $errorComponent = $this->loadErrorPage($errorPagePath, $status, $message);
+
+            if (null === $errorComponent) {
+                return false;
+            }
+
+            $layoutStack = new LayoutStack();
+            $rootLayoutPath = $withRootLayout ? $this->findRootLayoutPath() : null;
+
+            if (null !== $rootLayoutPath) {
+                $layout = $this->loadLayoutFromFile($rootLayoutPath, []);
+                if (null !== $layout) {
+                    $layoutStack->push($layout);
+                }
+            }
+
+            $this->renderPage($errorComponent, $layoutStack, []);
+
+            return true;
+        } catch (AuthorizationException|HttpException|RedirectException $exception) {
+            $this->profiler?->collect('route', 'error_page_failed', [
+                'status' => $status,
+                'withRootLayout' => $withRootLayout,
+                'exception' => $exception::class,
+            ]);
+
+            return false;
+        }
     }
 
     /**

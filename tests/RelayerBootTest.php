@@ -24,6 +24,11 @@ final class RelayerBootTest extends TestCase
 {
     private string $projectRoot;
 
+    /** @var array<mixed> `$_ENV` as {@see bootWithOnlyGetenv()} left it */
+    private array $lastBootEnv = [];
+
+    private mixed $lastBootLogger = null;
+
     protected function setUp(): void
     {
         (new ReflectionProperty(Relayer::class, 'container'))->setValue(null, null);
@@ -123,6 +128,33 @@ final class RelayerBootTest extends TestCase
         self::assertInstanceOf(Logger::class, $container->get(LoggerInterface::class));
     }
 
+    /**
+     * Regression for #79. The built-in server exposes real variables through
+     * getenv() only, which is what clearing the superglobals reproduces here.
+     * Falling back to the `.env` value would run a production server in dev
+     * mode and publish `/_profiler`.
+     */
+    public function testRealEnvironmentVariablesWinOverDotEnvFiles(): void
+    {
+        // `.env.local` too: nothing in the cascade may beat the real variable.
+        \file_put_contents($this->projectRoot . '/.env.local', "FRAMEWORK_TEST_VALUE=from-local\n");
+
+        $this->bootWithOnlyGetenv(['APP_ENV' => 'prod', 'FRAMEWORK_TEST_VALUE' => 'from-real-env']);
+
+        self::assertSame('prod', $this->lastBootEnv['APP_ENV'] ?? null);
+        self::assertSame('from-real-env', $this->lastBootEnv['FRAMEWORK_TEST_VALUE'] ?? null);
+        self::assertInstanceOf(Logger::class, $this->lastBootLogger, 'APP_ENV=prod must boot in prod mode');
+    }
+
+    public function testDotEnvStillFillsVariablesTheRealEnvironmentLacks(): void
+    {
+        $this->bootWithOnlyGetenv([]);
+
+        self::assertSame('dev', $this->lastBootEnv['APP_ENV'] ?? null);
+        self::assertSame('hello', $this->lastBootEnv['FRAMEWORK_TEST_VALUE'] ?? null);
+        self::assertInstanceOf(TraceableLogger::class, $this->lastBootLogger);
+    }
+
     public function testBootInstallsTheOriginGuardFromEnv(): void
     {
         \file_put_contents($this->projectRoot . '/.env', "APP_ENV=dev\nORIGIN_SECRET=s3cret\n");
@@ -207,6 +239,43 @@ final class RelayerBootTest extends TestCase
         self::assertInstanceOf(AppRouter::class, $router);
         self::assertNotNull($configurator->captured);
         self::assertTrue($configurator->captured->hasDefinition(Fixtures\ServiceWithDependency::class));
+    }
+
+    /**
+     * Boot with `$variables` visible through getenv() alone, record the
+     * result, then put the superglobals and the process environment back.
+     *
+     * @param array<string, string> $variables
+     */
+    private function bootWithOnlyGetenv(array $variables): void
+    {
+        $env = $_ENV;
+        $server = $_SERVER;
+        $original = [];
+        foreach (['APP_ENV', 'FRAMEWORK_TEST_VALUE'] as $name) {
+            $original[$name] = \getenv($name);
+            \putenv($name);
+            unset($_ENV[$name], $_SERVER[$name]);
+        }
+        unset($_ENV['SYMFONY_DOTENV_VARS'], $_SERVER['SYMFONY_DOTENV_VARS']);
+        foreach ($variables as $name => $value) {
+            \putenv($name . '=' . $value);
+        }
+
+        try {
+            $router = Relayer::boot($this->projectRoot);
+
+            $this->lastBootEnv = $_ENV;
+            $container = (new ReflectionProperty(AppRouter::class, 'container'))->getValue($router);
+            self::assertInstanceOf(ContainerInterface::class, $container);
+            $this->lastBootLogger = $container->get(LoggerInterface::class);
+        } finally {
+            $_ENV = $env;
+            $_SERVER = $server;
+            foreach ($original as $name => $value) {
+                \putenv(false === $value ? $name : $name . '=' . $value);
+            }
+        }
     }
 
     private function rrmdir(string $dir): void

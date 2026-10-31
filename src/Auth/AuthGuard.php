@@ -13,7 +13,7 @@ use ReflectionClass;
  * Policy that reads {@see Auth} from a class and decides whether to allow
  * the request, redirect to a login page, or short-circuit with 401/403.
  *
- * Pure-ish: header writes happen here (mirroring {@see CachePolicy}),
+ * Pure-ish: the redirect's header write happens here (mirroring {@see CachePolicy}),
  * but the decision logic itself — {@see decide()} — is testable in
  * isolation. AppRouter / InjectorContainer call {@see enforce()} which
  * combines decision + side effect.
@@ -29,7 +29,10 @@ final class AuthGuard
      * Read `#[Auth]` from $class and, if present, enforce it against the
      * current authenticator state. Returns true when the request is
      * allowed to proceed; false when headers have been written for a
-     * redirect / 401 / 403 and the caller must terminate the request.
+     * redirect and the caller must terminate the request.
+     *
+     * @throws AuthorizationException on a 401 / 403, so AppRouter renders the
+     *                                error page exactly as for `requireAuth()`
      */
     public static function enforce(string $class, AuthenticatorInterface $auth, ?Request $request = null, ?LocaleResolver $locales = null): bool
     {
@@ -50,14 +53,8 @@ final class AuthGuard
                 return false;
 
             case self::DECISION_UNAUTHORIZED:
-                self::sendStatus(401);
-
-                return false;
-
             case self::DECISION_FORBIDDEN:
-                self::sendStatus(403);
-
-                return false;
+                throw new AuthorizationException($decision, $attribute->redirectTo);
         }
 
         return true;
@@ -181,14 +178,5 @@ final class AuthGuard
         }
 
         \header('Location: ' . $location, true, 302);
-    }
-
-    private static function sendStatus(int $code): void
-    {
-        if (\headers_sent()) {
-            return;
-        }
-
-        \http_response_code($code);
     }
 }

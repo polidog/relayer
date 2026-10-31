@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Routing;
 
+use Polidog\Relayer\Http\RequestPath;
+
 final class Route
 {
     /**
@@ -53,15 +55,31 @@ final class Route
     }
 
     /**
-     * @return null|array<string, string> Parameters if matched, null otherwise
+     * @param string $path percent-encoded path
+     *
+     * @return null|array<string, string> Decoded parameters if matched, null otherwise
      */
     public function match(string $path): ?array
     {
-        if (\preg_match($this->regex, $path, $matches)) {
+        $matchable = RequestPath::forMatching($path);
+
+        return null === $matchable ? null : $this->matchDecoded($matchable);
+    }
+
+    /**
+     * {@see match()} for a path already run through
+     * {@see RequestPath::forMatching()}, so a collection decodes once rather
+     * than once per route.
+     *
+     * @return null|array<string, string>
+     */
+    public function matchDecoded(string $matchable): ?array
+    {
+        if (\preg_match($this->regex, $matchable, $matches)) {
             $params = [];
             foreach ($this->paramNames as $name) {
                 if (isset($matches[$name])) {
-                    $params[$name] = $matches[$name];
+                    $params[$name] = RequestPath::restoreCaptured($matches[$name]);
                 }
             }
 

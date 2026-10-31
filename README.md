@@ -220,12 +220,16 @@ with the standard Symfony cascade:
 4. `.env.{APP_ENV}.local`  — per-environment local overrides (gitignored)
 
 Missing files are skipped silently. Variables already in `$_ENV` /
-`$_SERVER` / `getenv()` win over the base `.env`; the `.local` files
-override the committed counterparts.
+`$_SERVER` / `getenv()` (real environment variables) win over every one of
+these files, `.local` included; among the files, the `.local` ones override
+the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
-(including unset) treats the app as production: pre-compile with
-`vendor/bin/usephp compile src/Pages` during deploy.
+treats the app as production, as does `APP_ENV` being set nowhere: neither in
+the real environment nor in any of these files. The scaffolded `.env` sets
+`APP_ENV=dev`, so unsetting the real variable is not enough to leave dev mode.
+In production, pre-compile with `vendor/bin/usephp compile src/Pages` during
+deploy.
 
 ## Routing & Pages
 
@@ -236,7 +240,7 @@ the Next.js App Router. The conventions:
 | -------------------- | ------------------------------------------------------------------- |
 | `page.psx`           | Renders the route. One per directory.                               |
 | `layout.psx`         | Wraps every nested page; layouts stack from root to leaf.           |
-| `error.psx`          | Error page for 404 / `$ctx->abort()` statuses (root only).          |
+| `error.psx`          | Error page for 404 / `$ctx->abort()` / auth `401`+`403` (root only). |
 | `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
 | `(group)/`           | Route group: organises files without adding a URL segment. May hold its own `layout.psx`. |
@@ -284,8 +288,10 @@ vendor/bin/relayer routes:compile                     # route map -> PHP
 vendor/bin/relayer container:compile                  # DI container -> PHP
 ```
 
-Then run with `APP_ENV` unset and OPcache `validate_timestamps=0` (the
-scaffolded `php.ini` carries the production block). Each step is
+Then set `APP_ENV=prod`, in `.env.local` or as a real environment variable,
+and run with OPcache `validate_timestamps=0` (the scaffolded `php.ini` carries
+the production block). Leaving `APP_ENV` unset does not select production: the
+scaffolded `.env` sets `APP_ENV=dev`, which exposes `/_profiler`. Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
 
@@ -404,7 +410,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 
     return function () use ($users): Element {
         $list = $users->all();
-        return <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
+        return <ul>{\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
     };
 };
 ```
@@ -430,8 +436,12 @@ src/Pages/
 ### Error pages
 
 A root `error.psx` (extending `ErrorPageComponent`) renders error responses
-inside the root layout — an unmatched route (404) and every `$ctx->abort()`
-status. It receives the status and message via `ErrorPageComponent`, so one
+inside the root layout — an unmatched route (404), every `$ctx->abort()`
+status, and the `401` / `403` from `#[Auth]` / `$ctx->requireAuth()`. If the
+root layout itself fails an auth guard or aborts while rendering the error,
+`error.psx` renders without it; if `error.psx` fails the same way, the default
+document is used. The status is unchanged either way. It receives the status
+and message via `ErrorPageComponent`, so one
 `error.psx` can branch on `getStatusCode()` for a 404 vs. 403 vs. 500 page.
 Without one, the framework emits a minimal default document.
 
@@ -497,8 +507,10 @@ return [
 ```
 
 - Lives in `src/Pages/` alongside pages, with the same `[param]` dynamic
-  segments — read them via `$ctx->params['id']`. A directory is a page
-  **or** a route, not both (the scanner errors if it finds both).
+  segments — read them via `$ctx->params['id']`. Params are percent-decoded
+  once (`a%20b` → `a b`, `a%2Fb` → `a/b`, still one segment), so treat them
+  as untrusted text. A directory is a page **or** a route, not both (the
+  scanner errors if it finds both).
 - A handler **must return a `Response`**. Build it with
   `Response::json($data, $status, $headers)` (encodes + sets
   `Content-Type: application/json`, slashes/unicode unescaped),
@@ -693,7 +705,7 @@ final class Dashboard extends LayoutComponent
     public function render(): Element
     {
         $this->addJs('/assets/dashboard.js', module: true);
-        return <div>{...$this->getChildren()}</div>;
+        return <div>{$this->getChildren()}</div>;
     }
 }
 ```
@@ -800,6 +812,12 @@ return function (Request $request, Closure $next): void {
   endpoints deliberately run outside it — something that must cover those
   too (an origin guard) goes in `AppRouter::setGuard()`, which takes the
   same closure and runs before everything (see below).
+- `$request->path` has one spelling per route: `/%61dmin` and `/admin/`
+  arrive as `/admin`. It stays percent-encoded, so compare a non-ASCII path
+  through `$request->decodedPath()`:
+  `str_starts_with($request->decodedPath(), '/管理')`. A path with a
+  dot-segment (`..`, `%2e%2e`, `..%2Fx`), a control character (`%00`, `%0A`),
+  invalid UTF-8 or a malformed escape matches no route (404).
 
 **CORS** ships as a ready-made middleware — the one provided
 implementation, not a parallel system:
@@ -1145,7 +1163,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
     return function () use ($save, $users): Element {
         return (
             <main>
-                <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
+                <ul>{\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
                 <form action={$save}>
                     <input name="name" />
                     <button>save</button>
@@ -1425,7 +1443,8 @@ return function (PageContext $ctx, Request $req): Closure {
 | Method                       | Returns                                       |
 | ---------------------------- | --------------------------------------------- |
 | `$req->method`               | uppercase HTTP method                         |
-| `$req->path`                 | request path (no query string)                |
+| `$req->path`                 | request path (no query string), percent-encoded in one canonical spelling |
+| `$req->decodedPath()`        | `$req->path` decoded, for comparing (e.g. `/日本語`) |
 | `$req->uri()`                | verbatim request URI (query string included)  |
 | `$req->isGet()` / `isPost()` | `bool`                                        |
 | `$req->isMethod('PUT')`      | `bool`                                        |
@@ -1657,7 +1676,8 @@ Anonymous requests get a `302 Location: /login?next=<original-path-and-query>`
 `/login?next=%2Fboards%2F1%3Fx%3D1%26y%3D2`. A request under a `/{locale}`
 prefix keeps it on both ends: `GET /ja/boards` redirects to
 `/ja/login?next=%2Fja%2Fboards`. Authenticated users lacking the required
-role get `403 Forbidden`.
+role get `403 Forbidden`. Both `401` and `403` render
+[`error.psx`](#error-pages) (or the default error document).
 
 `#[Auth]` is evaluated before `#[Cache]`, so unauthorized requests
 never produce a cacheable `304` that could leak to anonymous viewers
@@ -1725,10 +1745,28 @@ $container->register(NativePasswordHasher::class)
     ->setArguments([\PASSWORD_ARGON2ID]);
 ```
 
-`NativeSession` calls `session_start()` lazily on first read/write,
-so just resolving the service through DI does not eagerly emit
-`Set-Cookie`. It shares `$_SESSION` with the existing CSRF token
-machinery — no duplicate session starts.
+`NativeSession` starts the session lazily, so just resolving the service
+through DI does not eagerly emit `Set-Cookie`. Only a write creates a
+session: on a request without a session cookie, reads see an empty store
+and start nothing, so an anonymous visitor to a page that merely checks
+`$auth->user()` gets no `Set-Cookie` and stays CDN-cacheable. It shares
+`$_SESSION` with the existing CSRF token machinery — no duplicate session
+starts.
+
+The session cookie gets `HttpOnly`, `SameSite=Lax`, and `Secure` when
+`$_SERVER['HTTPS']` says the request came over TLS. Behind a proxy that
+terminates TLS, set `session.cookie_secure=1` or pass `HTTPS=on` to PHP;
+`X-Forwarded-Proto` is not consulted. Only attributes left at PHP's default
+are filled in, so your own values win: anything `session_set_cookie_params()`
+set before the session starts (`SameSite=Strict`, `lifetime`, `path`,
+`domain`), and `php.ini` / `-d` values including an explicit
+`session.cookie_httponly=0` (spell it `0`: PHP parses `Off` as blank, the same
+as a stock `php.ini`). A runtime `httponly => false` looks like the default,
+so to turn the cookie defaults off altogether call this before `run()`:
+
+```php
+Polidog\Relayer\Http\SessionStarter::leaveCookieParamsToApp();
+```
 
 ### Notes
 
@@ -2095,6 +2133,18 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   ordinary services with `#[Cache]` are ignored to avoid surprising header
   writes when fetched through the container.
 - All header writes are skipped once `headers_sent()` is true.
+- A declared policy is not overwritten by `session_start()`: the framework
+  sets `session_cache_limiter('')` once one applies. Pages without a policy
+  keep PHP's `no-store` when they use a session.
+- A response that used a session is never left storable by a shared cache. If
+  a session is active when headers go out, any policy other than `private` or
+  `noStore` is replaced with `Cache-Control: private, no-store`, so a logged-in
+  visitor gets an uncached copy of a `#[Cache(public: true)]` page whose layout
+  reads `$auth->user()`, while anonymous visitors still get the declared
+  policy. A page that wants browser caching for logged-in users declares
+  `private: true`. This uses `header_register_callback()`, which holds one
+  callback per request, so a callback your app registers later replaces it
+  (and it replaces one registered earlier).
 - The 304 short-circuit issues `exit;` from the PSR-11 adapter. It runs
   *before* the page is instantiated, so neither the page constructor nor its
   injected dependencies execute on a cache hit.
@@ -2295,7 +2345,7 @@ use Polidog\Relayer\Validation\Validator;
 
 $schema = Validator::object([
     'email' => Validator::string()->trim()->email(),
-    'name'  => Validator::string()->trim()->min(1, 'Name is required.'),
+    'name'  => Validator::string()->trim()->required('Name is required.'),
     'age'   => Validator::int()->min(0)->optional(),
     'role'  => Validator::enum(['admin', 'member'])->default('member'),
 ]);
@@ -2354,7 +2404,7 @@ The typical use is alongside `$ctx->action()`
 
 ```php
 $schema = Validator::object([
-    'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+    'name'     => Validator::string()->trim()->required('Name is required.'),
     'email'    => Validator::string()->trim()->email(),
     'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
 ]);

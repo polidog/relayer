@@ -428,9 +428,10 @@ final class Relayer
      * Load env vars via Symfony Dotenv. `loadEnv()` walks the standard
      * cascade — `.env` → `.env.local` → `.env.{APP_ENV}` → `.env.{APP_ENV}.local`
      * — and skips files that are missing. Existing $_ENV / $_SERVER /
-     * getenv() values win over `.env` (overrideExistingVars=false), while
-     * the `.local` files override their committed counterparts as Symfony
-     * convention prescribes.
+     * getenv() values win over every one of those files
+     * (overrideExistingVars=false, with getenv() made visible to Dotenv by
+     * {@see Env::importProcessEnvironment()}), while the `.local` files
+     * override their committed counterparts as Symfony convention prescribes.
      *
      * No `.env` at all → silently skip.
      */
@@ -440,6 +441,7 @@ final class Relayer
             return;
         }
 
+        Env::importProcessEnvironment();
         (new Dotenv())->loadEnv($projectRoot . '/.env');
     }
 

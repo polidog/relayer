@@ -55,6 +55,10 @@ final class NativeHttpServerTest extends TestCase
             	if r.URL.Path == "/old-upload" {
             		w.Header().Set("Relayer-Rewrite-Path", "/upload")
             	}
+            	if r.URL.Path == "/gone" || r.URL.Path == "/管理" {
+            		w.WriteHeader(403)
+            		return
+            	}
             	w.Header().Set("Relayer-Next", "1")
             	w.Header().Set("X-Proxied-By", "go")
             }
@@ -87,6 +91,24 @@ final class NativeHttpServerTest extends TestCase
             			out["file"] = header.Filename + ":" + string(data)
             		}
             	}
+            	w.Header().Set("Content-Type", "application/json")
+            	json.NewEncoder(w).Encode(out)
+            }
+            GO);
+
+        self::write('src/Pages/gone/page.php', "<?php\nreturn static fn () => new Polidog\\UsePhp\\Runtime\\Element('p', [], ['gone page']);\n");
+        self::write('src/Pages/管理/page.php', "<?php\nreturn static fn () => new Polidog\\UsePhp\\Runtime\\Element('p', [], ['kanri page']);\n");
+        self::write('src/Pages/記事/[slug]/route.go', <<<'GO'
+            package main
+
+            import (
+            	"encoding/json"
+            	"net/http"
+            	"os"
+            )
+
+            func GET(w http.ResponseWriter, r *http.Request) {
+            	out := map[string]string{"urlPath": r.URL.Path, "pathInfo": os.Getenv("PATH_INFO"), "params": os.Getenv("RELAYER_ROUTE_PARAMS"), "pattern": os.Getenv("RELAYER_ROUTE_PATTERN")}
             	w.Header().Set("Content-Type", "application/json")
             	json.NewEncoder(w).Encode(out)
             }
@@ -213,6 +235,41 @@ final class NativeHttpServerTest extends TestCase
 
         self::assertSame(200, $status, $body);
         self::assertSame(['files' => 0, 'values' => ['field\\' => ['value']]], self::decode($body));
+    }
+
+    public function testANonAsciiRouteGoGetsDecodedParamsAndTheEncodedPath(): void
+    {
+        [$status, , $body] = $this->request('GET', '/%E8%A8%98%E4%BA%8B/a%20b%2Fc');
+
+        self::assertSame(200, $status, $body);
+        self::assertSame([
+            'params' => '{"slug":"a b/c"}',
+            'pathInfo' => '/%E8%A8%98%E4%BA%8B/a%20b%2Fc',
+            'pattern' => '/記事/[slug]',
+            'urlPath' => '/記事/a b/c',
+        ], self::decode($body));
+    }
+
+    public function testATraversalNeverReachesARouteGo(): void
+    {
+        self::assertSame(404, $this->request('GET', '/%E8%A8%98%E4%BA%8B/%2e%2e')[0]);
+        self::assertSame(404, $this->request('GET', '/%E8%A8%98%E4%BA%8B/a%00b')[0]);
+    }
+
+    public function testAMalformedEscapeNeverReachesARouteGo(): void
+    {
+        [$status, , $body] = $this->request('GET', '/%E8%A8%98%E4%BA%8B/%zz');
+
+        self::assertNotSame(200, $status, $body);
+        self::assertStringNotContainsString('urlPath', $body);
+    }
+
+    public function testAGoProxySeesEverySpellingOfAProtectedPath(): void
+    {
+        self::assertSame(403, $this->request('GET', '/gone')[0]);
+        self::assertSame(403, $this->request('GET', '/%67one')[0]);
+        self::assertSame(403, $this->request('GET', '/%E7%AE%A1%E7%90%86')[0]);
+        self::assertSame(403, $this->request('GET', '/%e7%ae%a1%e7%90%86')[0]);
     }
 
     /**

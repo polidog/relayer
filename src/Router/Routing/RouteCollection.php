@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Router\Routing;
 use ArrayIterator;
 use Countable;
 use IteratorAggregate;
+use Polidog\Relayer\Http\RequestPath;
 use Traversable;
 
 /**
@@ -37,10 +38,15 @@ final class RouteCollection implements IteratorAggregate, Countable
 
     public function match(string $path): ?RouteMatch
     {
+        $matchable = RequestPath::forMatching($path);
+        if (null === $matchable) {
+            return null;
+        }
+
         $this->sort();
 
         foreach ($this->routes as $route) {
-            $params = $route->match($path);
+            $params = $route->matchDecoded($matchable);
             if (null !== $params) {
                 return new RouteMatch($route, $params);
             }

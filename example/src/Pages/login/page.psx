@@ -29,7 +29,7 @@ return function (PageContext $ctx, Authenticator $auth, Request $request): Closu
 
     $schema = Validator::object([
         'email'    => Validator::string()->trim()->email(),
-        'password' => Validator::string()->min(1, 'Password is required.'),
+        'password' => Validator::string()->required('Password is required.'),
     ]);
 
     $values = ['email' => ''];

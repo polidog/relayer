@@ -8,10 +8,26 @@ use Polidog\UsePhp\Runtime\Element;
 
 final class FormActionTransformer
 {
-    public static function apply(Element|string|null $node, string $defaultActionUrl): Element|string|null
+    /**
+     * PSX `{expr}` children reach the tree unchecked, so numbers and booleans
+     * can appear in spite of Element's phpdoc. They are normalized here to
+     * what usePHP's Renderer::renderChildren() would output for them: numbers
+     * as text (including 0) and booleans as nothing, matching React. Numbers
+     * become strings so that tree walkers after this one, and Element's own
+     * contract, only ever see Element|string.
+     */
+    public static function apply(bool|Element|float|int|string|null $node, string $defaultActionUrl): Element|string|null
     {
         if (null === $node || \is_string($node)) {
             return $node;
+        }
+
+        if (\is_bool($node)) {
+            return null;
+        }
+
+        if (\is_int($node) || \is_float($node)) {
+            return (string) $node;
         }
 
         $newChildren = [];
