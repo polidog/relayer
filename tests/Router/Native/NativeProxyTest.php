@@ -81,7 +81,11 @@ final class NativeProxyTest extends TestCase
         // What Go's net/http/cgi writes for a Proxy that only sets headers.
         $proxy = $this->proxy("printf 'Relayer-Next: 1\\r\\nContent-Type: text/plain; charset=utf-8\\r\\nContent-Length: 0\\r\\nX-Kept: 1\\r\\n\\r\\n'");
 
-        $this->invoke($proxy, new Request('GET', '/'), static function (): void {});
+        $out = $this->invoke($proxy, new Request('GET', '/'), static function (): void {
+            echo 'continued';
+        });
+
+        self::assertSame('continued', $out);
 
         if (\function_exists('xdebug_get_headers')) {
             $headers = self::sentHeaders();
