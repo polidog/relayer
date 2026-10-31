@@ -224,12 +224,15 @@ LOCALE_PATH_PREFIX=true
 4. `.env.{APP_ENV}.local`  — 環境別ローカル上書き（gitignore）
 
 存在しないファイルは黙ってスキップされます。`$_ENV` / `$_SERVER` / `getenv()`
-に既に値があれば `.env` を優先せず維持され、`.local` 系ファイルはコミット
-されたカウンタパートを上書きします。
+に既に値があれば（実環境の変数）、`.local` を含むこれらすべてのファイルより
+優先されます。ファイルの間では、`.local` 系がコミットされたカウンタパートを
+上書きします。
 
 `APP_ENV=dev`（または `development`）で PSX ファイルの auto-compile が
-有効になります。それ以外（未設定含む）は本番扱いで、デプロイ時に
-`vendor/bin/usephp compile src/Pages` で事前コンパイルします。
+有効になります。それ以外の値は本番扱いで、実環境にもこれらのファイルにも
+`APP_ENV` が無い場合も本番扱いです。雛形の `.env` には `APP_ENV=dev` が入って
+いるため、実環境の変数を未設定にしただけでは dev モードのままです。本番では
+デプロイ時に `vendor/bin/usephp compile src/Pages` で事前コンパイルします。
 
 ## ルーティングとページ
 
@@ -289,8 +292,10 @@ vendor/bin/relayer routes:compile                     # ルートマップ -> PH
 vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 ```
 
-あとは `APP_ENV` を未設定にし、OPcache の `validate_timestamps=0`
-（雛形の `php.ini` に本番ブロックを同梱）で起動します。各ステップは
+あとは `.env.local` か実環境の変数で `APP_ENV=prod` を指定し、OPcache の
+`validate_timestamps=0`（雛形の `php.ini` に本番ブロックを同梱）で起動します。
+`APP_ENV` を未設定にしても本番にはなりません。雛形の `.env` の `APP_ENV=dev`
+が使われ、`/_profiler` が公開されます。各ステップは
 有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
 だけで壊れません。
 
