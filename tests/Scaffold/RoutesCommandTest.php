@@ -81,6 +81,45 @@ final class RoutesCommandTest extends TestCase
         self::assertStringContainsString('warning: src/Pages/api/hello-go/route.go: declares no handler', $out);
     }
 
+    public function testNoMiddlewareMeansNoTrailerLine(): void
+    {
+        RoutesCommand::run([], $this->capture(), $this->project);
+
+        self::assertStringNotContainsString('middleware', $this->captured());
+    }
+
+    public function testPhpMiddlewareIsNamedOnATrailingLine(): void
+    {
+        \file_put_contents($this->project . '/src/Pages/middleware.php', "<?php\n\nreturn fn (\$r, \$next) => \$next(\$r);\n");
+
+        RoutesCommand::run([], $this->capture(), $this->project);
+
+        self::assertStringEndsWith("\nmiddleware  src/Pages/middleware.php  (php)", $this->captured());
+    }
+
+    public function testNativeMiddlewareIsNamedOnATrailingLine(): void
+    {
+        \file_put_contents($this->project . '/src/Pages/middleware.go', "package main\n");
+
+        RoutesCommand::run([], $this->capture(), $this->project);
+
+        self::assertStringEndsWith("\nmiddleware  src/Pages/middleware.go  (native)", $this->captured());
+    }
+
+    public function testBothMiddlewareFilesWarnInsteadOfPickingOne(): void
+    {
+        \file_put_contents($this->project . '/src/Pages/middleware.php', "<?php\n\nreturn fn (\$r, \$next) => \$next(\$r);\n");
+        \file_put_contents($this->project . '/src/Pages/middleware.go', "package main\n");
+
+        $status = RoutesCommand::run([], $this->capture(), $this->project);
+        $out = $this->captured();
+
+        self::assertSame(0, $status);
+        self::assertStringNotContainsString('(php)', $out);
+        self::assertStringNotContainsString('(native)', $out);
+        self::assertStringContainsString('warning: both src/Pages/middleware.php and src/Pages/middleware.go exist', $out);
+    }
+
     public function testMissingSrcPagesReturnsError(): void
     {
         $bare = \sys_get_temp_dir() . '/relayer-routes-bare-' . \bin2hex(\random_bytes(6));

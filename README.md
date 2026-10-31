@@ -14,7 +14,9 @@ Opinionated, batteries-included framework on top of
 - Native route handlers in Go (`src/Pages/.../route.go`, `func GET(w, r)`
   and friends) — compiled by `relayer native:build`, run per request as a
   CGI process via the Go stdlib; the Next.js "native language support"
-  prototype's Route Handlers, for CPU-heavy endpoints
+  prototype's Route Handlers, for CPU-heavy endpoints — and its Proxy:
+  `src/Pages/middleware.go` with a `func Proxy(w, r)` as the root
+  middleware, continuing via a `Relayer-Next` header
 - Per-page / per-layout external scripts (`$ctx->js()` /
   `PageComponent::addJs()` / `LayoutComponent::addJs()`) emitted at the end
   of `<body>` after the bundle, in declaration order
@@ -569,7 +571,9 @@ curl -i http://localhost:8080/api/hello
 ```
 
 **Build.** `vendor/bin/relayer native:build` compiles every `route.go`
-under `src/Pages`. For each one it generates the entrypoint (a `main()`
+under `src/Pages` (and a root `middleware.go`, see
+[Writing it in Go](#writing-it-in-go-middlewarego)). For each one it
+generates the entrypoint (a `main()`
 that serves one request through Go's `net/http/cgi` and switches on the
 method), copies both into `var/cache/native/build/<slug>/` with a
 stdlib-only `go.mod` (a `go.mod` / `go.sum` you place beside the
@@ -642,10 +646,11 @@ dispatch.
 
 **What does not apply.** A `route.go` gets no autowiring, no
 `PageContext`, no `Request` object and no `#[Auth]` / `requireAuth()` —
-the Go side only ever sees CGI variables. Protect it from
-`src/Pages/middleware.php`, which wraps native routes exactly like pages
-and `route.php` (a middleware that does not call `$next` means the Go
-process is never started). `_private` folders exclude a `route.go` as
+the Go side only ever sees CGI variables. Protect it from the root
+middleware — `src/Pages/middleware.php`, or its Go form
+[`middleware.go`](#writing-it-in-go-middlewarego) — which wraps native
+routes exactly like pages and `route.php` (a middleware that does not
+call `$next` means the Go process is never started). `_private` folders exclude a `route.go` as
 they do everything else, and a directory holds one handler: `route.go`
 beside `route.php` or a page file is a scan error, like `page.psx` beside
 `page.php`. Go is the only language today; the route kind is deliberately
@@ -798,6 +803,75 @@ It answers `OPTIONS` preflights with `204` itself and adds
 `Access-Control-Allow-Origin` to actual requests. `credentials: true` with
 `origins: ['*']` reflects the request Origin (a literal `*` is invalid with
 credentials per spec).
+
+#### Writing it in Go (`middleware.go`)
+
+The root middleware can be Go instead of PHP — the "Proxy in Go" half of
+the Next.js native-language prototype. `src/Pages/middleware.go` is
+`package main` with a single `func Proxy(w http.ResponseWriter, r
+*http.Request)` (named like Next.js's `proxy()`; no `main()`, no
+framework import), built by the same `vendor/bin/relayer native:build` as
+[`route.go`](#native-route-handlers-go) to `var/cache/native/bin/middleware`
+and started per request **before** route matching, like `middleware.php`.
+
+CGI has no "continue to the next handler", so the Go side says what
+happens through response headers:
+
+```go
+// src/Pages/middleware.go
+package main
+
+import "net/http"
+
+func Proxy(w http.ResponseWriter, r *http.Request) {
+    // Short-circuit: no Relayer-Next → this IS the response.
+    if r.Header.Get("X-Api-Key") == "" && len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(401)
+        w.Write([]byte(`{"error":"missing api key"}`))
+        return
+    }
+
+    // Continue: Relayer-Next → the matched page / route runs.
+    w.Header().Set("Relayer-Next", "1")
+    w.Header().Set("Relayer-Request-Header-X-User", "42") // request header the route sees
+    w.Header().Set("X-Proxied-By", "go")                  // response header, merged into the final response
+}
+```
+
+- **`Relayer-Next: 1`** present → continue. The body is ignored. Two
+  rewrite instructions apply to the `Request` handed on:
+  `Relayer-Rewrite-Path: /other` routes on that path instead (one), and
+  `Relayer-Request-Header-<Name>: value` adds or replaces request header
+  `<Name>` (any number) — `$request->header('x-user')` in the route,
+  `r.Header` is unchanged for the proxy itself. Every other response
+  header (`Set-Cookie`, `X-*`, …) is **merged into the final response**,
+  emitted before the page / route writes its own (the
+  `NextResponse.next({ headers })` shape). `Status:` is not applied.
+- **No `Relayer-Next`** → short-circuit: `Status:` (default 200), headers
+  and body are sent as-is; nothing else runs — not the page, not
+  `route.php`, not a `route.go`.
+- `Relayer-*` headers never reach the client in either case.
+- The proxy gets the same CGI environment as a `route.go`, minus the route
+  variables (it runs before matching) plus **`RELAYER_MATCHED_PATTERN`**:
+  the pattern the path would match (`/api/users/[id]`), empty for a 404.
+  There is no `matcher` config; branch on `r.URL.Path` yourself.
+- One middleware per app: `middleware.php` **and** `middleware.go` both
+  present is a `RuntimeException` naming both files, on every request.
+  `relayer routes` ends with a `middleware  src/Pages/middleware.go
+  (native)` line (or `(php)`) so you can see which is live.
+- Failures are a JSON `500` even for a page request — unbuilt (with the
+  `native:build` hint; in dev also when `middleware.go` is newer than the
+  binary), a `panic`, non-CGI output, or the `NATIVE_ROUTE_TIMEOUT` —
+  because the proxy fails before the page pipeline could render an error
+  page. stderr goes to the PSR-3 logger at `error`.
+- Same process model as `route.go`: a Go process per request, so this
+  costs a few milliseconds on **every** page and route. The framework's
+  `/_defer/*` and `/_profiler` endpoints run outside it, exactly as with
+  `middleware.php`; a check that must cover those too belongs in
+  `AppRouter::setGuard()` (below). No `middleware.go` ships in `example/`
+  (it would make every request there need Go) — the snippet above is the
+  complete example.
 
 #### Origin guard and trusted proxy (running behind a CDN)
 
@@ -968,13 +1042,17 @@ GET,POST   /               page    src/Pages/page.psx
 GET        /api/hello      native  src/Pages/api/hello/route.go
 GET,POST   /api/users      api     src/Pages/api/users/route.php
 GET,POST   /users/[id]     page    src/Pages/users/[id]/page.psx
+
+middleware  src/Pages/middleware.php  (php)
 ```
 
 Pages report `GET,POST` (POST is how server actions / `useState` reach a
 page); API routes list their declared methods, and native routes
 (`route.go`) the `func GET` & co. found by a text scan — no build needed.
 A `route.php` that fails to load, or a `route.go` that declares no
-handler, is shown as `?` with a warning line, not silently hidden.
+handler, is shown as `?` with a warning line, not silently hidden. The
+trailing line names the root middleware when there is one — `(php)` for
+`middleware.php`, `(native)` for `middleware.go`.
 
 ## Server Actions (form / CSRF-protected)
 
