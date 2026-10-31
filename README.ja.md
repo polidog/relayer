@@ -1675,9 +1675,12 @@ final class ApiEndpoint extends PageComponent { /* ... */ }
 | `roles`         | `[]`        | いずれか 1 つのロールが必要（空 = 認証済みなら誰でも） |
 | `redirectTo`    | `'/login'`  | 未認証リクエストの転送先。空文字 → `401` を返す        |
 
-未認証リクエストは `302 Location: /login?next=<元のパス>` でリダイレクト
-されます（URL エンコード済み・同一オリジンのみ）。認証済みでもロールが
-足りない場合は `403 Forbidden`。`401` / `403` はどちらも
+未認証リクエストは `302 Location: /login?next=<元のパスとクエリ>` でリダイレクト
+されます（URL エンコード済み・同一オリジンのみ）。`GET /boards/1?x=1&y=2` は
+`/login?next=%2Fboards%2F1%3Fx%3D1%26y%3D2` になります。`/{locale}` プレフィックス
+付きのリクエストでは両方に残り、`GET /ja/boards` は
+`/ja/login?next=%2Fja%2Fboards` になります。認証済みでもロールが足りない場合は
+`403 Forbidden`。 `401` / `403` はどちらも
 [`error.psx`](#エラーページ)（無ければデフォルト表示）を描画します。
 
 `#[Auth]` は `#[Cache]` より先に評価されるので、未認証リクエストが
@@ -1777,9 +1780,17 @@ Polidog\Relayer\Http\SessionStarter::leaveCookieParamsToApp();
   別経路で解決されるため自動ガードの対象外。レイアウト側で認証状態を
   読みたい場合は、コンストラクタに `?Authenticator` を注入して
   `render()` から `$auth?->user()` を呼んでください。
-- ログインリダイレクトの `?next=<path>` は同一オリジン専用です。
-  `//` 始まりや絶対 URL は破棄してログインページからの open redirect
-  を防ぎます。
+- ログインリダイレクトの `?next=<path>` は同一オリジン専用ですが、URL から
+  来る値なので誰でも細工できます。ログインページでは
+  `AuthGuard::safeNext($request->query('next'), '/dashboard')` で検証して
+  ください。クエリ付きのパスは通り、`//evil.com`、`/\evil.com`、絶対 URL、
+  制御文字を含む値は既定値に置き換わります。
+- ロケールプレフィックスを付けるのは、同一オリジンでプレフィックスがまだ
+  付いていない `redirectTo` だけです。絶対 URL の `redirectTo` はそのまま使われ、
+  `next`（クエリ込み）も付きます。`/ja/login` は `/login` と同じページに
+  ルーティングされるので、Relayer のルーター外にあるログインページ（Web サーバーが
+  直接返すものなど）は絶対 URL で指定してください。そうしないと `/ja/login` は 404
+  になります。
 - セッションはログインとログアウト **両方** で再生成します。攻撃者が
   ログイン前のセッション ID を奪取しても、ユーザーが認証した時点で
   そのセッション ID は無効になります。

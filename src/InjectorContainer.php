@@ -9,6 +9,7 @@ use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Psr\Container\ContainerInterface;
@@ -74,7 +75,7 @@ final class InjectorContainer implements ContainerInterface
             // before resolving the page, so a redirect never touches the
             // page's dependencies.
             $authenticator = $this->resolveAuthenticator();
-            if (null !== $authenticator && !AuthGuard::enforce($id, $authenticator, $this->currentRequest?->path)) {
+            if (null !== $authenticator && !AuthGuard::enforce($id, $authenticator, $this->currentRequest, $this->resolveLocaleResolver())) {
                 exit;
             }
 
@@ -107,6 +108,17 @@ final class InjectorContainer implements ContainerInterface
         }
 
         return $this->resolve($id);
+    }
+
+    private function resolveLocaleResolver(): ?LocaleResolver
+    {
+        if (!$this->container->has(LocaleResolver::class)) {
+            return null;
+        }
+
+        $locales = $this->container->get(LocaleResolver::class);
+
+        return $locales instanceof LocaleResolver ? $locales : null;
     }
 
     private function resolveAuthenticator(): ?AuthenticatorInterface

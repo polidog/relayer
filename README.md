@@ -1671,9 +1671,12 @@ final class ApiEndpoint extends PageComponent { /* ... */ }
 | `roles`        | `[]`        | One of these roles must be present (empty = any user). |
 | `redirectTo`   | `'/login'`  | Where anonymous requests go. Empty string → `401`.     |
 
-Anonymous requests get a `302 Location: /login?next=<requested-path>`
-(URL-encoded, same-origin only). Authenticated users lacking the
-required role get `403 Forbidden`. Both `401` and `403` render
+Anonymous requests get a `302 Location: /login?next=<original-path-and-query>`
+(URL-encoded, same-origin only): `GET /boards/1?x=1&y=2` redirects to
+`/login?next=%2Fboards%2F1%3Fx%3D1%26y%3D2`. A request under a `/{locale}`
+prefix keeps it on both ends: `GET /ja/boards` redirects to
+`/ja/login?next=%2Fja%2Fboards`. Authenticated users lacking the required
+role get `403 Forbidden`. Both `401` and `403` render
 [`error.psx`](#error-pages) (or the default error document).
 
 `#[Auth]` is evaluated before `#[Cache]`, so unauthorized requests
@@ -1772,9 +1775,16 @@ Polidog\Relayer\Http\SessionStarter::leaveCookieParamsToApp();
   Layouts are not guarded — they're resolved separately. If you need
   layout-level auth state, inject `?Authenticator` into the layout
   constructor and read `$auth?->user()` from `render()`.
-- `?next=<path>` on the login redirect is same-origin only — paths
-  starting with `//` or an absolute URL are dropped to prevent
-  open-redirect bouncing off the login page.
+- `?next=<path>` on the login redirect is same-origin only, but it comes
+  from the URL, so anyone can craft it. Validate it on the login page with
+  `AuthGuard::safeNext($request->query('next'), '/dashboard')`: paths with a
+  query string pass, while `//evil.com`, `/\evil.com`, absolute URLs and
+  values containing control characters fall back to the default.
+- The locale prefix is only added to a same-origin `redirectTo` that has no
+  locale prefix yet. An absolute `redirectTo` is left as written, and still
+  receives `next`, query string included. `/ja/login` routes to the same page
+  as `/login`, so a login page outside Relayer's router (served by the web
+  server, say) must be given as an absolute URL, or `/ja/login` is a 404.
 - Sessions are rotated on **both** login and logout. A pre-login
   session id captured by an attacker stops working the moment the
   user authenticates.
