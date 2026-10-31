@@ -164,6 +164,68 @@ final class CachePolicyTest extends TestCase
         );
     }
 
+    public function testIfNoneMatchMismatchTakesPrecedenceOverIfModifiedSince(): void
+    {
+        // RFC 7232 §3.3: If-Modified-Since is ignored when If-None-Match is
+        // present, so a stale ETag must not be rescued by a matching date.
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['HTTP_IF_NONE_MATCH'] = '"x"';
+        $_SERVER['HTTP_IF_MODIFIED_SINCE'] = 'Wed, 15 Jan 2025 10:00:00 GMT';
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(
+            etag: 'home-v1',
+            lastModified: '2025-01-15 10:00:00 UTC',
+        )));
+    }
+
+    public function testIfNoneMatchMatchIgnoresStaleIfModifiedSince(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['HTTP_IF_NONE_MATCH'] = '"home-v1"';
+        $_SERVER['HTTP_IF_MODIFIED_SINCE'] = 'Wed, 01 Jan 2020 00:00:00 GMT';
+
+        self::assertTrue(CachePolicy::isNotModified(new Cache(
+            etag: 'home-v1',
+            lastModified: '2025-01-15 10:00:00 UTC',
+        )));
+    }
+
+    public function testIfNoneMatchIgnoresIfModifiedSinceWhenServerHasNoEtag(): void
+    {
+        // e.g. an `etagKey` page whose store entry is gone: the client's ETag
+        // cannot be confirmed, so the date alone must not produce a 304.
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['HTTP_IF_NONE_MATCH'] = '"x"';
+        $_SERVER['HTTP_IF_MODIFIED_SINCE'] = 'Wed, 15 Jan 2025 10:00:00 GMT';
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(
+            lastModified: '2025-01-15 10:00:00 UTC',
+        )));
+    }
+
+    public function testWildcardIfNoneMatchWithoutServerEtagDoesNotMatch(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['HTTP_IF_NONE_MATCH'] = '*';
+        $_SERVER['HTTP_IF_MODIFIED_SINCE'] = 'Wed, 15 Jan 2025 10:00:00 GMT';
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(
+            lastModified: '2025-01-15 10:00:00 UTC',
+        )));
+    }
+
+    public function testEmptyIfNoneMatchFallsBackToIfModifiedSince(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['HTTP_IF_NONE_MATCH'] = '';
+        $_SERVER['HTTP_IF_MODIFIED_SINCE'] = 'Wed, 15 Jan 2025 10:00:00 GMT';
+
+        self::assertTrue(CachePolicy::isNotModified(new Cache(
+            etag: 'home-v1',
+            lastModified: '2025-01-15 10:00:00 UTC',
+        )));
+    }
+
     public function testIsNotModifiedIgnoredForUnsafeMethods(): void
     {
         $_SERVER['REQUEST_METHOD'] = 'POST';

@@ -152,6 +152,10 @@ final class CachePolicy
     /**
      * True if the current request's conditional headers indicate the client
      * already has a fresh copy. Only honors safe methods (GET, HEAD).
+     *
+     * Per RFC 7232 §3.3, `If-Modified-Since` is ignored whenever
+     * `If-None-Match` is present. Without a server ETag there is nothing to
+     * confirm the client's validator against, so such a request never matches.
      */
     public static function isNotModified(Cache $cache, ?Request $request = null): bool
     {
@@ -160,16 +164,14 @@ final class CachePolicy
             return false;
         }
 
-        if (null !== $cache->etag) {
-            $ifNoneMatch = self::requestHeader($request, 'if-none-match');
-            if (null !== $ifNoneMatch) {
-                if ('*' === $ifNoneMatch) {
-                    return true;
-                }
-                if (self::etagMatchesAny(self::formatEtag($cache->etag, $cache->etagWeak), $ifNoneMatch)) {
-                    return true;
-                }
+        $ifNoneMatch = self::requestHeader($request, 'if-none-match');
+        if (null !== $ifNoneMatch) {
+            if (null === $cache->etag) {
+                return false;
             }
+
+            return '*' === $ifNoneMatch
+                || self::etagMatchesAny(self::formatEtag($cache->etag, $cache->etagWeak), $ifNoneMatch);
         }
 
         $lastModified = self::parseLastModified($cache->lastModified);
