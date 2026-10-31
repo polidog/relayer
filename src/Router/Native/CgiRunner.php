@@ -133,7 +133,7 @@ final class CgiRunner
             );
         }
 
-        $body = $request->body();
+        $body = MultipartBody::for($request);
         $env = $this->environment($request, $body, $extra);
 
         $descriptors = [

@@ -584,7 +584,10 @@ curl -i http://localhost:8080/api/hello
 `go.sum` があればそちらを使うので、サードパーティのモジュールも使えます）、
 `go build -o var/cache/native/bin/<slug>` を実行します。`<slug>` は URL
 パターンの `/` を `__` に置き換えたもの（`/api/users/[id]` →
-`api__users__[id]`）。`PATH` 上の `go`（または `GO_BIN=/path/to/go`）が
+`api__users__[id]`）で、同じ slug になる 2 つのルート（`/a/b` と `/a__b`）
+はビルドエラーです。コピーされるのは `route.go` と `go.mod` / `go.sum`
+だけなので、隣の `helper.go` はコンパイルされません。ルートは 1 ファイルに
+収めるか、共有コードをモジュールとして import してください。`PATH` 上の `go`（または `GO_BIN=/path/to/go`）が
 必要で、そのため `relayer compile` とは別コマンドです。ハンドラを 1 つも
 宣言していない、あるいは `package main` でない `route.go` はファイル名
 入りのメッセージでビルドを止め、コンパイルエラーは `go build` の出力を
@@ -600,6 +603,12 @@ built  /api/hello  -> var/cache/native/bin/api__hello
 `(route.go is newer than the binary)` を添えます — ビルドし忘れた編集が
 バグに化けないためです。本番はデプロイが作ったものをそのまま使います。
 `var/cache/native/` は雛形の `.gitignore`（`/var/`）に含まれます。
+
+雛形の `Dockerfile` には Go がなく `native:build` も実行せず、
+`.dockerignore` が `/var/` を除外しています。そのまま作った本番イメージでは
+すべての `route.go` が未ビルドの `500` になります。Go を入れたビルドステージで
+`native:build` を実行し、`var/cache/native/bin` を最終イメージへコピーして
+ください。
 
 **リクエストの流れ。** 常駐する Go サーバはありません。PHP が
 **リクエストごとに** バイナリを CGI の子プロセスとして起動し
@@ -625,9 +634,18 @@ built  /api/hello  -> var/cache/native/bin/api__hello
   json.Unmarshal([]byte(os.Getenv("RELAYER_ROUTE_PARAMS")), &params)
   id := params["id"]
   ```
-- その下に PHP プロセスの環境変数（`DATABASE_DSN` など）があるので、
-  同じサービスに届きます。フレームワークの変数はクライアントが注入し
-  うるどんな値よりも常に優先されます。
+- その下に PHP プロセスの **実際の環境変数** があります。`.env` ファイルの
+  値は **含まれません**（Symfony Dotenv が埋めるのは `$_ENV` / `$_SERVER`
+  だけです）。Go で必要な設定は、シェル・コンテナ・プロセスマネージャで
+  実際の環境変数として渡してください。フレームワークの変数はクライアントが
+  注入しうるどんな値よりも常に優先されます。
+- `multipart/form-data` の本文は、PHP が解析した内容から組み立て直して
+  渡します（元の本文は PHP が消費するため）。`r.ParseMultipartForm` /
+  `r.FormFile` がそのまま使えます。フィールドがファイルより先に並び、
+  PHP の `upload_max_filesize` / `post_max_size` が先に適用され、PHP が
+  拒否したアップロードはパートの欠落ではなく JSON `500` になります。
+- `r.RemoteAddr` はクライアント IP とポート `0` です（CGI はポートを
+  渡しません）。
 
 **メソッド。** 生成されるエントリポイントは `route.php` の規則を適用
 します: 未宣言の `OPTIONS` は `204` ＋ `Allow`、`GET` があって `HEAD` が
@@ -849,13 +867,16 @@ func Proxy(w http.ResponseWriter, r *http.Request) {
 
 - **`Relayer-Next: 1`** がある → 続行。本文は無視します。渡す `Request`
   には 2 種類の書き換え指示が効きます: `Relayer-Rewrite-Path: /other`
-  でそのパスでルーティング（1 つだけ）、`Relayer-Request-Header-<Name>:
+  でそのパスでルーティング（1 つだけ。`route.go` では新しいパスが
+  `os.Getenv("PATH_INFO")` に入り、`r.URL.Path` はクライアントが要求した
+  パスのままです）、`Relayer-Request-Header-<Name>:
   value` でリクエストヘッダ `<Name>` を追加／上書き（複数可。ルート側の
   `$request->header('x-user')` で読めます。プロキシ自身の `r.Header` は
   変わりません）。それ以外のレスポンスヘッダ（`Set-Cookie` / `X-*` など）
   は **最終応答にマージ** され、ページ / ルートが自分のヘッダを書く前に
-  出力されます（`NextResponse.next({ headers })` と同じ形）。`Status:`
-  は適用されません。
+  出力されます（`NextResponse.next({ headers })` と同じ形）。`Status:`・
+  `Content-Type`・`Content-Length` は無視される本文を説明するものなので
+  適用されません。
 - **`Relayer-Next` が無い** → 短絡。`Status:`（既定 200）/ ヘッダ / 本文
   をそのまま送り、他には何も動きません — ページも `route.php` も
   `route.go` も。

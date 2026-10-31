@@ -579,7 +579,11 @@ method), copies both into `var/cache/native/build/<slug>/` with a
 stdlib-only `go.mod` (a `go.mod` / `go.sum` you place beside the
 `route.go` is used instead, so third-party modules work), and runs
 `go build -o var/cache/native/bin/<slug>`. `<slug>` is the URL pattern
-with `/` → `__` (`/api/users/[id]` → `api__users__[id]`). It needs `go`
+with `/` → `__` (`/api/users/[id]` → `api__users__[id]`); two routes that
+end up with one slug (`/a/b` and `/a__b`) fail the build. Only `route.go`
+and `go.mod` / `go.sum` are copied, so a sibling `helper.go` is not
+compiled: keep a route in one file, or import shared code as a module.
+It needs `go`
 on `PATH` — or `GO_BIN=/path/to/go` — and is a separate command from
 `relayer compile` for that reason. A `route.go` that declares no handler,
 or is not `package main`, fails the build with a message naming the file;
@@ -597,6 +601,11 @@ binary older than its `route.go` gets the same answer with
 rebuild cannot masquerade as a bug. Production serves whatever the deploy
 built. `var/cache/native/` is covered by the scaffolded `.gitignore`
 (`/var/`).
+
+The scaffolded `Dockerfile` has no Go and does not run `native:build`, and
+`.dockerignore` excludes `/var/`, so a production image built from it serves
+every `route.go` as the unbuilt `500`. Add a build stage with Go that runs
+`native:build`, then copy `var/cache/native/bin` into the final image.
 
 **How a request runs.** There is no resident Go server: PHP starts the
 binary **per request** as a CGI child (`proc_open`), passes the request as
@@ -622,9 +631,16 @@ Specifically, the handler sees:
   json.Unmarshal([]byte(os.Getenv("RELAYER_ROUTE_PARAMS")), &params)
   id := params["id"]
   ```
-- The PHP process's environment underneath (`DATABASE_DSN` & co.), so a
-  handler can reach the same services. Framework variables always win over
-  anything a client could inject.
+- The PHP process's **real environment variables** underneath. Values from
+  `.env` files are *not* included: Symfony Dotenv only fills `$_ENV` /
+  `$_SERVER`, so a setting Go needs must be a real environment variable
+  (set by the shell, container or process manager). Framework variables
+  always win over anything a client could inject.
+- A `multipart/form-data` body, rebuilt from what PHP parsed (PHP consumes
+  the original), so `r.ParseMultipartForm` / `r.FormFile` work. Fields come
+  before files, PHP's `upload_max_filesize` / `post_max_size` apply first,
+  and an upload PHP rejected is a JSON `500` rather than a missing part.
+- `r.RemoteAddr` carries the client IP with port `0`; CGI passes no port.
 
 **Methods.** The generated entrypoint applies the `route.php` rules: an
 undeclared `OPTIONS` → `204` + `Allow`; an undeclared `HEAD` with a `GET`
@@ -841,13 +857,16 @@ func Proxy(w http.ResponseWriter, r *http.Request) {
 
 - **`Relayer-Next: 1`** present → continue. The body is ignored. Two
   rewrite instructions apply to the `Request` handed on:
-  `Relayer-Rewrite-Path: /other` routes on that path instead (one), and
+  `Relayer-Rewrite-Path: /other` routes on that path instead (one; a
+  `route.go` sees the new path in `os.Getenv("PATH_INFO")`, while its
+  `r.URL.Path` stays what the client requested), and
   `Relayer-Request-Header-<Name>: value` adds or replaces request header
   `<Name>` (any number) — `$request->header('x-user')` in the route,
   `r.Header` is unchanged for the proxy itself. Every other response
   header (`Set-Cookie`, `X-*`, …) is **merged into the final response**,
   emitted before the page / route writes its own (the
-  `NextResponse.next({ headers })` shape). `Status:` is not applied.
+  `NextResponse.next({ headers })` shape). `Status:`, `Content-Type` and
+  `Content-Length` are not applied: they describe the ignored body.
 - **No `Relayer-Next`** → short-circuit: `Status:` (default 200), headers
   and body are sent as-is; nothing else runs — not the page, not
   `route.php`, not a `route.go`.

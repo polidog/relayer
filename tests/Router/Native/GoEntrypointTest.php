@@ -23,6 +23,7 @@ final class GoEntrypointTest extends TestCase
         // OPTIONS synthesized as 204 + Allow (declared + HEAD + OPTIONS, sorted).
         self::assertStringContainsString('case "OPTIONS":', $go);
         self::assertStringContainsString('w.Header().Set("Allow", "GET, HEAD, OPTIONS, POST")', $go);
+        self::assertStringContainsString('w.Header()["Content-Type"] = nil', $go);
         self::assertStringContainsString('http.StatusMethodNotAllowed', $go);
         self::assertStringContainsString('{"error":"Method Not Allowed"}', $go);
         self::assertStringContainsString('cgi.Serve(http.HandlerFunc(relayerDispatch))', $go);

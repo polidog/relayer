@@ -41,7 +41,7 @@ final class GoEntrypoint
             $cases[] = "\tcase \"HEAD\":\n\t\tGET(headWriter{w}, r)";
         }
         if (!\in_array('OPTIONS', $declared, true)) {
-            $cases[] = "\tcase \"OPTIONS\":\n\t\tw.Header().Set(\"Allow\", {$allowLiteral})\n\t\tw.WriteHeader(http.StatusNoContent)";
+            $cases[] = "\tcase \"OPTIONS\":\n\t\tw.Header().Set(\"Allow\", {$allowLiteral})\n\t\tw.Header()[\"Content-Type\"] = nil // net/http/cgi would otherwise label the empty body\n\t\tw.WriteHeader(http.StatusNoContent)";
         }
 
         $switch = \implode("\n", $cases);

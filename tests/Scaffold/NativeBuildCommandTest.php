@@ -203,6 +203,22 @@ final class NativeBuildCommandTest extends TestCase
         self::assertStringContainsString('src/Pages/middleware/route.go would be built to the same binary as middleware.go', $this->captured());
     }
 
+    public function testRoutesWhoseSlugsCollideAreRejected(): void
+    {
+        $_ENV[GoToolchain::ENV_GO_BIN] = $this->project . '/no-such-go';
+        $handler = "package main\n\nimport \"net/http\"\n\nfunc GET(w http.ResponseWriter, r *http.Request) {}\n";
+        $this->routeGo('api/a/b', $handler);
+        $this->routeGo('api/a__b', $handler);
+
+        $status = NativeBuildCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(1, $status);
+        self::assertStringContainsString(
+            'src/Pages/api/a/b/route.go and src/Pages/api/a__b/route.go would be built to the same binary',
+            $this->captured(),
+        );
+    }
+
     public function testMissingSrcPagesReturnsError(): void
     {
         $bare = \sys_get_temp_dir() . '/relayer-native-bare-' . \bin2hex(\random_bytes(6));
