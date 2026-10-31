@@ -64,6 +64,34 @@ final class AppRouterLocaleTest extends TestCase
         self::assertSame(['path' => '/users', 'loc' => 'ja'], \json_decode($output, true));
     }
 
+    public function testAnEncodedLocalePrefixIsStrippedAndTheRestDecodedOnce(): void
+    {
+        $this->writeRoute('記事/[slug]', <<<'PHP'
+            use Polidog\Relayer\Http\Request;
+            use Polidog\Relayer\Http\Response;
+            use Polidog\Relayer\Router\Component\PageContext;
+
+            return [
+                'GET' => static fn (Request $r, PageContext $ctx): Response => Response::json([
+                    'path' => $r->path,
+                    'loc' => $r->locale(),
+                    'slug' => $ctx->params['slug'],
+                ]),
+            ];
+            PHP);
+
+        $app = AppRouter::create($this->workDir);
+        $app->setContainer($this->container());
+
+        $output = $this->dispatch($app, '/%6Aa/%E8%A8%98%E4%BA%8B/a%252Fb', 'GET');
+
+        self::assertSame(200, \http_response_code());
+        self::assertSame(
+            ['path' => '/%E8%A8%98%E4%BA%8B/a%252Fb', 'loc' => 'ja', 'slug' => 'a%2Fb'],
+            \json_decode($output, true),
+        );
+    }
+
     public function testRootMiddlewareObservesResolvedLocale(): void
     {
         // Regression for the review note: locale must be resolved BEFORE

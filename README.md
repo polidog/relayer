@@ -497,8 +497,10 @@ return [
 ```
 
 - Lives in `src/Pages/` alongside pages, with the same `[param]` dynamic
-  segments — read them via `$ctx->params['id']`. A directory is a page
-  **or** a route, not both (the scanner errors if it finds both).
+  segments — read them via `$ctx->params['id']`. Params are percent-decoded
+  once (`a%20b` → `a b`, `a%2Fb` → `a/b`, still one segment), so treat them
+  as untrusted text. A directory is a page **or** a route, not both (the
+  scanner errors if it finds both).
 - A handler **must return a `Response`**. Build it with
   `Response::json($data, $status, $headers)` (encodes + sets
   `Content-Type: application/json`, slashes/unicode unescaped),
@@ -800,6 +802,12 @@ return function (Request $request, Closure $next): void {
   endpoints deliberately run outside it — something that must cover those
   too (an origin guard) goes in `AppRouter::setGuard()`, which takes the
   same closure and runs before everything (see below).
+- `$request->path` has one spelling per route: `/%61dmin` and `/admin/`
+  arrive as `/admin`. It stays percent-encoded, so compare a non-ASCII path
+  through `$request->decodedPath()`:
+  `str_starts_with($request->decodedPath(), '/管理')`. A path with a
+  dot-segment (`..`, `%2e%2e`, `..%2Fx`), a control character (`%00`, `%0A`),
+  invalid UTF-8 or a malformed escape matches no route (404).
 
 **CORS** ships as a ready-made middleware — the one provided
 implementation, not a parallel system:
@@ -1425,7 +1433,8 @@ return function (PageContext $ctx, Request $req): Closure {
 | Method                       | Returns                                       |
 | ---------------------------- | --------------------------------------------- |
 | `$req->method`               | uppercase HTTP method                         |
-| `$req->path`                 | request path (no query string)                |
+| `$req->path`                 | request path (no query string), percent-encoded in one canonical spelling |
+| `$req->decodedPath()`        | `$req->path` decoded, for comparing (e.g. `/日本語`) |
 | `$req->uri()`                | verbatim request URI (query string included)  |
 | `$req->isGet()` / `isPost()` | `bool`                                        |
 | `$req->isMethod('PUT')`      | `bool`                                        |
