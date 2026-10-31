@@ -17,7 +17,8 @@
 - React アイランド (`Island::mount()`) — リッチ UI 用の脱出ハッチ。
   サーバ描画シェル＋クライアント React、props は PHP から、バンドルは自前
 - 任意のルートミドルウェア (`src/Pages/middleware.php`) が全ディスパッチを
-  ラップ。同梱の `Cors` ミドルウェアも提供
+  ラップ。同梱ミドルウェアとして `Cors`・`OriginGuard`（CDN を迂回した
+  リクエストの拒否）・`TrustedProxy`（プロキシ配下の実クライアント IP）を提供
 - CSRF 保護付きサーバアクション（`$ctx->action()` /
   `PageComponent::action()`、フォーム送信をページ内ハンドラへディスパッチ）
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -675,6 +676,118 @@ return Cors::middleware([
 `Access-Control-Allow-Origin` を付与します。`credentials: true` と
 `origins: ['*']` の併用時はリクエスト Origin を反映します（仕様上 `*` と
 credentials は併用不可のため）。
+
+#### オリジン保護と trusted proxy（CDN の裏で動かす）
+
+Cloudflare やリバースプロキシの裏で動くアプリが毎回手書きしている 2 つ ——
+**CDN を迂回したリクエストを弾く** ことと **実クライアント IP を取り戻す**
+こと —— を同梱ミドルウェアで提供します。どちらも `Cors` と同じ
+`fn(Request, $next)` クロージャなので、合成の仕方も同じです。
+
+**`OriginGuard`** は、CDN が転送時に付与するシークレットヘッダーを検証し、
+無い・一致しないリクエストに `403` を返します:
+
+```php
+<?php
+// src/Pages/middleware.php
+use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Relayer;
+use Psr\Log\LoggerInterface;
+
+return OriginGuard::middleware([
+    'header'         => 'X-Origin-Secret',                 // 既定値
+    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+    'except'         => ['/healthz'],                      // 完全一致、または `/prefix/*`
+    'mode'           => 'enforce',                         // または 'report'
+    'logger'         => Relayer::container()->get(LoggerInterface::class), // 任意
+]);
+```
+
+- **デフォルトは無効** —— 空でないシークレットが 1 つも無ければ素通しなので、
+  ローカルの `php -S` や CI が突然 403 だらけになることはありません。
+- `secretsFromEnv` にはシークレットが入っている環境変数名を書きます。
+  フレームワーク自身の設定と同じ順（`$_ENV` → `$_SERVER` → `getenv()`）で
+  読むので、`.env.local` でも `fly secrets` の実環境変数でも、
+  `variables_order` に関係なく効きます。未設定・空のものは無視します。
+  値を手元に持っているなら `secrets` に直接渡すこともできます。
+- どちらも複数書けます。ローテーション中は新旧両方の変数名を書いておけば
+  どちらも通ります。各候補は `hash_equals` で比較します。
+- `except` は、ヘッダー無しで来るのが正しいパス（プラットフォームの
+  ヘルスチェック）をチェック対象から外します。
+- `mode: 'report'` は拒否せず「拒否されるはずだった」ことをログに出して
+  通します —— `enforce` に切り替える前の様子見に使ってください。
+- ログ（PSR-3 の `warning`。渡した DI ロガー、無ければ SAPI のエラーログ）
+  に出るのはメソッド / パス / `REMOTE_ADDR` だけで、設定したシークレットも
+  クライアントが送ってきた値も決して出しません。
+- シークレットは環境変数で渡してください（`fly secrets set`、gitignore 済みの
+  `.env.local`）。コミットする設定ファイルに直書きしないこと。
+
+**`TrustedProxy`** は転送ヘッダーからクライアント IP を解決しますが、直前の
+ホップ（`REMOTE_ADDR`）が信頼するプロキシのときだけです。結果は
+`$request->clientIp()` で取れます。`$request->ip()` は **変わらず**
+`REMOTE_ADDR` を返し続け、`clientIp()` は何も解決されなければ `ip()` に
+フォールバックするので、ページ側は無条件に呼べます。
+
+```php
+use Polidog\Relayer\Http\TrustedProxy;
+
+// 前段が Cloudflare: CF-Connecting-IP。Cloudflare の IP レンジから来たときだけ信頼。
+// レンジは同梱しません（変わるため）—— https://www.cloudflare.com/ips-v4 と
+// /ips-v6 を取得して渡してください。
+return TrustedProxy::middleware(['preset' => 'cloudflare', 'proxies' => $cloudflareRanges]);
+
+// Fly.io: Fly-Client-IP。Fly Proxy が唯一の入口なのでレンジ指定は不要。
+return TrustedProxy::middleware(['preset' => 'fly']);
+
+// 自前のプロキシ: X-Forwarded-For を右から辿り、自分のプロキシを読み飛ばす。
+return TrustedProxy::middleware(['preset' => 'xff', 'proxies' => ['10.0.0.0/8']]);
+
+// 任意の単一 IP ヘッダー。`proxies` は必須。
+return TrustedProxy::middleware(['header' => 'X-Real-IP', 'proxies' => ['192.0.2.1']]);
+```
+
+`proxies` の要素は単一アドレスか CIDR（IPv4 / IPv6）。信頼しないホップから
+来たヘッダーや、IP として不正な値は無視します。
+
+**レシピ: Cloudflare + Fly.io。** Fly では `REMOTE_ADDR` が Fly Proxy になる
+ため、`cloudflare` プリセットの「直前ホップが Cloudflare」判定は成立しません
+—— CDN は 2 ホップ先で、`xxx.fly.dev` は CDN を迂回して到達できたままです。
+代わりに `fly` プリセットとオリジン保護を組み合わせます:
+
+1. Cloudflare → Rules → Transform Rules → *Modify Request Header* で、
+   ゾーンに対して `X-Origin-Secret` に長いランダム値を設定する。
+2. `fly secrets set ORIGIN_SECRET=<その値>`（ローテーションは新しい値に加えて
+   `ORIGIN_SECRET_PREVIOUS=<旧値>` を設定し、後で後者を外す）。
+3. ミドルウェアを手で合成する —— 外側から順に（チェーンランナーは無い）:
+
+```php
+<?php
+// src/Pages/middleware.php
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Cors;
+use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\TrustedProxy;
+
+$proxy = TrustedProxy::middleware(['preset' => 'fly']);
+$guard = OriginGuard::middleware([
+    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+    'except'         => ['/healthz'],
+]);
+$cors = Cors::middleware(['origins' => ['https://app.example.com']]);
+
+return fn (Request $request, Closure $next) => $proxy(
+    $request,
+    fn (Request $r) => $guard($r, fn (Request $r) => $cors($r, $next)),
+);
+```
+
+4. 確認: `curl -I https://<app>.fly.dev/` が `403`、独自ドメイン（Cloudflare
+   経由）が `200`、`/healthz` はどちらからでも `200` になること。
+
+`example/` アプリにはこの合成が入っています。`ORIGIN_SECRET` を設定するまで
+は無効のまま動きます。
 
 ### ルート確認
 

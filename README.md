@@ -17,7 +17,9 @@ Opinionated, batteries-included framework on top of
 - React islands (`Island::mount()`) — a rich-UI escape hatch: server-rendered
   shell, client React component, props from PHP, your own bundle
 - Optional root middleware (`src/Pages/middleware.php`) wrapping every
-  dispatch, plus a ready-made `Cors` middleware
+  dispatch, plus ready-made `Cors`, `OriginGuard` (reject requests that
+  bypass your CDN) and `TrustedProxy` (real client IP behind a proxy)
+  middlewares
 - CSRF-protected server actions (`$ctx->action()` /
   `PageComponent::action()` dispatch form posts to in-page handlers)
 - [Symfony DependencyInjection](https://symfony.com/doc/current/components/dependency_injection.html)
@@ -670,6 +672,119 @@ It answers `OPTIONS` preflights with `204` itself and adds
 `Access-Control-Allow-Origin` to actual requests. `credentials: true` with
 `origins: ['*']` reflects the request Origin (a literal `*` is invalid with
 credentials per spec).
+
+#### Origin guard and trusted proxy (running behind a CDN)
+
+Two more provided middlewares cover the pair of chores every app behind
+Cloudflare / a reverse proxy otherwise hand-writes: *refuse requests that
+bypassed the CDN* and *recover the real client IP*. Both are plain
+`fn(Request, $next)` closures like `Cors`, so you compose them the same way.
+
+**`OriginGuard`** checks a secret header the CDN stamps on every forwarded
+request and answers `403` when it is missing or wrong:
+
+```php
+<?php
+// src/Pages/middleware.php
+use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Relayer;
+use Psr\Log\LoggerInterface;
+
+return OriginGuard::middleware([
+    'header'         => 'X-Origin-Secret',                 // default
+    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+    'except'         => ['/healthz'],                      // exact path, or `/prefix/*`
+    'mode'           => 'enforce',                         // or 'report'
+    'logger'         => Relayer::container()->get(LoggerInterface::class), // optional
+]);
+```
+
+- **Off by default** — with no non-empty secret every request passes, so a
+  local `php -S` or CI never turns into a wall of 403s.
+- `secretsFromEnv` names the environment variables holding the secrets,
+  read the way the framework reads its own config (`$_ENV`, then `$_SERVER`,
+  then `getenv()` — a `.env.local` and a real `fly secrets` variable both
+  work whatever `variables_order` says). Unset / blank ones are skipped.
+  `secrets` takes literal values instead, if you already have them in hand.
+- Either list may hold several entries: during a rotation name the new *and*
+  the old variable and both are accepted. Every candidate is compared with
+  `hash_equals`.
+- `except` skips the check for paths that legitimately arrive without the
+  header (platform health checks).
+- `mode: 'report'` logs what *would* be rejected and lets the request through
+  — run it for a while before switching to `enforce`.
+- Log lines (PSR-3 `warning`, via the DI logger you pass, else the SAPI error
+  log) carry method / path / `REMOTE_ADDR` only — never a configured secret
+  nor the value the client sent.
+- Pass secrets in from the environment (`fly secrets set`, a gitignored
+  `.env.local`); don't write them into a committed config file.
+
+**`TrustedProxy`** resolves the client IP from a forwarding header, but only
+when the immediate hop (`REMOTE_ADDR`) is a proxy you trust. The result is
+`$request->clientIp()`; `$request->ip()` is **unchanged** and keeps returning
+`REMOTE_ADDR`, and `clientIp()` falls back to `ip()` when nothing was
+resolved, so pages can call it unconditionally.
+
+```php
+use Polidog\Relayer\Http\TrustedProxy;
+
+// Cloudflare in front: CF-Connecting-IP, honored only from Cloudflare's ranges.
+// The ranges are not bundled (they change) — fetch https://www.cloudflare.com/ips-v4
+// and /ips-v6 and pass them in.
+return TrustedProxy::middleware(['preset' => 'cloudflare', 'proxies' => $cloudflareRanges]);
+
+// Fly.io: Fly-Client-IP. The Fly proxy is the only ingress, so no range list is needed.
+return TrustedProxy::middleware(['preset' => 'fly']);
+
+// A proxy of your own: X-Forwarded-For walked from the right past your proxies.
+return TrustedProxy::middleware(['preset' => 'xff', 'proxies' => ['10.0.0.0/8']]);
+
+// Any single-IP header; `proxies` is required.
+return TrustedProxy::middleware(['header' => 'X-Real-IP', 'proxies' => ['192.0.2.1']]);
+```
+
+`proxies` entries are plain addresses or CIDR ranges, IPv4 and IPv6. A header
+from an untrusted hop, or one that is not a valid IP, is ignored.
+
+**Recipe: Cloudflare in front of Fly.io.** On Fly, `REMOTE_ADDR` is the Fly
+proxy, so the `cloudflare` preset's "immediate hop is Cloudflare" check can't
+hold — the CDN is two hops away and `xxx.fly.dev` stays reachable around it.
+Combine the `fly` preset with the origin guard instead:
+
+1. Cloudflare → Rules → Transform Rules → *Modify Request Header*: set
+   `X-Origin-Secret` to a long random value for your zone.
+2. `fly secrets set ORIGIN_SECRET=<that value>` (rotate by setting the new
+   value plus `ORIGIN_SECRET_PREVIOUS=<old>`, then dropping the latter).
+3. Compose the middlewares — outermost first, by hand (no chain runner):
+
+```php
+<?php
+// src/Pages/middleware.php
+declare(strict_types=1);
+
+use Polidog\Relayer\Http\Cors;
+use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\TrustedProxy;
+
+$proxy = TrustedProxy::middleware(['preset' => 'fly']);
+$guard = OriginGuard::middleware([
+    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+    'except'         => ['/healthz'],
+]);
+$cors = Cors::middleware(['origins' => ['https://app.example.com']]);
+
+return fn (Request $request, Closure $next) => $proxy(
+    $request,
+    fn (Request $r) => $guard($r, fn (Request $r) => $cors($r, $next)),
+);
+```
+
+4. Verify: `curl -I https://<app>.fly.dev/` is `403`, the custom domain
+   (through Cloudflare) is `200`, and `/healthz` is `200` either way.
+
+The `example/` app ships this composition; it runs unguarded until you set
+`ORIGIN_SECRET`.
 
 ### Inspecting routes
 

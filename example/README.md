@@ -15,8 +15,9 @@ A tiny app that exercises the main Relayer features:
   `src/Pages/api/users/[id]/route.php` (`GET /api/users/1`)
 - React island (server shell + client component fetching `/api/users`) —
   `src/Pages/react/page.psx` + `public/islands.js` (`/react`)
-- Root middleware (request-id header composed with the `Cors` middleware) —
-  `src/Pages/middleware.php`
+- Root middleware (`TrustedProxy` → `OriginGuard` → request-id header →
+  `Cors`, composed by hand) — `src/Pages/middleware.php`. The origin guard
+  is off until `ORIGIN_SECRET` is set
 - Function-style page using `$ctx->action()` for server-side validation —
   `src/Pages/signup/page.psx`
 - Root layout — `src/Pages/layout.psx`

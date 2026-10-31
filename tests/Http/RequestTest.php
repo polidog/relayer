@@ -155,6 +155,39 @@ final class RequestTest extends TestCase
         self::assertSame('https://example.com:8080/dashboard?tab=1', $req->url());
     }
 
+    public function testIpIgnoresForwardingHeadersAndClientIpFallsBackToIt(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/',
+            'REMOTE_ADDR' => '203.0.113.7',
+            'HTTP_X_FORWARDED_FOR' => '198.51.100.1',
+            'HTTP_CF_CONNECTING_IP' => '198.51.100.2',
+            'HTTP_FLY_CLIENT_IP' => '198.51.100.3',
+        ];
+        $_GET = $_POST = $_FILES = [];
+
+        $req = Request::fromGlobals();
+
+        self::assertSame('203.0.113.7', $req->ip(), 'ip() must stay REMOTE_ADDR regardless of forwarding headers');
+        self::assertSame('203.0.113.7', $req->clientIp(), 'without a trusted proxy clientIp() is exactly ip()');
+    }
+
+    public function testWithClientIpIsImmutableAndSurvivesOtherWithers(): void
+    {
+        $req = new Request(method: 'GET', path: '/a', headers: ['x' => 'y'], ip: '203.0.113.7', host: 'example.com');
+
+        $resolved = $req->withClientIp('198.51.100.9');
+
+        self::assertNull('203.0.113.7' === $req->clientIp() ? null : 'changed', 'the original must not change');
+        self::assertSame('198.51.100.9', $resolved->clientIp());
+        self::assertSame('203.0.113.7', $resolved->ip());
+        self::assertSame('y', $resolved->header('x'));
+        self::assertSame('example.com', $resolved->host());
+        self::assertSame('198.51.100.9', $resolved->withPath('/b')->clientIp());
+        self::assertSame('198.51.100.9', $resolved->withLocale('ja')->clientIp());
+    }
+
     public function testSchemeIsHttpWhenHttpsIsOffAndUrlIsNullWithoutAHost(): void
     {
         $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'HTTPS' => 'off'];
