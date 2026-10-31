@@ -200,9 +200,10 @@ final class ScaffoldTest extends TestCase
         // merely slowing it down. Unlike the single-binary build, this
         // image's build path IS its runtime path, so the two path-keyed
         // artifacts are safe to bake in here.
-        self::assertStringContainsString('usephp compile src/Pages', $dockerfile);
-        self::assertStringContainsString('relayer routes:compile', $dockerfile);
-        self::assertStringContainsString('relayer container:compile', $dockerfile);
+        // `relayer compile` covers them and skips a missing src/Components,
+        // which `usephp compile` would fail on.
+        self::assertStringContainsString('RUN vendor/bin/relayer compile', $dockerfile);
+        self::assertStringNotContainsString('usephp compile', $dockerfile);
         // ...and prod must actually boot as prod: the committed .env says
         // APP_ENV=dev, which would live-build past every artifact above.
         self::assertStringContainsString("printf 'APP_ENV=prod\\n' > .env.local", $dockerfile);

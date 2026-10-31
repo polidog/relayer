@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Tests\Psx;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Tests\Fixtures\PlainService;
+use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
@@ -100,6 +101,19 @@ final class PsxComponentRegistrarTest extends TestCase
         self::assertTrue(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
     }
 
+    public function testNeedsCompileReturnsTrueWhenCompilerVersionChanged(): void
+    {
+        $componentsDir = $this->workDir . '/Components';
+        $manifestPath = $this->workDir . '/manifest.php';
+        \mkdir($componentsDir, 0o777, true);
+
+        \file_put_contents($manifestPath, '<?php return [];');
+        self::assertTrue(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
+
+        \file_put_contents($manifestPath . '.version', '0');
+        self::assertTrue(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
+    }
+
     public function testNeedsCompileReturnsFalseWhenManifestFresh(): void
     {
         $componentsDir = $this->workDir . '/Components';
@@ -110,6 +124,7 @@ final class PsxComponentRegistrarTest extends TestCase
         \touch($componentsDir . '/Greeting.psx', \time() - 60);
 
         \file_put_contents($manifestPath, '<?php return [];');
+        \file_put_contents($manifestPath . '.version', (string) CompileCommand::CACHE_VERSION);
 
         self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
     }
@@ -151,6 +166,7 @@ final class PsxComponentRegistrarTest extends TestCase
         \file_put_contents($componentsDir . '/Plain.psx', "<?php\nreturn fn() => null;\n");
         \touch($componentsDir . '/Plain.psx', \time() - 60);
         \file_put_contents($manifestPath, '<?php return [];');
+        \file_put_contents($manifestPath . '.version', (string) CompileCommand::CACHE_VERSION);
 
         self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
     }

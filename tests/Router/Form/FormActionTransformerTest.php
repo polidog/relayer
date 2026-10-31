@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Tests\Router\Form;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
+use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\Relayer\Router\Form\FormActionTransformer;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
@@ -30,7 +31,6 @@ final class FormActionTransformerTest extends TestCase
         // sneak into the children array even though Element's phpdoc
         // declares the array contract more strictly. The transformer must
         // tolerate that without throwing.
-        /** @phpstan-ignore argument.type */
         $node = new Element('div', [], [
             new Element('p', [], ['kept']),
             null,
@@ -46,12 +46,29 @@ final class FormActionTransformerTest extends TestCase
         self::assertSame('literal-string', $result->children[1]);
     }
 
+    public function testNestedChildrenAreFlattenedAndTransformed(): void
+    {
+        $token = FormAction::create('Page', 'save');
+        $node = new Element('div', [], [
+            [new Element('p', [], ['kept']), ['nested', null]],
+            [new Element('form', ['action' => $token], [[new Element('input', ['name' => 'email'], [])]])],
+        ]);
+
+        $result = FormActionTransformer::apply($node, '/x');
+
+        self::assertInstanceOf(Element::class, $result);
+        self::assertCount(3, $result->children);
+        self::assertSame('nested', $result->children[1]);
+        $form = $result->children[2];
+        self::assertInstanceOf(Element::class, $form);
+        self::assertSame('/x', $form->props['action']);
+    }
+
     public function testNullChildrenInsideFormAreFiltered(): void
     {
         // Regression guard for the original failure mode: the recursive
         // descent must not bubble a null through to the form normalizer
         // either.
-        /** @phpstan-ignore argument.type */
         $form = new Element('form', ['method' => 'post', 'action' => '/submit'], [
             new Element('input', ['name' => 'email'], []),
             null,

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router;
 
 use Closure;
-use JsonException;
 use LogicException;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
@@ -48,7 +47,6 @@ use Polidog\UsePhp\Component\BaseComponent;
 use Polidog\UsePhp\Component\ComponentInterface;
 use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Psx\Compiler;
-use Polidog\UsePhp\Runtime\Action;
 use Polidog\UsePhp\Runtime\ComponentState;
 use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
@@ -134,6 +132,11 @@ final class AppRouter
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
     private ?UsePHP $usephp = null;
+
+    /** Signs and handles state actions when no UsePHP was set. */
+    private ?UsePHP $standaloneActionApp = null;
+
+    private ?ActionReplayRouter $actionReplayRouter = null;
 
     /**
      * Function-style page factories keyed by the (compiled) file path —
@@ -295,7 +298,10 @@ final class AppRouter
      */
     public function setUsePhp(UsePHP $usephp): self
     {
-        $this->usephp = $usephp;
+        // Relayer guards state actions itself (see isAuthenticStateAction()).
+        // usePHP's check would add an Origin comparison that fails behind a
+        // TLS-terminating proxy.
+        $this->usephp = $usephp->disableCsrfProtection();
 
         return $this;
     }
@@ -1394,7 +1400,7 @@ final class AppRouter
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
-            : 'page:' . $page::class;
+            : 'page:' . $page::class . '#page';
 
         // Surface server-action (form POST hitting `$ctx->action()` or a
         // class-style `actionXyz` handler) and useState setState as
@@ -1431,13 +1437,45 @@ final class AppRouter
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
-            : 'page:' . $page::class;
+            : 'page:' . $page::class . '#page';
+
+        if ($this->isStateAction($page)) {
+            if ($this->isAuthenticStateAction()) {
+                $this->dispatchStateAction($page, $layouts, $componentId);
+
+                return;
+            }
+
+            // Same 403 contract as the form-action dispatchers in PageComponent
+            // / FunctionPage: state stays as it was and the page is what the
+            // 403 carries.
+            \http_response_code(403);
+        }
+
+        $renderer = $this->layoutRenderer($componentId);
+        $html = $renderer->render($this->renderPageElement($page, $componentId), $layouts);
+
+        if (null !== $this->request()->header('X-UsePHP-Partial')) {
+            echo $html;
+
+            return;
+        }
+
+        echo $this->renderPageDocument($page, $layouts, $componentId, $html);
+    }
+
+    /**
+     * Run the page's own render, including any form action on this POST. The
+     * layouts render later, in {@see LayoutRenderer}.
+     */
+    private function renderPageElement(ComponentInterface|FunctionPage $page, string $componentId): Element
+    {
+        // Auto-generated instance keys ("#0") have to line up with the ones the
+        // action's replay produces, whatever ran earlier in this process.
+        RenderContext::beginRender();
 
         $state = ComponentState::getInstance($componentId);
         ComponentState::reset();
-
-        // Handle useState action (onClick etc.) before rendering
-        $this->dispatchStateAction($componentId, $state);
 
         if ($page instanceof BaseComponent) {
             $page->setComponentState($state);
@@ -1457,6 +1495,7 @@ final class AppRouter
                 //    any state mutations made by the action handler.
                 $page->render();
                 $page->dispatchActionFromRequest();
+                RenderContext::beginRender();
                 $pageElement = $page->renderAfterDispatch();
             } else {
                 $page->dispatchActionFromRequest(); // no-op on GET
@@ -1477,7 +1516,11 @@ final class AppRouter
             $this->document->setMetadata($page->getMetadata());
         }
 
-        $requestUri = $this->request()->uri();
+        return $pageElement;
+    }
+
+    private function layoutRenderer(string $componentId): LayoutRenderer
+    {
         // Pass the configured SnapshotSerializer so the inner Renderer can
         // HMAC-sign snapshot-backed component state rendered into the page.
         // Defer placeholders (`/_defer/{name}` GET endpoint) do NOT use the
@@ -1501,21 +1544,23 @@ final class AppRouter
                 $snapshotSerializer = null;
             }
         }
-        $renderer = new LayoutRenderer(
+
+        return new LayoutRenderer(
             $componentId,
-            $requestUri,
+            $this->request()->uri(),
             $snapshotSerializer,
+            $this->actionApp()->signAction(...),
         );
-        $html = $renderer->render($pageElement, $layouts);
+    }
 
-        if (null !== $this->request()->header('X-UsePHP-Partial')) {
-            echo $html;
-
-            return;
-        }
-
+    private function renderPageDocument(
+        ComponentInterface|FunctionPage $page,
+        LayoutStack $layouts,
+        string $componentId,
+        string $html,
+    ): string {
         // Collected here, not right after $page->render(): a layout's
-        // render() only runs inside $renderer->render() above, so a layout
+        // render() only runs inside LayoutRenderer::render(), so a layout
         // declaring scripts via addJs() inside render() would otherwise be
         // missed. Past the partial early-return too — partial responses
         // bypass the document, so they must not mutate its script queue.
@@ -1531,79 +1576,90 @@ final class AppRouter
             $html,
         );
 
-        $output = $this->document->render($wrappedHtml);
-
-        echo $output;
+        return $this->document->render($wrappedHtml);
     }
 
     /**
-     * Handle useState setState actions from POST (onClick, onChange, etc.).
+     * A useState action: a JSON `_usephp_action`, unlike the `usephp-action:`
+     * tokens of form actions. It targets the page or any component on it.
      */
-    private function dispatchStateAction(string $componentId, ComponentState $state): void
+    private function isStateAction(ComponentInterface|FunctionPage $page): bool
     {
         $request = $this->request();
-        if (!$request->isPost()) {
-            return;
+        if (!$request->isPost() || $page instanceof ErrorPageComponent) {
+            return false;
         }
 
-        $actionJson = $request->post('_usephp_action');
-        $postComponentId = $request->post('_usephp_component');
+        $action = $request->post('_usephp_action');
 
-        if (!\is_string($actionJson) || !\is_string($postComponentId)) {
-            return;
-        }
+        return \is_string($action)
+            && \is_string($request->post('_usephp_component'))
+            && !\str_starts_with($action, 'usephp-action:');
+    }
 
-        // Only handle JSON actions (not usephp-action: form tokens)
-        if (\str_starts_with($actionJson, 'usephp-action:')) {
-            return;
-        }
-
-        if ($postComponentId !== $componentId) {
-            return;
-        }
-
-        // The component id is rendered into the page and is not a secret, so
-        // it cannot authenticate the request on its own. Require the
-        // session-bound CSRF token (embedded by LayoutRenderer into every
-        // setState form) before touching state — same 403 contract as the
-        // form-action dispatchers in PageComponent / FunctionPage.
+    /**
+     * The component id is rendered into the page and is not a secret, so it
+     * cannot authenticate the request. Forms rendered with the page carry the
+     * session-bound CSRF token. Those usePHP renders (defer fragments, partial
+     * responses) have only the action signature, which is bound to the session
+     * too. handleAction() verifies the signature either way.
+     */
+    private function isAuthenticStateAction(): bool
+    {
+        $request = $this->request();
         $csrf = $request->post('_usephp_csrf');
-        if (null === $csrf || !CsrfToken::validate($csrf)) {
-            \http_response_code(403);
-
-            return;
+        if (null !== $csrf) {
+            return CsrfToken::validate($csrf);
         }
 
-        try {
-            $actionData = \json_decode($actionJson, true, 512, \JSON_THROW_ON_ERROR);
-            if (!\is_array($actionData)) {
-                return;
-            }
+        SessionStarter::resume();
+        $signature = $request->post('_usephp_action_sig');
 
-            /** @var array{type: string, payload?: array<string, mixed>, componentId?: null|string, storageType?: null|string} $actionData */
-            $action = Action::fromArray($actionData);
+        return null !== $signature && $this->actionApp()->verifyActionSignature(
+            (string) $request->post('_usephp_component'),
+            (string) $request->post('_usephp_action'),
+            $signature,
+        );
+    }
 
-            if ('setState' === $action->type) {
-                $index = $action->payload['index'] ?? 0;
-                $value = $action->payload['value'] ?? null;
-                if (!\is_int($index)) {
-                    return;
-                }
-                $state->setState($index, $value);
-            }
-        } catch (JsonException) {
-            return;
-        }
+    /**
+     * Apply a useState action through usePHP, which decides what the browser
+     * gets: a redirect, the acting component's markup for a partial update, or
+     * the page itself when state would not survive a redirect.
+     */
+    private function dispatchStateAction(ComponentInterface|FunctionPage $page, LayoutStack $layouts, string $componentId): void
+    {
+        $partial = null !== $this->request()->header('X-UsePHP-Partial');
 
-        // PRG pattern: redirect after state change (non-AJAX)
-        if (null === $this->request()->header('X-UsePHP-Partial')) {
-            $redirectUrl = \strtok($this->request()->uri(), '?');
-            \header('Location: ' . $redirectUrl, true, 303);
+        $router = $this->actionReplayRouter ??= new ActionReplayRouter();
+        $router->replayWith(function () use ($page, $layouts, $componentId, $partial): Element|string {
+            $renderer = $this->layoutRenderer($componentId);
+            $pageElement = $this->renderPageElement($page, $componentId);
 
+            return $partial
+                ? new Element('div', ['data-usephp' => $componentId], [$renderer->compose($pageElement, $layouts)])
+                : $this->renderPageDocument($page, $layouts, $componentId, $renderer->render($pageElement, $layouts));
+        });
+
+        $app = $this->actionApp()
+            ->setRouter($router)
             // The redirect IS the response — abandon the render. See
             // StopRequest for why this is not `exit`.
-            throw new StopRequest();
+            ->withExitHandler(static function (): never {
+                throw new StopRequest();
+            })
+        ;
+
+        try {
+            echo $app->handleAction();
+        } finally {
+            $router->replayWith(null);
         }
+    }
+
+    private function actionApp(): UsePHP
+    {
+        return $this->usephp ?? ($this->standaloneActionApp ??= new UsePHP()->disableCsrfProtection());
     }
 
     /**
@@ -1723,8 +1779,12 @@ final class AppRouter
             );
         }
 
+        // The version sidecar catches a usePHP update that changed the
+        // compiler's output while the source stayed as it was.
+        $versionPath = $compiledPath . '.version';
         $needsCompile = !\file_exists($compiledPath)
-            || @\filemtime($compiledPath) < @\filemtime($psxPath);
+            || @\filemtime($compiledPath) < @\filemtime($psxPath)
+            || @\file_get_contents($versionPath) !== (string) CompileCommand::CACHE_VERSION;
 
         if ($needsCompile) {
             $this->ensureCacheDir();
@@ -1738,6 +1798,7 @@ final class AppRouter
             }
             $compiled = $compiler->compile($source);
             $this->atomicWrite($compiledPath, $compiled);
+            $this->atomicWrite($versionPath, (string) CompileCommand::CACHE_VERSION);
         }
 
         return $compiledPath;

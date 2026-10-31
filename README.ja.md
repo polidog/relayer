@@ -53,7 +53,7 @@
 ## 必要環境
 
 - PHP >= 8.5
-- [polidog/use-php](https://github.com/polidog/usePHP) ^0.1.0
+- [polidog/use-php](https://github.com/polidog/usePHP) ^0.10.0
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1
@@ -287,7 +287,7 @@ vendor/bin/relayer compile                # 3 つを順に実行、最初の失�
 secret」参照）:
 
 ```bash
-vendor/bin/usephp compile src/Pages src/Components   # .psx  -> コンパイル済み PHP
+vendor/bin/usephp compile src/Pages                  # .psx  -> コンパイル済み PHP（src/Components があれば追加）
 vendor/bin/relayer routes:compile                     # ルートマップ -> PHP
 vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 ```
@@ -1173,12 +1173,20 @@ public function save(array $form): void
 
 CSRF トークンが無効な場合は `403` が返ります。
 
-`useState` の状態更新（`onClick={fn() => $setX(...)}`）も同様に保護されます。
-描画される `setState` フォームにはセッションに結び付いた `_usephp_csrf` が
-自動で埋め込まれ（usePHP のクライアントは `X-UsePHP-Partial` の部分更新でも
-これを送ります）、トークンが無い・不正な状態更新 POST は状態を変更せずに
-`403` を返します。`_usephp_action` / `_usephp_component` を手書きのクライアント
-から POST する場合はこのフィールドも含めてください。
+`useState` の状態更新（`onClick`、`onChange`、`onInput`、`onSubmit`、
+`useFormAction()`）も同様に、より厳しく保護されます。描画される action には
+`_usephp_action_sig` が付きます。これは action と描画先のページに対する usePHP
+の署名で、セッションに結び付いています。サーバが描画していない action の POST
+は状態を変更せずに拒否するので、クライアントが hook の番号や値を選ぶことは
+できません。有効な署名も `_usephp_csrf` トークンもなければ `403`、トークンは
+有効でも署名が不正な場合や action の形が不正な場合は `400` を返します。ログイン
+するとセッションが再生成されるので、その前に描画したフォームも拒否されます。
+`useFormAction()` がコピーする値はクライアントの入力のままなので、使う前に検証
+してください。
+
+`fc()` コンポーネントと defer 内のコンポーネントは、ページでも layout でも自分の
+状態を持ち、その場で更新されます。action は `UsePHP::handleAction()` が処理し、
+ページを再描画してコンポーネントを見つけます。
 
 アクションにできるのはページクラス自身が宣言したメソッドだけです。継承した
 フレームワークのメソッド（や `[$this, 'method']` 以外）を `action()` に渡すと

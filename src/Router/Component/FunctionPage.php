@@ -181,7 +181,7 @@ final class FunctionPage
 
     public function getComponentId(): string
     {
-        return 'page:' . $this->pageId;
+        return 'page:' . $this->pageId . '#page';
     }
 
     public function getCache(): ?Cache
