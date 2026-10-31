@@ -224,12 +224,15 @@ LOCALE_PATH_PREFIX=true
 4. `.env.{APP_ENV}.local`  — 環境別ローカル上書き（gitignore）
 
 存在しないファイルは黙ってスキップされます。`$_ENV` / `$_SERVER` / `getenv()`
-に既に値があれば `.env` を優先せず維持され、`.local` 系ファイルはコミット
-されたカウンタパートを上書きします。
+に既に値があれば（実環境の変数）、`.local` を含むこれらすべてのファイルより
+優先されます。ファイルの間では、`.local` 系がコミットされたカウンタパートを
+上書きします。
 
 `APP_ENV=dev`（または `development`）で PSX ファイルの auto-compile が
-有効になります。それ以外（未設定含む）は本番扱いで、デプロイ時に
-`vendor/bin/usephp compile src/Pages` で事前コンパイルします。
+有効になります。それ以外の値は本番扱いで、実環境にもこれらのファイルにも
+`APP_ENV` が無い場合も本番扱いです。雛形の `.env` には `APP_ENV=dev` が入って
+いるため、実環境の変数を未設定にしただけでは dev モードのままです。本番では
+デプロイ時に `vendor/bin/usephp compile src/Pages` で事前コンパイルします。
 
 ## ルーティングとページ
 
@@ -240,7 +243,7 @@ App Router の規約に倣っています）。
 | --------------------- | ------------------------------------------------------------------- |
 | `page.psx`            | ルートのレンダリング本体。ディレクトリにつき 1 つ。                 |
 | `layout.psx`          | 配下のページを包む。ルートから葉まで階層的にスタックされる。        |
-| `error.psx`           | 404 / 405 / `$ctx->abort()` ステータスのエラーページ（ルート直下のみ）。 |
+| `error.psx`           | 404 / 405 / `$ctx->abort()` / 認証の `401`・`403` のエラーページ（ルート直下のみ）。 |
 | `route.php`           | JSON API ルート（HTML なし）。メソッド別ハンドラマップ。1 ディレクトリ 1 つ。 |
 | `[param]/`            | 動的セグメント。`$this->getParam('param')` で取得できる。           |
 | `(group)/`            | ルートグループ。URL セグメントを増やさずにファイルを整理。独自の `layout.psx` を持てる。 |
@@ -289,8 +292,10 @@ vendor/bin/relayer routes:compile                     # ルートマップ -> PH
 vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 ```
 
-あとは `APP_ENV` を未設定にし、OPcache の `validate_timestamps=0`
-（雛形の `php.ini` に本番ブロックを同梱）で起動します。各ステップは
+あとは `.env.local` か実環境の変数で `APP_ENV=prod` を指定し、OPcache の
+`validate_timestamps=0`（雛形の `php.ini` に本番ブロックを同梱）で起動します。
+`APP_ENV` を未設定にしても本番にはなりません。雛形の `.env` の `APP_ENV=dev`
+が使われ、`/_profiler` が公開されます。各ステップは
 有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
 だけで壊れません。
 
@@ -408,7 +413,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 
     return function () use ($users): Element {
         $list = $users->all();
-        return <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
+        return <ul>{\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
     };
 };
 ```
@@ -435,8 +440,12 @@ src/Pages/
 
 ルート直下に `error.psx`（`ErrorPageComponent` を継承）を置くと、ルートレイ
 アウト内にエラーレスポンスがレンダリングされます。未マッチルート（404）、
-ページへの未対応メソッド（405）、すべての `$ctx->abort()` ステータスが対象
-です。ステータスとメッセージは `ErrorPageComponent` 経由で渡されるので、1 つの `error.psx` で
+ページへの未対応メソッド（405）、すべての `$ctx->abort()` ステータス、
+`#[Auth]` / `$ctx->requireAuth()` の `401` / `403` が対象です。エラーの描画中に
+ルートレイアウト自身が認証ガードで失敗したり abort した場合はレイアウトなしで
+`error.psx` を描画し、`error.psx` も同様に失敗した場合はデフォルト表示になります。
+どの場合もステータスは変わりません。ステータスとメッセージは
+`ErrorPageComponent` 経由で渡されるので、1 つの `error.psx` で
 `getStatusCode()` を見て 404 / 403 / 500 を出し分けられます。無ければ最小限
 のデフォルト表示になります。
 
@@ -502,7 +511,9 @@ return [
 ```
 
 - ページと同じ `src/Pages/` 配下に置き、動的セグメント `[param]` も同じ規約
-  （`$ctx->params['id']` で取得）。1 ディレクトリはページ **か** ルートの
+  （`$ctx->params['id']` で取得）。params はパーセントデコードを 1 回行った
+  値です（`a%20b` → `a b`、`a%2Fb` → `a/b` で 1 セグメントのまま）。信頼できない
+  文字列として扱ってください。1 ディレクトリはページ **か** ルートの
   どちらか一方（両方あるとスキャナがエラーにします）。
 - ハンドラは **必ず `Response` を返します**。`Response::json($data,
   $status, $headers)`（JSON 化＋`Content-Type: application/json`、スラッシュ
@@ -701,7 +712,7 @@ final class Dashboard extends LayoutComponent
     public function render(): Element
     {
         $this->addJs('/assets/dashboard.js', module: true);
-        return <div>{...$this->getChildren()}</div>;
+        return <div>{$this->getChildren()}</div>;
     }
 }
 ```
@@ -808,6 +819,12 @@ return function (Request $request, Closure $next): void {
   エンドポイントは意図的にこの外で動きます —— それらも覆う必要があるもの
   （オリジン保護）は、同じクロージャを受け取ってすべての前に走る
   `AppRouter::setGuard()` に置きます（後述）。
+- `$request->path` は 1 つのルートにつき 1 つの表記になります。`/%61dmin` も
+  `/admin/` も `/admin` として届きます。パーセントエンコードは残るので、
+  非 ASCII のパスは `$request->decodedPath()` で比較します:
+  `str_starts_with($request->decodedPath(), '/管理')`。ドットセグメント
+  （`..`、`%2e%2e`、`..%2Fx`）、制御文字（`%00`、`%0A`）、不正な UTF-8、
+  不正なエスケープを含むパスはどのルートにもマッチしません（404）。
 
 **CORS** は同梱ミドルウェアとして提供 — 提供実装は 1 個で、別系統では
 ありません:
@@ -1160,7 +1177,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
     return function () use ($save, $users): Element {
         return (
             <main>
-                <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
+                <ul>{\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
                 <form action={$save}>
                     <input name="name" />
                     <button>save</button>
@@ -1436,7 +1453,8 @@ return function (PageContext $ctx, Request $req): Closure {
 | メソッド                     | 戻り値                                            |
 | ---------------------------- | ------------------------------------------------- |
 | `$req->method`               | 大文字化済み HTTP メソッド                        |
-| `$req->path`                 | クエリ文字列を除いたパス                          |
+| `$req->path`                 | クエリ文字列を除いたパス（パーセントエンコードされた正規の表記） |
+| `$req->decodedPath()`        | `$req->path` をデコードした値。比較用（例: `/日本語`） |
 | `$req->uri()`                | クエリ文字列込みの生のリクエスト URI              |
 | `$req->isGet()` / `isPost()` | `bool`                                            |
 | `$req->isMethod('PUT')`      | `bool`                                            |
@@ -1662,9 +1680,13 @@ final class ApiEndpoint extends PageComponent { /* ... */ }
 | `roles`         | `[]`        | いずれか 1 つのロールが必要（空 = 認証済みなら誰でも） |
 | `redirectTo`    | `'/login'`  | 未認証リクエストの転送先。空文字 → `401` を返す        |
 
-未認証リクエストは `302 Location: /login?next=<元のパス>` でリダイレクト
-されます（URL エンコード済み・同一オリジンのみ）。認証済みでもロールが
-足りない場合は `403 Forbidden`。
+未認証リクエストは `302 Location: /login?next=<元のパスとクエリ>` でリダイレクト
+されます（URL エンコード済み・同一オリジンのみ）。`GET /boards/1?x=1&y=2` は
+`/login?next=%2Fboards%2F1%3Fx%3D1%26y%3D2` になります。`/{locale}` プレフィックス
+付きのリクエストでは両方に残り、`GET /ja/boards` は
+`/ja/login?next=%2Fja%2Fboards` になります。認証済みでもロールが足りない場合は
+`403 Forbidden`。 `401` / `403` はどちらも
+[`error.psx`](#エラーページ)（無ければデフォルト表示）を描画します。
 
 `#[Auth]` は `#[Cache]` より先に評価されるので、未認証リクエストが
 キャッシュ可能な `304` を作って共有キャッシュ経由で漏れることはありません。
@@ -1732,10 +1754,29 @@ $container->register(NativePasswordHasher::class)
     ->setArguments([\PASSWORD_ARGON2ID]);
 ```
 
-`NativeSession` は最初の read/write で `session_start()` を遅延起動する
-ので、DI で解決しただけでは `Set-Cookie` は送りません。既存の CSRF
-トークン機構と `$_SESSION` を共有するため、`session_start` の重複も
-起きません。
+`NativeSession` はセッションを遅延起動するので、DI で解決しただけでは
+`Set-Cookie` は送りません。セッションを新しく作るのは書き込みだけです。
+セッション Cookie のないリクエストでは、読み取りは空として扱い何も開始
+しないため、`$auth->user()` を確認するだけのページでは、匿名の訪問者に
+`Set-Cookie` が付かず CDN でキャッシュできます。既存の CSRF トークン機構と
+`$_SESSION` を共有するため、`session_start` の重複も起きません。
+
+セッション Cookie には `HttpOnly` と `SameSite=Lax` を付け、
+`$_SERVER['HTTPS']` が TLS 接続を示すときは `Secure` も付けます。TLS を
+終端するプロキシの背後では `session.cookie_secure=1` を設定するか、PHP に
+`HTTPS=on` を渡してください（`X-Forwarded-Proto` は見ません）。補うのは PHP
+の既定値のままの属性だけなので、アプリの設定が優先されます。セッション開始
+前の `session_set_cookie_params()` で指定した値（`SameSite=Strict`、
+`lifetime`、`path`、`domain`）と、`php.ini` / `-d` の値（明示した
+`session.cookie_httponly=0` を含む）はそのまま使います。`php.ini` で無効に
+するときは `0` と書いてください（PHP は `Off` を空として読むため、標準の
+`php.ini` と区別できません）。実行時の `httponly => false` は既定値と区別
+できないので、Cookie の既定値をすべて無効にしたい場合は `run()` の前に次を
+呼びます。
+
+```php
+Polidog\Relayer\Http\SessionStarter::leaveCookieParamsToApp();
+```
 
 ### 注意点
 
@@ -1744,9 +1785,17 @@ $container->register(NativePasswordHasher::class)
   別経路で解決されるため自動ガードの対象外。レイアウト側で認証状態を
   読みたい場合は、コンストラクタに `?Authenticator` を注入して
   `render()` から `$auth?->user()` を呼んでください。
-- ログインリダイレクトの `?next=<path>` は同一オリジン専用です。
-  `//` 始まりや絶対 URL は破棄してログインページからの open redirect
-  を防ぎます。
+- ログインリダイレクトの `?next=<path>` は同一オリジン専用ですが、URL から
+  来る値なので誰でも細工できます。ログインページでは
+  `AuthGuard::safeNext($request->query('next'), '/dashboard')` で検証して
+  ください。クエリ付きのパスは通り、`//evil.com`、`/\evil.com`、絶対 URL、
+  制御文字を含む値は既定値に置き換わります。
+- ロケールプレフィックスを付けるのは、同一オリジンでプレフィックスがまだ
+  付いていない `redirectTo` だけです。絶対 URL の `redirectTo` はそのまま使われ、
+  `next`（クエリ込み）も付きます。`/ja/login` は `/login` と同じページに
+  ルーティングされるので、Relayer のルーター外にあるログインページ（Web サーバーが
+  直接返すものなど）は絶対 URL で指定してください。そうしないと `/ja/login` は 404
+  になります。
 - セッションはログインとログアウト **両方** で再生成します。攻撃者が
   ログイン前のセッション ID を奪取しても、ユーザーが認証した時点で
   そのセッション ID は無効になります。
@@ -2092,6 +2141,18 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   や一般サービスに付けても無視されます（意図しないヘッダー送出を避ける
   ため）。
 - `headers_sent()` が `true` の段階ではヘッダー書き込みはスキップされます。
+- 宣言したキャッシュ方針は `session_start()` に上書きされません。方針を適用
+  した時点でフレームワークが `session_cache_limiter('')` を設定します。方針の
+  ないページがセッションを使う場合は、PHP の `no-store` のままです。
+- セッションを使ったレスポンスは、共有キャッシュに保存できる状態では返しま
+  せん。ヘッダー送出時にセッションが有効なら、`private` / `noStore` 以外の
+  方針は `Cache-Control: private, no-store` に置き換えます。レイアウトで
+  `$auth->user()` を読む `#[Cache(public: true)]` のページは、ログイン中の
+  訪問者にはキャッシュされない形で返り、匿名の訪問者には宣言どおりの方針で
+  返ります。ログイン中もブラウザにキャッシュさせたいページは `private: true`
+  を宣言してください。この処理は `header_register_callback()` を使います。
+  コールバックは 1 リクエストに 1 つだけなので、アプリが後から登録すると
+  置き換えられます（先に登録したものはこの処理が置き換えます）。
 - 304 短絡時の `exit;` は PSR-11 アダプタから出ます。**ページのコンスト
   ラクタも依存サービスも実行されない** 段階で短絡するので、DB アクセス
   を完全に回避できます。
@@ -2291,7 +2352,7 @@ use Polidog\Relayer\Validation\Validator;
 
 $schema = Validator::object([
     'email' => Validator::string()->trim()->email(),
-    'name'  => Validator::string()->trim()->min(1, 'Name is required.'),
+    'name'  => Validator::string()->trim()->required('Name is required.'),
     'age'   => Validator::int()->min(0)->optional(),
     'role'  => Validator::enum(['admin', 'member'])->default('member'),
 ]);
@@ -2348,7 +2409,7 @@ if ($result->success) {
 
 ```php
 $schema = Validator::object([
-    'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+    'name'     => Validator::string()->trim()->required('Name is required.'),
     'email'    => Validator::string()->trim()->email(),
     'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
 ]);

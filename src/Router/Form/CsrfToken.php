@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Form;
 
+use Polidog\Relayer\Http\SessionStarter;
+
 final class CsrfToken
 {
     private const SESSION_KEY = 'usephp:csrf';
@@ -37,8 +39,6 @@ final class CsrfToken
 
     private static function ensureSession(): void
     {
-        if (\PHP_SESSION_NONE === \session_status()) {
-            \session_start();
-        }
+        SessionStarter::start();
     }
 }
