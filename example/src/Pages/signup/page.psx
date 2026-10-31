@@ -24,7 +24,7 @@ return function (
     }
 
     $schema = Validator::object([
-        'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+        'name'     => Validator::string()->trim()->required('Name is required.'),
         'email'    => Validator::string()->trim()->email(),
         'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
     ]);
