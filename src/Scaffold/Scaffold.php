@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 8;
+    public const int STRUCTURE_VERSION = 9;
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -216,6 +216,15 @@ final class Scaffold
                 'Dockerfile' => [
                     // v7, as first shipped with the base/dev/prod targets
                     '1578e593b86ecac7f8b760d2d87558ca4b63ab4a9243d2c4e45fc4002631a12b',
+                ],
+            ],
+            // v9 precompiles with `relayer compile`. usePHP 0.10's `usephp
+            // compile` fails on a missing path, and a new project has no
+            // src/Components.
+            9 => [
+                'Dockerfile' => [
+                    // v8, with display_errors off
+                    '03bd0acb650e2c7e36e87808f78538628398d24f9cdc6ec069ddbffc037bbca0',
                 ],
             ],
         ];
@@ -852,14 +861,12 @@ final class Scaffold
             RUN printf 'APP_ENV=prod\n' > .env.local
 
             # The three precompile steps. Each removes a per-request cost:
-            #   usephp compile     .psx -> PHP, plus the component manifest
-            #   routes:compile     the src/Pages/ walk -> one PHP array
-            #   container:compile  ContainerBuilder+compile() -> one class
-            # A path with no .psx files is skipped, so src/Components is
-            # fine to list before the app has any.
-            RUN vendor/bin/usephp compile src/Pages src/Components \
-             && vendor/bin/relayer routes:compile \
-             && vendor/bin/relayer container:compile
+            #   .psx -> PHP, plus the component manifest
+            #   the src/Pages/ walk -> one PHP array
+            #   ContainerBuilder+compile() -> one class
+            # A missing src/Components is skipped, so it is fine to run this
+            # before the app has any.
+            RUN vendor/bin/relayer compile
 
             # With everything precompiled, OPcache can stop stat()-ing
             # files and never expire — revalidation = redeploy. Sessions

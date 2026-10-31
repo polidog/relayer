@@ -283,7 +283,7 @@ can still run individually (e.g. to skip `container:compile` — see
 "Runtime secrets" below):
 
 ```bash
-vendor/bin/usephp compile src/Pages src/Components   # .psx  -> compiled PHP
+vendor/bin/usephp compile src/Pages                  # .psx  -> compiled PHP (add src/Components if it exists)
 vendor/bin/relayer routes:compile                     # route map -> PHP
 vendor/bin/relayer container:compile                  # DI container -> PHP
 ```

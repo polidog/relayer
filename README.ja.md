@@ -287,7 +287,7 @@ vendor/bin/relayer compile                # 3 つを順に実行、最初の失�
 secret」参照）:
 
 ```bash
-vendor/bin/usephp compile src/Pages src/Components   # .psx  -> コンパイル済み PHP
+vendor/bin/usephp compile src/Pages                  # .psx  -> コンパイル済み PHP（src/Components があれば追加）
 vendor/bin/relayer routes:compile                     # ルートマップ -> PHP
 vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 ```
