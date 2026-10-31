@@ -413,7 +413,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 
     return function () use ($users): Element {
         $list = $users->all();
-        return <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
+        return <ul>{\array_map(fn($u) => <li>{$u->name}</li>, $list)}</ul>;
     };
 };
 ```
@@ -706,7 +706,7 @@ final class Dashboard extends LayoutComponent
     public function render(): Element
     {
         $this->addJs('/assets/dashboard.js', module: true);
-        return <div>{...$this->getChildren()}</div>;
+        return <div>{$this->getChildren()}</div>;
     }
 }
 ```
@@ -1160,7 +1160,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
     return function () use ($save, $users): Element {
         return (
             <main>
-                <ul>{...\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
+                <ul>{\array_map(fn($u) => <li>{$u->name}</li>, $users->all())}</ul>
                 <form action={$save}>
                     <input name="name" />
                     <button>save</button>
@@ -2322,7 +2322,7 @@ use Polidog\Relayer\Validation\Validator;
 
 $schema = Validator::object([
     'email' => Validator::string()->trim()->email(),
-    'name'  => Validator::string()->trim()->min(1, 'Name is required.'),
+    'name'  => Validator::string()->trim()->required('Name is required.'),
     'age'   => Validator::int()->min(0)->optional(),
     'role'  => Validator::enum(['admin', 'member'])->default('member'),
 ]);
@@ -2379,7 +2379,7 @@ if ($result->success) {
 
 ```php
 $schema = Validator::object([
-    'name'     => Validator::string()->trim()->min(1, 'Name is required.'),
+    'name'     => Validator::string()->trim()->required('Name is required.'),
     'email'    => Validator::string()->trim()->email(),
     'password' => Validator::string()->min(8, 'Password must be at least 8 characters.'),
 ]);
