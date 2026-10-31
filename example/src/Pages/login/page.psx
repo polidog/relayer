@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Polidog\Relayer\Auth\Authenticator;
+use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Validation\Validator;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageContext;
@@ -13,20 +14,10 @@ return function (PageContext $ctx, Authenticator $auth, Request $request): Closu
     $ctx->metadata(['title' => 'Login']);
 
     // Pick the post-login destination from `?next=` when present and
-    // safe, otherwise fall back to /dashboard. Only same-origin paths
-    // (`/...`) are accepted so a crafted `?next=https://attacker.example/`
+    // safe, otherwise fall back to /dashboard. safeNext() only accepts
+    // same-origin paths, so a crafted `?next=https://attacker.example/`
     // cannot bounce the user off the site.
-    $resolveNext = static function (Request $request, string $default = '/dashboard'): string {
-        $next = $request->query('next');
-        if (null === $next || '' === $next) {
-            return $default;
-        }
-        if (!\str_starts_with($next, '/') || \str_starts_with($next, '//')) {
-            return $default;
-        }
-
-        return $next;
-    };
+    $resolveNext = static fn (Request $request, string $default = '/dashboard'): string => AuthGuard::safeNext($request->query('next'), $default);
 
     // Already logged in? Send them straight to the dashboard (or wherever
     // ?next= points). Lets the same URL act as "you're done" for users

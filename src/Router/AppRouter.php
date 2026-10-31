@@ -827,11 +827,14 @@ final class AppRouter
 
             case AuthGuard::DECISION_REDIRECT:
             default:
-                $location = $exception->redirectTo;
-                $requestUri = $this->currentRequest?->path;
-                if (null !== $requestUri && '' !== $requestUri && !\str_contains($location, '?')) {
-                    $location .= '?next=' . \rawurlencode($requestUri);
-                }
+                $locales = null !== $this->container && $this->container->has(LocaleResolver::class)
+                    ? $this->container->get(LocaleResolver::class)
+                    : null;
+                $location = AuthGuard::redirectLocation(
+                    $exception->redirectTo,
+                    $this->currentRequest,
+                    $locales instanceof LocaleResolver ? $locales : null,
+                );
                 \header('Location: ' . $location, true, 302);
 
                 return;
