@@ -182,15 +182,16 @@ final class ApiRouteDispatchTest extends TestCase
         }
     }
 
-    public function testHandlerNotReturningResponseRaisesActionableError(): void
+    public function testHandlerNotReturningResponseShowsAnActionableErrorInDev(): void
     {
         $this->writeRoute('raw', <<<'PHP'
             return ['GET' => static fn (): array => ['oops' => true]];
             PHP);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('must return a Polidog\Relayer\Http\Response');
-        $this->dispatch('/raw', 'GET');
+        $output = $this->dispatchWith(AppRouter::create($this->workDir)->setDebug(true), '/raw', 'GET');
+
+        self::assertSame(500, \http_response_code());
+        self::assertStringContainsString('handler for \"GET\" must return a', $output);
     }
 
     public function testOptionsIsSynthesizedWith204AndAllow(): void
@@ -306,15 +307,16 @@ final class ApiRouteDispatchTest extends TestCase
         self::assertSame('{"error":"Forbidden"}', $output);
     }
 
-    public function testInvalidRouteFileRaisesActionableError(): void
+    public function testInvalidRouteFileShowsAnActionableErrorInDev(): void
     {
         $this->writeRoute('bad', <<<'PHP'
             return 'not a map';
             PHP);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('must return a non-empty array');
-        $this->dispatch('/bad', 'GET');
+        $output = $this->dispatchWith(AppRouter::create($this->workDir)->setDebug(true), '/bad', 'GET');
+
+        self::assertSame(500, \http_response_code());
+        self::assertStringContainsString('must return a non-empty array', $output);
     }
 
     private function writeRoute(string $segment, string $body): void

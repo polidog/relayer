@@ -40,11 +40,10 @@ final class PsxIntegrationTest extends TestCase
             . "return fn(PageContext \$ctx) => fn() => 'irrelevant';\n",
         );
 
-        $app = AppRouter::create($this->workDir);
+        $app = AppRouter::create($this->workDir)->setDebug(true);
 
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('Compiled PSX not found');
-        $this->runApp($app, '/');
+        self::assertStringContainsString('Compiled PSX not found', $this->runApp($app, '/'));
+        self::assertSame(500, \http_response_code());
     }
 
     public function testAutoCompileGeneratesCacheFileAndPageRenders(): void

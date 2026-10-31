@@ -236,7 +236,7 @@ the Next.js App Router. The conventions:
 | -------------------- | ------------------------------------------------------------------- |
 | `page.psx`           | Renders the route. One per directory.                               |
 | `layout.psx`         | Wraps every nested page; layouts stack from root to leaf.           |
-| `error.psx`          | Error page for 404 / `$ctx->abort()` statuses (root only).          |
+| `error.psx`          | Error page for 404 / `$ctx->abort()` / uncaught exceptions (root only). |
 | `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
 | `(group)/`           | Route group: organises files without adding a URL segment. May hold its own `layout.psx`. |
@@ -430,10 +430,44 @@ src/Pages/
 ### Error pages
 
 A root `error.psx` (extending `ErrorPageComponent`) renders error responses
-inside the root layout — an unmatched route (404) and every `$ctx->abort()`
-status. It receives the status and message via `ErrorPageComponent`, so one
-`error.psx` can branch on `getStatusCode()` for a 404 vs. 403 vs. 500 page.
+inside the root layout — an unmatched route (404), every `$ctx->abort()`
+status, and an uncaught exception (500). It receives the status and message
+via `ErrorPageComponent`, so one `error.psx` can branch on `getStatusCode()`
+for a 404 vs. 403 vs. 500 page — don't hard-code "not found" wording in it.
 Without one, the framework emits a minimal default document.
+
+### Uncaught exceptions
+
+Anything thrown by a page, layout, deferred component, `route.php`/`route.go`
+dispatch or `middleware.php` that nothing else handles becomes a `500`. The control-flow
+exceptions (`abort()`, `notFound()`, `redirect()`, `requireAuth()`) are not
+affected.
+
+| | `APP_ENV=dev` | Otherwise |
+| - | ---- | ---- |
+| Page | Built-in page with the stack trace (`error.psx` is not used) | `error.psx` with the generic message, or the default document |
+| `route.php` / `route.go` | `{"error": "...", "exception": {class, message, file, line, trace}}` | `{"error": "Internal Server Error"}` |
+
+- The client never sees the exception's message or trace outside dev. A
+  `route.php` handler that doesn't return a `Response` is answered the same
+  way.
+- The exception goes to the PSR-3 logger at `error` (PHP's `error_log` when
+  none is bound or it fails) and, in dev, onto the profiler timeline.
+- The response is buffered until it is complete, so output written before the
+  failure is dropped, along with the failed response's `Cache-Control`,
+  `ETag` and similar headers; the 500 is sent with `Cache-Control: no-store`.
+  Buffers the failed code left open are closed, and `run()` returns normally,
+  so a worker keeps serving. CORS headers and cookies already set are kept.
+- If the code already pushed the response out (`flush()` after closing the
+  buffers), the status can't change: the client sees a truncated response and
+  the failure is only logged (in dev the trace is appended).
+- If `error.psx` or the root layout it renders in throws too, both exceptions
+  are logged and the default document answers. There is no second attempt, so
+  an `error.psx` that fails can't recurse.
+- `middleware.php` wraps dispatch, so it can still catch exceptions from
+  `$next()` itself, and such an exception is not reported by the framework.
+  After an uncaught exception the code following `$next()` doesn't run, so set
+  headers that error responses need (as `Cors` does) before calling it.
 
 ### Control flow: `redirect()` / `notFound()` / `abort()`
 
@@ -539,6 +573,8 @@ return [
   likewise become a JSON error with that status (never the HTML error
   page); `$ctx->redirect()` still produces a content-type-neutral
   `Location` response (a deliberate handler action, not an error gate).
+- An uncaught exception, or a handler that doesn't return a `Response`, is a
+  JSON `500` — see [Uncaught exceptions](#uncaught-exceptions).
 
 ### Native route handlers (Go)
 

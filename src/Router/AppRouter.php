@@ -53,6 +53,7 @@ use Polidog\UsePhp\Runtime\Element;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
+use Psr\Log\LoggerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
 use RuntimeException;
@@ -97,6 +98,33 @@ final class AppRouter
      */
     private const PROFILER_TOKEN_PATTERN = '/^[a-f0-9]{16}$/';
 
+    /**
+     * The client-facing reason of an uncaught exception. The exception's own
+     * message never takes this place: it stays in the log.
+     */
+    private const INTERNAL_ERROR = 'Internal Server Error';
+
+    /**
+     * Headers an uncaught exception revokes: they describe the response the
+     * failed code was building, not the error replacing it. A 500 carrying
+     * the page's `Cache-Control: public` and `ETag` would be stored by a
+     * shared cache. Headers about the client or the connection (CORS, cookies
+     * including the session) are kept.
+     *
+     * @var list<string>
+     */
+    private const FAILED_RESPONSE_HEADERS = [
+        'Cache-Control',
+        'Content-Disposition',
+        'Content-Encoding',
+        'Content-Length',
+        'Content-Type',
+        'ETag',
+        'Expires',
+        'Last-Modified',
+        'Location',
+    ];
+
     private string $appDirectory;
     private ?ContainerInterface $container;
     private RouterInterface $router;
@@ -130,6 +158,12 @@ final class AppRouter
      * the app directory when nothing was set (tests, bare `create()`).
      */
     private ?NativeDispatcher $nativeDispatcher = null;
+
+    /**
+     * Show uncaught exceptions to the client. {@see Relayer::boot()} turns
+     * this on for `APP_ENV=dev`; off is the safe default for anything else.
+     */
+    private bool $debug = false;
 
     public function __construct(
         string $appDirectory,
@@ -311,24 +345,55 @@ final class AppRouter
         return $this;
     }
 
+    /**
+     * Answer uncaught exceptions with a stack trace instead of the error
+     * page / generic JSON body. Never enable this in production.
+     */
+    public function setDebug(bool $debug): self
+    {
+        $this->debug = $debug;
+
+        return $this;
+    }
+
     public function run(): void
     {
         // Build the request snapshot once; the guard (if any) sees it first
         // and may hand a substituted one to the dispatch below.
         $request = Request::fromGlobals();
 
-        if (null === $this->guard) {
-            $this->dispatchRequest($request);
+        // Hold the response back until it is complete, so a failure halfway
+        // through can still replace what was produced so far with a clean
+        // 500. The level also lets the failure path unwind buffers the failed
+        // code left open, which would otherwise outlive the request in a
+        // worker.
+        $outputLevel = \ob_get_level();
+        \ob_start();
 
-            return;
+        try {
+            if (null === $this->guard) {
+                $this->dispatchRequest($request, $outputLevel);
+
+                return;
+            }
+
+            ($this->guard)($request, function (Request $request) use ($outputLevel): void {
+                $this->dispatchRequest($request, $outputLevel);
+            });
+        } catch (StopRequest) {
+            // The response is complete; see dispatchRequest().
+        } catch (Throwable $exception) {
+            // The guard, or dispatch setup ahead of its `try` (a locale
+            // resolver, the profiler viewer). The ambient render state is not
+            // established here, so no user error page runs.
+            $this->handleUncaughtException($exception, $request, $outputLevel, false);
+            $this->endDispatch();
+        } finally {
+            self::closeBuffers($outputLevel, true);
         }
-
-        ($this->guard)($request, function (Request $request): void {
-            $this->dispatchRequest($request);
-        });
     }
 
-    private function dispatchRequest(Request $request): void
+    private function dispatchRequest(Request $request, int $outputLevel): void
     {
         // The guard may have substituted the Request: route by what it
         // handed us, not by a fresh read of the superglobals.
@@ -462,28 +527,43 @@ final class AppRouter
             // redirect after a state action) already produced the complete
             // response. Nothing to add — fall through to the cleanup in
             // `finally` and return normally, so a worker keeps running.
+        } catch (Throwable $exception) {
+            // Outside the middleware, so a `middleware.php` wrapping `$next()`
+            // in its own try/catch keeps seeing the exception first. A page's
+            // or route's control-flow exceptions never get here: the dispatch
+            // closure translates them and StopRequest is caught above.
+            $this->handleUncaughtException($exception, $this->currentRequest ?? $request, $outputLevel, true);
         } finally {
-            if ($this->container instanceof InjectorContainer) {
-                $this->container->setCurrentRequest(null);
-            }
-            $this->currentRequest = null;
-            if (null !== $this->usephp) {
-                RenderContext::clearApp();
-            }
-            Component\PageContext::setCurrent(null);
-            // Drop the ambient request Translator so a non-default locale
-            // cannot bleed into the next request's pre-dispatch code (e.g.
-            // validation) under a long-running worker.
-            Translators::reset();
-            // Every dispatch path reaches this block — the short-circuits
-            // unwind through `StopRequest` rather than `exit`, so no
-            // shutdown-function fallback is needed. `endProfile` is still
-            // idempotent, which keeps a dev profile correct when a page
-            // finalized it early.
-            if (null !== $this->recording) {
-                $status = \http_response_code();
-                $this->recording->endProfile(\is_int($status) ? $status : 200);
-            }
+            $this->endDispatch();
+        }
+    }
+
+    /**
+     * Per-request cleanup. Idempotent, and it has to be: a failure ahead of
+     * dispatchRequest()'s `try` reaches it from run() instead.
+     */
+    private function endDispatch(): void
+    {
+        if ($this->container instanceof InjectorContainer) {
+            $this->container->setCurrentRequest(null);
+        }
+        $this->currentRequest = null;
+        if (null !== $this->usephp) {
+            RenderContext::clearApp();
+        }
+        Component\PageContext::setCurrent(null);
+        // Drop the ambient request Translator so a non-default locale
+        // cannot bleed into the next request's pre-dispatch code (e.g.
+        // validation) under a long-running worker.
+        Translators::reset();
+        // Every dispatch path reaches this block — the short-circuits
+        // unwind through `StopRequest` rather than `exit`, so no
+        // shutdown-function fallback is needed. `endProfile` is still
+        // idempotent, which keeps a dev profile correct when a page
+        // finalized it early.
+        if (null !== $this->recording) {
+            $status = \http_response_code();
+            $this->recording->endProfile(\is_int($status) ? $status : 200);
         }
     }
 
@@ -540,8 +620,8 @@ final class AppRouter
      *
      * The handler must return a {@see Response} (built via
      * `Response::json()` / `text()` / `noContent()` / `redirect()`) — the
-     * one explicit output contract; returning anything else is a server bug
-     * surfaced loudly.
+     * one explicit output contract; returning anything else is a server bug,
+     * logged and answered like any uncaught exception (a JSON `500`).
      *
      * `OPTIONS` and `HEAD` are synthesized when not declared explicitly, to
      * match Next.js: an undeclared `OPTIONS` → `204` + `Allow`, an
@@ -984,6 +1064,167 @@ final class AppRouter
         }
 
         echo $this->document->renderError($status, $message);
+    }
+
+    /**
+     * The last resort for a Throwable nothing else handled: record it, drop
+     * whatever the failed code produced, and answer `500` — JSON for an
+     * endpoint (`route.php`, `route.go`), `error.psx` for a page.
+     *
+     * Never throws. A failure while answering (`error.psx` or the root layout
+     * it renders in throwing, or calling `abort()`) lands on the built-in
+     * response rather than coming back here, so this cannot recurse.
+     *
+     * Headers already sent (the code called `flush()`, or wrote before
+     * `run()`) leave nothing to replace: the status is on the wire and the
+     * client sees a truncated response, so the failure is only logged.
+     */
+    private function handleUncaughtException(Throwable $exception, Request $request, int $outputLevel, bool $renderErrorPage): void
+    {
+        $this->reportException($exception, $request);
+        self::closeBuffers($outputLevel, false);
+
+        if (\headers_sent()) {
+            if ($this->debug) {
+                echo ExceptionDebugView::fragment($exception);
+            }
+
+            return;
+        }
+
+        // Buffered again so a failing error page can be discarded in turn;
+        // run() flushes what remains.
+        \ob_start();
+
+        $isEndpoint = $this->isEndpointPath($request->path);
+
+        try {
+            $this->prepareInternalErrorHeaders();
+            $message = $this->tr('relayer.http.500', self::INTERNAL_ERROR);
+
+            if ($isEndpoint) {
+                $response = $this->debug
+                    ? Response::make(ExceptionDebugView::json($exception, $message), 500, ['Content-Type' => 'application/json; charset=utf-8'])
+                    : Response::json(['error' => $message], 500);
+                ('HEAD' === $request->method ? $response->withoutBody() : $response)->send();
+            } elseif ($this->debug) {
+                echo ExceptionDebugView::html($exception);
+            } elseif ($renderErrorPage) {
+                $this->handleErrorResponse(500, $message);
+            } else {
+                echo $this->document->renderError(500, $message);
+            }
+        } catch (StopRequest) {
+            // The error page's own short-circuit: its response is complete.
+        } catch (Throwable $secondary) {
+            $this->reportException($secondary, $request);
+            self::closeBuffers($outputLevel, false);
+            $this->sendBuiltInInternalError($isEndpoint);
+        }
+    }
+
+    /**
+     * The response when even the error page failed, so it runs no user code
+     * except a custom document, which is guarded in turn.
+     */
+    private function sendBuiltInInternalError(bool $isEndpoint): void
+    {
+        if (\headers_sent()) {
+            return;
+        }
+
+        $this->prepareInternalErrorHeaders();
+
+        if ($isEndpoint) {
+            Response::json(['error' => self::INTERNAL_ERROR], 500)->send();
+
+            return;
+        }
+
+        try {
+            $html = $this->document->renderError(500, self::INTERNAL_ERROR);
+        } catch (Throwable) {
+            $html = '<!DOCTYPE html><title>500</title><h1>' . self::INTERNAL_ERROR . '</h1>';
+        }
+
+        echo $html;
+    }
+
+    private function prepareInternalErrorHeaders(): void
+    {
+        \http_response_code(500);
+
+        foreach (self::FAILED_RESPONSE_HEADERS as $header) {
+            \header_remove($header);
+        }
+
+        \header('Cache-Control: no-store');
+    }
+
+    /**
+     * Whether the request targets an endpoint, re-matched here because the
+     * failure may predate routing (a throwing middleware still owes an API
+     * client JSON).
+     */
+    private function isEndpointPath(string $path): bool
+    {
+        try {
+            return $this->router->match($path)?->route->kind->isEndpoint() ?? false;
+        } catch (Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * Log the exception and put it on the profiler timeline. Reporting must
+     * not stand in the way of the response, so a logger that cannot be built
+     * or cannot write falls back to PHP's error log.
+     */
+    private function reportException(Throwable $exception, Request $request): void
+    {
+        $this->profiler?->collect('error', 'exception', [
+            'class' => $exception::class,
+            'message' => $exception->getMessage(),
+            'file' => $exception->getFile(),
+            'line' => $exception->getLine(),
+            'trace' => $exception->getTraceAsString(),
+        ]);
+
+        try {
+            $logger = null !== $this->container && $this->container->has(LoggerInterface::class)
+                ? $this->container->get(LoggerInterface::class)
+                : null;
+
+            if ($logger instanceof LoggerInterface) {
+                $logger->error(\sprintf('Uncaught %s: %s', $exception::class, $exception->getMessage()), [
+                    'exception' => $exception,
+                    'method' => $request->method,
+                    'path' => $request->path,
+                    // Monolog's formatter leaves the trace out of `exception`.
+                    'trace' => $exception->getTraceAsString(),
+                ]);
+
+                return;
+            }
+        } catch (Throwable) {
+            // Fall through to the error log.
+        }
+
+        \error_log('Uncaught ' . $exception);
+    }
+
+    /**
+     * Close every output buffer above `$level`, sending or dropping its
+     * contents. A buffer that refuses to close (`ob_start()` without the
+     * removable flag) stops the loop rather than spinning on it.
+     */
+    private static function closeBuffers(int $level, bool $flush): void
+    {
+        while (\ob_get_level() > $level) {
+            if (!($flush ? @\ob_end_flush() : @\ob_end_clean())) {
+                return;
+            }
+        }
     }
 
     /**

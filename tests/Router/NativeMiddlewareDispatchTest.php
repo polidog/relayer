@@ -12,7 +12,6 @@ use Polidog\Relayer\Router\Native\GoToolchain;
 use Polidog\Relayer\Router\Native\NativeDispatcher;
 use Polidog\Relayer\Scaffold\NativeBuildCommand;
 use Polidog\Relayer\Tests\Fixtures\SpyLogger;
-use RuntimeException;
 
 /**
  * End-to-end for `middleware.go`: a real `go build` of a Proxy, then
@@ -149,14 +148,12 @@ final class NativeMiddlewareDispatchTest extends TestCase
         $this->build();
         \file_put_contents($this->root . '/src/Pages/middleware.php', "<?php\n\nreturn fn (\$r, \$next) => \$next(\$r);\n");
 
-        try {
-            $this->dispatch('GET', '/about');
-            self::fail('expected a RuntimeException');
-        } catch (RuntimeException $e) {
-            self::assertStringContainsString('One middleware per app', $e->getMessage());
-            self::assertStringContainsString('middleware.php', $e->getMessage());
-            self::assertStringContainsString('middleware.go', $e->getMessage());
-        }
+        $output = $this->dispatch('GET', '/about', debug: true);
+
+        self::assertSame(500, \http_response_code());
+        self::assertStringContainsString('One middleware per app', $output);
+        self::assertStringContainsString('middleware.php', $output);
+        self::assertStringContainsString('middleware.go', $output);
     }
 
     public function testUnbuiltMiddlewareIsAJson500(): void
@@ -207,7 +204,7 @@ final class NativeMiddlewareDispatchTest extends TestCase
     /**
      * @param array<string, string> $headers
      */
-    private function dispatch(string $method, string $uri, array $headers = []): string
+    private function dispatch(string $method, string $uri, array $headers = [], bool $debug = false): string
     {
         $this->clearRequestHeaders();
         $_SERVER['REQUEST_URI'] = $uri;
@@ -228,7 +225,7 @@ final class NativeMiddlewareDispatchTest extends TestCase
             true,
             $this->logger,
         );
-        $app = AppRouter::create($this->root . '/src/Pages')->setNativeDispatcher($dispatcher);
+        $app = AppRouter::create($this->root . '/src/Pages')->setNativeDispatcher($dispatcher)->setDebug($debug);
 
         \ob_start();
 

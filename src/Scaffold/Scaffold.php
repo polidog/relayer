@@ -398,7 +398,8 @@ final class Scaffold
             - `page.psx` (or `.php`) = a route; `layout.psx` wraps nested
               pages; root `error.psx` is the shared error page for any
               HTTP error (404/403/500…, raised via `$ctx->abort()` /
-              `notFound()`); a `[param]` directory is a dynamic segment.
+              `notFound()`, or an uncaught exception as a 500); a `[param]`
+              directory is a dynamic segment.
               A directory is a page **or** a `route.php`, never both.
             - Function page: `return fn (PageContext $ctx, MyService $s) =>
               <section/>;` — or two-level: `return function (PageContext
@@ -543,7 +544,7 @@ final class Scaffold
             `layout.psx`) **or** an API endpoint (`route.php`) — never
             both. `[param]` directories are dynamic segments; the root
             `error.psx` renders any HTTP error (404/403/500…) raised via
-            `$ctx->abort()` / `notFound()`.
+            `$ctx->abort()` / `notFound()`, and uncaught exceptions as a 500.
 
             ## Pages
 
