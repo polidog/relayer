@@ -179,7 +179,7 @@ final class RequestTest extends TestCase
 
         $resolved = $req->withClientIp('198.51.100.9');
 
-        self::assertNull('203.0.113.7' === $req->clientIp() ? null : 'changed', 'the original must not change');
+        self::assertSame('203.0.113.7', $req->clientIp(), 'the original must not change');
         self::assertSame('198.51.100.9', $resolved->clientIp());
         self::assertSame('203.0.113.7', $resolved->ip());
         self::assertSame('y', $resolved->header('x'));

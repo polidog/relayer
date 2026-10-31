@@ -12,33 +12,52 @@ use InvalidArgumentException;
  * header, but only when the immediate hop (`REMOTE_ADDR`) is a proxy you
  * trust. The result is exposed as {@see Request::clientIp()};
  * {@see Request::ip()} keeps reporting `REMOTE_ADDR` unchanged.
- * Wire it in `src/Pages/middleware.php`:
  *
  *   use Polidog\Relayer\Http\TrustedProxy;
  *
- *   return TrustedProxy::middleware([
+ *   TrustedProxy::middleware([
  *       'preset'  => 'cloudflare',
  *       'proxies' => ['173.245.48.0/20', '2400:cb00::/32', ...], // Cloudflare's published ranges
  *   ]);
  *
- * Presets:
+ * A **layer** is `preset` (or `header`) plus `proxies`:
  *
- * - `cloudflare` — `CF-Connecting-IP`. Honored only when `REMOTE_ADDR` is
- *   inside `proxies`; Cloudflare's ranges are NOT bundled (they change),
- *   fetch them from https://www.cloudflare.com/ips-v4 and /ips-v6 and pass
- *   them in. Note this "immediate hop" check cannot hold when the app runs
- *   on Fly.io: there `REMOTE_ADDR` is the Fly proxy, so use the `fly` preset
- *   together with {@see OriginGuard} instead.
- * - `fly` — `Fly-Client-IP`. The Fly proxy is the only ingress to a Fly
- *   app, so `proxies` may be omitted; when given it is enforced.
+ * - `cloudflare` — `CF-Connecting-IP`. Cloudflare's ranges are NOT bundled
+ *   (they change): fetch https://www.cloudflare.com/ips-v4 and /ips-v6 and
+ *   pass them in.
+ * - `fly` — `Fly-Client-IP`. The Fly proxy reaches your app over Fly's
+ *   private network (6PN, `fdaa::/16`); pass that as `proxies` (check your
+ *   app's logs for the exact source if your setup differs).
  * - `xff` — `X-Forwarded-For`, walked from the right: every trusted proxy
  *   is skipped and the first address that is not one of yours is the
- *   client. `proxies` is required.
+ *   client.
+ * - `header` names any other single-IP header (`True-Client-IP`,
+ *   `X-Real-IP`, …). `preset` and `header` are mutually exclusive.
  *
- * Instead of a preset, `header` names any single-IP header (`True-Client-IP`,
- * `X-Real-IP`, …); `proxies` is then required. Addresses are matched as
- * plain IPs or CIDR ranges, IPv4 and IPv6. A header value that is not a
- * valid IP is ignored — `clientIp()` then falls back to `ip()`.
+ * `proxies` (plain IPs or CIDR ranges, IPv4 / IPv6; an IPv4-mapped IPv6
+ * address such as `::ffff:1.2.3.4` matches IPv4 ranges) is **required** —
+ * a forwarding header from an unverified hop is client-supplied. The only
+ * way to skip the check is the explicit `'trustAnyHop' => true`, for the
+ * case where the proxy is provably the sole ingress to the process; never
+ * set it on a server that can be reached directly.
+ *
+ * **Several proxies in a row** (`chain`): behind Cloudflare → Fly, the hop
+ * is Fly, `Fly-Client-IP` is *Cloudflare's* address, and the user is in
+ * `CF-Connecting-IP`. List the layers outermost-last; each one is applied
+ * only if the address resolved so far is one of that layer's proxies, and
+ * the last address that could be verified is the client:
+ *
+ *   TrustedProxy::middleware(['chain' => [
+ *       ['preset' => 'fly',        'proxies' => ['fdaa::/16']],
+ *       ['preset' => 'cloudflare', 'proxies' => $cloudflareRanges],
+ *   ]]);
+ *
+ * So a request straight to `xxx.fly.dev` resolves to the caller's address
+ * (the Fly layer applies, the Cloudflare layer does not because that
+ * address is not Cloudflare's), while a forged `CF-Connecting-IP` from a
+ * non-Cloudflare source is ignored. Combine with {@see OriginGuard} to
+ * refuse such direct requests altogether. A header value that is not a
+ * valid IP stops the resolution — `clientIp()` then falls back to `ip()`.
  */
 final class TrustedProxy
 {
@@ -55,48 +74,28 @@ final class TrustedProxy
      *     preset?: string,
      *     header?: string,
      *     proxies?: list<string>,
+     *     trustAnyHop?: bool,
+     *     chain?: list<array{preset?: string, header?: string, proxies?: list<string>, trustAnyHop?: bool}>,
      * } $config
      *
      * @return Closure(Request, Closure): void
      */
     public static function middleware(array $config = []): Closure
     {
-        $preset = $config['preset'] ?? null;
-        $proxies = $config['proxies'] ?? [];
-
-        foreach ($proxies as $range) {
-            if (!self::isValidRange($range)) {
-                throw new InvalidArgumentException(\sprintf('TrustedProxy: "%s" is not a valid IP address or CIDR range.', $range));
+        if (isset($config['chain'])) {
+            if (\count($config) > 1) {
+                throw new InvalidArgumentException('TrustedProxy: "chain" cannot be combined with a top-level layer.');
             }
+            if ([] === $config['chain']) {
+                throw new InvalidArgumentException('TrustedProxy: "chain" must contain at least one layer.');
+            }
+            $layers = \array_map(self::layer(...), $config['chain']);
+        } else {
+            $layers = [self::layer($config)];
         }
 
-        $header = match ($preset) {
-            null => $config['header'] ?? null,
-            self::PRESET_CLOUDFLARE => self::HEADER_CLOUDFLARE,
-            self::PRESET_FLY => self::HEADER_FLY,
-            self::PRESET_XFF => self::HEADER_XFF,
-            default => throw new InvalidArgumentException(\sprintf(
-                'TrustedProxy: unknown preset "%s" (expected "%s", "%s" or "%s").',
-                $preset,
-                self::PRESET_CLOUDFLARE,
-                self::PRESET_FLY,
-                self::PRESET_XFF,
-            )),
-        };
-        if (null === $header || '' === \trim($header)) {
-            throw new InvalidArgumentException('TrustedProxy: pass a "preset" or a non-empty "header".');
-        }
-        if ([] === $proxies && self::PRESET_FLY !== $preset) {
-            throw new InvalidArgumentException(\sprintf(
-                'TrustedProxy: "proxies" is required for %s — without a trust list the %s header is client-supplied.',
-                null === $preset ? 'a custom header' : \sprintf('the "%s" preset', $preset),
-                $header,
-            ));
-        }
-        $walkXff = self::PRESET_XFF === $preset;
-
-        return static function (Request $request, Closure $next) use ($header, $proxies, $walkXff): void {
-            $resolved = self::resolve($request, $header, $proxies, $walkXff);
+        return static function (Request $request, Closure $next) use ($layers): void {
+            $resolved = self::resolve($request, $layers);
 
             $next(null === $resolved ? $request : $request->withClientIp($resolved));
         };
@@ -104,7 +103,8 @@ final class TrustedProxy
 
     /**
      * Whether `$ip` is one of `$ranges` (plain addresses or CIDR, v4 / v6).
-     * A malformed `$ip` never matches.
+     * A malformed `$ip` never matches, and a malformed range (`10.0.0.0/abc`,
+     * `/-1`, `/33`) never matches either — a typo must not become "allow all".
      *
      * @param list<string> $ranges
      */
@@ -125,36 +125,108 @@ final class TrustedProxy
     }
 
     /**
+     * Validate one layer's config into `[header, proxies, trustAnyHop, walkXff]`.
+     *
+     * @param array{preset?: string, header?: string, proxies?: list<string>, trustAnyHop?: bool} $config
+     *
+     * @return array{string, list<string>, bool, bool}
+     */
+    private static function layer(array $config): array
+    {
+        $preset = $config['preset'] ?? null;
+        $custom = $config['header'] ?? null;
+        $proxies = $config['proxies'] ?? [];
+        $trustAnyHop = $config['trustAnyHop'] ?? false;
+
+        if (null !== $preset && null !== $custom) {
+            throw new InvalidArgumentException(\sprintf(
+                'TrustedProxy: "preset" (%s) and "header" (%s) are mutually exclusive — pass one of them.',
+                $preset,
+                $custom,
+            ));
+        }
+
+        $header = match ($preset) {
+            null => $custom,
+            self::PRESET_CLOUDFLARE => self::HEADER_CLOUDFLARE,
+            self::PRESET_FLY => self::HEADER_FLY,
+            self::PRESET_XFF => self::HEADER_XFF,
+            default => throw new InvalidArgumentException(\sprintf(
+                'TrustedProxy: unknown preset "%s" (expected "%s", "%s" or "%s").',
+                $preset,
+                self::PRESET_CLOUDFLARE,
+                self::PRESET_FLY,
+                self::PRESET_XFF,
+            )),
+        };
+        if (null === $header || '' === \trim($header)) {
+            throw new InvalidArgumentException('TrustedProxy: pass a "preset" or a non-empty "header".');
+        }
+
+        foreach ($proxies as $range) {
+            if (null === self::parseRange($range)) {
+                throw new InvalidArgumentException(\sprintf('TrustedProxy: "%s" is not a valid IP address or CIDR range.', $range));
+            }
+        }
+        if ([] === $proxies && !$trustAnyHop) {
+            throw new InvalidArgumentException(\sprintf(
+                'TrustedProxy: "proxies" is required for the %s header — without a trust list it is client-supplied. '
+                . 'Set "trustAnyHop" => true only when the proxy is provably the sole ingress to this process.',
+                $header,
+            ));
+        }
+
+        return [$header, $proxies, $trustAnyHop, self::PRESET_XFF === $preset];
+    }
+
+    /**
+     * @param list<array{string, list<string>, bool, bool}> $layers
+     */
+    private static function resolve(Request $request, array $layers): ?string
+    {
+        $hop = $request->ip();
+        if (null === $hop) {
+            return null;
+        }
+
+        $resolved = null;
+        foreach ($layers as [$header, $proxies, $trustAnyHop, $walkXff]) {
+            // The address resolved so far must be one of this layer's
+            // proxies, or the layer does not apply and resolution stops:
+            // whatever we verified last is the client.
+            if (!$trustAnyHop && !self::ipMatches($hop, $proxies)) {
+                break;
+            }
+
+            $value = $request->header($header);
+            if (null === $value) {
+                break;
+            }
+
+            $next = $walkXff ? self::walkForwardedFor($value, $proxies) : self::validIp(\trim($value));
+            if (null === $next) {
+                break;
+            }
+
+            $resolved = $hop = $next;
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * X-Forwarded-For: "client, proxy1, proxy2" — each hop appends the
+     * address it received from. Walk from the right, past the proxies we
+     * trust; the first address that is not ours was put there by a trusted
+     * proxy and is the client. Anything further left is client-controlled
+     * and ignored. Null when a hop is malformed or every hop is trusted.
+     *
      * @param list<string> $proxies
      */
-    private static function resolve(Request $request, string $header, array $proxies, bool $walkXff): ?string
+    private static function walkForwardedFor(string $value, array $proxies): ?string
     {
-        $remote = $request->ip();
-        if (null === $remote) {
-            return null;
-        }
-        // An empty trust list is only reachable via the `fly` preset.
-        if ([] !== $proxies && !self::ipMatches($remote, $proxies)) {
-            return null;
-        }
-
-        $value = $request->header($header);
-        if (null === $value) {
-            return null;
-        }
-
-        if (!$walkXff) {
-            return self::validIp(\trim($value));
-        }
-
-        // X-Forwarded-For: "client, proxy1, proxy2" — each hop appends the
-        // address it received from. Walk from the right, past the proxies we
-        // trust; the first address that is not ours was put there by a
-        // trusted proxy and is the client. Anything further left is
-        // client-controlled and ignored.
-        $hops = \array_reverse(\array_map(\trim(...), \explode(',', $value)));
-        foreach ($hops as $hop) {
-            $candidate = self::validIp($hop);
+        foreach (\array_reverse(\explode(',', $value)) as $hop) {
+            $candidate = self::validIp(\trim($hop));
             if (null === $candidate) {
                 return null;
             }
@@ -163,7 +235,6 @@ final class TrustedProxy
             }
         }
 
-        // Every listed hop is a trusted proxy — no client address to report.
         return null;
     }
 
@@ -172,39 +243,63 @@ final class TrustedProxy
         return false === \filter_var($value, \FILTER_VALIDATE_IP) ? null : $value;
     }
 
-    private static function isValidRange(string $range): bool
+    /**
+     * `address[/prefix]` → packed address + prefix length, or null when
+     * either part is malformed (non-numeric or out-of-range prefix included).
+     *
+     * @return null|array{string, int}
+     */
+    private static function parseRange(string $range): ?array
     {
         [$address, $bits] = \array_pad(\explode('/', $range, 2), 2, null);
         $packed = self::pack((string) $address);
         if (null === $packed) {
-            return false;
+            return null;
         }
+        $maxBits = \strlen($packed) * 8;
         if (null === $bits) {
-            return true;
+            return [$packed, $maxBits];
+        }
+        if (1 !== \preg_match('/^\d{1,3}$/', $bits) || (int) $bits > $maxBits) {
+            return null;
         }
 
-        return 1 === \preg_match('/^\d{1,3}$/', $bits) && (int) $bits <= \strlen($packed) * 8;
+        return [$packed, (int) $bits];
     }
 
+    /**
+     * Packed binary address: 4 bytes for IPv4, 16 for IPv6. An IPv4-mapped
+     * IPv6 address (`::ffff:a.b.c.d`, what a `[::]`-listening server reports
+     * for IPv4 peers) is folded to its 4-byte IPv4 form so it matches IPv4
+     * ranges.
+     */
     private static function pack(string $ip): ?string
     {
         if (false === \filter_var($ip, \FILTER_VALIDATE_IP)) {
             return null;
         }
         $packed = \inet_pton($ip);
+        if (false === $packed) {
+            return null;
+        }
+        if (16 === \strlen($packed) && \str_starts_with($packed, "\0\0\0\0\0\0\0\0\0\0\xff\xff")) {
+            return \substr($packed, 12);
+        }
 
-        return false === $packed ? null : $packed;
+        return $packed;
     }
 
     private static function inRange(string $packedIp, string $range): bool
     {
-        [$address, $bits] = \array_pad(\explode('/', $range, 2), 2, null);
-        $packedRange = self::pack((string) $address);
-        if (null === $packedRange || \strlen($packedRange) !== \strlen($packedIp)) {
+        $parsed = self::parseRange($range);
+        if (null === $parsed) {
+            return false;
+        }
+        [$packedRange, $prefix] = $parsed;
+        if (\strlen($packedRange) !== \strlen($packedIp)) {
             return false; // v4 vs v6 never match
         }
 
-        $prefix = null === $bits ? \strlen($packedRange) * 8 : (int) $bits;
         $fullBytes = \intdiv($prefix, 8);
         if (\substr($packedIp, 0, $fullBytes) !== \substr($packedRange, 0, $fullBytes)) {
             return false;

@@ -2,9 +2,14 @@
 
 declare(strict_types=1);
 
+use Polidog\Relayer\Env;
+use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\TrustedProxy;
 use Polidog\Relayer\React\Island;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Document\HtmlDocument;
+use Psr\Log\LoggerInterface;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -52,6 +57,41 @@ $document = HtmlDocument::create()
     ->addHeadHtml(Island::loaderScript())
     ->addHeadHtml('<script type="module" src="/islands.js"></script>');
 
-Relayer::boot(__DIR__ . '/..')
+$router = Relayer::boot(__DIR__ . '/..');
+
+// Router guard: runs before EVERYTHING (deferred component fetches under
+// /_defer, the dev profiler, src/Pages/middleware.php), which is why the
+// origin guard lives here and not in middleware.php. Composed by hand,
+// outermost first:
+//
+//   1. OriginGuard  — reject requests that bypassed the CDN. Off until
+//      ORIGIN_SECRET is set (`.env.local` locally, `fly secrets set` on
+//      Fly), so this example keeps working on a bare `php -S`.
+//   2. TrustedProxy — resolve the user's IP (exposed as
+//      `$request->clientIp()`; `ip()` stays REMOTE_ADDR). Behind
+//      Cloudflare → Fly the hop is Fly and Fly-Client-IP is Cloudflare's
+//      address, so two layers: Fly's private network vouches for
+//      Fly-Client-IP, and if that is a Cloudflare address, Cloudflare
+//      vouches for CF-Connecting-IP. Skipped entirely until
+//      TRUSTED_PROXIES is set — on a bare `php -S` nothing is trusted.
+$guard = OriginGuard::middleware([
+    'header' => 'X-Origin-Secret',
+    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+    'except' => ['/healthz'],
+    'mode' => 'report' === Env::read('ORIGIN_GUARD_MODE') ? 'report' : 'enforce',
+    'logger' => Relayer::container()->get(LoggerInterface::class),
+]);
+
+$trustedProxies = Env::readList('TRUSTED_PROXIES');
+$cloudflareRanges = Env::readList('CLOUDFLARE_IP_RANGES');
+$proxy = [] === $trustedProxies
+    ? static fn (Request $request, Closure $next) => $next($request)
+    : TrustedProxy::middleware(['chain' => \array_values(\array_filter([
+        ['preset' => 'fly', 'proxies' => $trustedProxies],
+        [] === $cloudflareRanges ? null : ['preset' => 'cloudflare', 'proxies' => $cloudflareRanges],
+    ]))]);
+
+$router
+    ->setGuard(fn (Request $request, Closure $next) => $guard($request, fn (Request $r) => $proxy($r, $next)))
     ->setDocument($document)
     ->run();

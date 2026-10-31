@@ -60,7 +60,7 @@ final class OriginGuardTest extends TestCase
 
         self::assertFalse($wasCalled());
         self::assertSame(403, \http_response_code());
-        self::assertTrue($this->log->hasWarningThatContains('origin secret missing'));
+        self::assertTrue($this->log->hasWarningThatContains('OriginGuard rejected GET /api/x from 203.0.113.9: origin secret missing'));
     }
 
     public function testRotationAcceptsOldAndNewSecret(): void
@@ -125,6 +125,38 @@ final class OriginGuardTest extends TestCase
         }
     }
 
+    public function testSecretsAreTrimmedAndBlankOnesMeanUnset(): void
+    {
+        // `fly secrets import < file` / a `.env.local` line with trailing
+        // whitespace: the CDN sends `abc`, the env holds "abc\n".
+        $_SERVER['RELAYER_TEST_ORIGIN_NL'] = "abc\n";
+
+        try {
+            $guard = $this->guard(['secretsFromEnv' => ['RELAYER_TEST_ORIGIN_NL'], 'secrets' => [' lit ']]);
+
+            foreach (['abc', 'lit'] as $secret) {
+                [$next, $wasCalled] = $this->next();
+                $guard($this->req(['x-origin-secret' => $secret]), $next);
+                self::assertTrue($wasCalled(), "trimmed secret \"{$secret}\" must be accepted");
+            }
+        } finally {
+            unset($_SERVER['RELAYER_TEST_ORIGIN_NL']);
+        }
+
+        // Whitespace-only is "unset": the guard stays off rather than
+        // accepting a blank header.
+        $_SERVER['RELAYER_TEST_ORIGIN_WS'] = ' ';
+
+        try {
+            $guard = $this->guard(['secretsFromEnv' => ['RELAYER_TEST_ORIGIN_WS'], 'secrets' => ["\t"]]);
+            [$next, $wasCalled] = $this->next();
+            $guard($this->req(), $next);
+            self::assertTrue($wasCalled(), 'whitespace-only secrets must leave the guard disabled');
+        } finally {
+            unset($_SERVER['RELAYER_TEST_ORIGIN_WS']);
+        }
+    }
+
     public function testSecretsFromEnvWithNothingSetDisablesTheGuard(): void
     {
         $guard = $this->guard(['secretsFromEnv' => ['RELAYER_TEST_ORIGIN_UNSET_1', 'RELAYER_TEST_ORIGIN_UNSET_2']]);
@@ -173,7 +205,8 @@ final class OriginGuardTest extends TestCase
 
         self::assertTrue($wasCalled());
         self::assertSame(200, \http_response_code());
-        self::assertTrue($this->log->hasWarningThatContains('would reject POST /admin from 203.0.113.9: origin secret mismatch'));
+        self::assertTrue($this->log->hasWarningThatContains('OriginGuard reported POST /admin from 203.0.113.9: origin secret mismatch'));
+        self::assertSame('reported', $this->log->getRecords()[0]->context['outcome']);
     }
 
     public function testLogsNeverContainTheSecretOrThePresentedValue(): void

@@ -652,7 +652,9 @@ return function (Request $request, Closure $next): void {
   by hand: `fn ($r, $next) => $a($r, fn ($r) => $b($r, $next))`.
 - `require`d fresh each request (declaration-free, like `route.php`); a
   non-closure return is a clear error. The framework defer/profiler
-  endpoints deliberately run outside it.
+  endpoints deliberately run outside it — something that must cover those
+  too (an origin guard) goes in `AppRouter::setGuard()`, which takes the
+  same closure and runs before everything (see below).
 
 **CORS** ships as a ready-made middleware — the one provided
 implementation, not a parallel system:
@@ -678,33 +680,42 @@ credentials per spec).
 Two more provided middlewares cover the pair of chores every app behind
 Cloudflare / a reverse proxy otherwise hand-writes: *refuse requests that
 bypassed the CDN* and *recover the real client IP*. Both are plain
-`fn(Request, $next)` closures like `Cors`, so you compose them the same way.
+`fn(Request, $next)` closures like `Cors`.
 
-**`OriginGuard`** checks a secret header the CDN stamps on every forwarded
-request and answers `403` when it is missing or wrong:
+**Where they go: the router's guard, not `middleware.php`.** `middleware.php`
+wraps route dispatch only — the deferred-component endpoint (`/_defer/{name}`)
+and the dev profiler run before it, so an origin guard placed there can be
+sidestepped by requesting `/_defer/{name}` directly. `AppRouter::setGuard()`
+takes the same `fn(Request, $next)` closure and runs it before *everything*:
 
 ```php
 <?php
-// src/Pages/middleware.php
+// public/index.php
 use Polidog\Relayer\Http\OriginGuard;
 use Polidog\Relayer\Relayer;
 use Psr\Log\LoggerInterface;
 
-return OriginGuard::middleware([
-    'header'         => 'X-Origin-Secret',                 // default
-    'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
-    'except'         => ['/healthz'],                      // exact path, or `/prefix/*`
-    'mode'           => 'enforce',                         // or 'report'
-    'logger'         => Relayer::container()->get(LoggerInterface::class), // optional
-]);
+Relayer::boot(__DIR__ . '/..')
+    ->setGuard(OriginGuard::middleware([
+        'header'         => 'X-Origin-Secret',                 // default
+        'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+        'except'         => ['/healthz'],                      // exact path, or `/prefix/*`
+        'mode'           => 'enforce',                         // or 'report'
+        'logger'         => Relayer::container()->get(LoggerInterface::class), // optional
+    ]))
+    ->run();
 ```
 
-- **Off by default** — with no non-empty secret every request passes, so a
+**`OriginGuard`** checks a secret header the CDN stamps on every forwarded
+request and answers `403` when it is missing or wrong:
+
+- **Off by default** — with no non-blank secret every request passes, so a
   local `php -S` or CI never turns into a wall of 403s.
 - `secretsFromEnv` names the environment variables holding the secrets,
   read the way the framework reads its own config (`$_ENV`, then `$_SERVER`,
-  then `getenv()` — a `.env.local` and a real `fly secrets` variable both
-  work whatever `variables_order` says). Unset / blank ones are skipped.
+  then `getenv()`, trimmed — a `.env.local` and a real `fly secrets` variable
+  both work whatever `variables_order` says, and a trailing newline from
+  `fly secrets import` does not lock everyone out). Blank ones are skipped.
   `secrets` takes literal values instead, if you already have them in hand.
 - Either list may hold several entries: during a rotation name the new *and*
   the old variable and both are accepted. Every candidate is compared with
@@ -713,9 +724,10 @@ return OriginGuard::middleware([
   header (platform health checks).
 - `mode: 'report'` logs what *would* be rejected and lets the request through
   — run it for a while before switching to `enforce`.
-- Log lines (PSR-3 `warning`, via the DI logger you pass, else the SAPI error
-  log) carry method / path / `REMOTE_ADDR` only — never a configured secret
-  nor the value the client sent.
+- Log lines (one PSR-3 `warning` template for both modes, `outcome` =
+  `rejected` / `reported` in the context; via the DI logger you pass, else
+  the SAPI error log) carry method / path / `REMOTE_ADDR` only — never a
+  configured secret nor the value the client sent.
 - Pass secrets in from the environment (`fly secrets set`, a gitignored
   `.env.local`); don't write them into a committed config file.
 
@@ -731,60 +743,90 @@ use Polidog\Relayer\Http\TrustedProxy;
 // Cloudflare in front: CF-Connecting-IP, honored only from Cloudflare's ranges.
 // The ranges are not bundled (they change) — fetch https://www.cloudflare.com/ips-v4
 // and /ips-v6 and pass them in.
-return TrustedProxy::middleware(['preset' => 'cloudflare', 'proxies' => $cloudflareRanges]);
+TrustedProxy::middleware(['preset' => 'cloudflare', 'proxies' => $cloudflareRanges]);
 
-// Fly.io: Fly-Client-IP. The Fly proxy is the only ingress, so no range list is needed.
-return TrustedProxy::middleware(['preset' => 'fly']);
+// Fly.io: Fly-Client-IP, honored only from Fly's private network (6PN).
+TrustedProxy::middleware(['preset' => 'fly', 'proxies' => ['fdaa::/16']]);
 
 // A proxy of your own: X-Forwarded-For walked from the right past your proxies.
-return TrustedProxy::middleware(['preset' => 'xff', 'proxies' => ['10.0.0.0/8']]);
+TrustedProxy::middleware(['preset' => 'xff', 'proxies' => ['10.0.0.0/8']]);
 
-// Any single-IP header; `proxies` is required.
-return TrustedProxy::middleware(['header' => 'X-Real-IP', 'proxies' => ['192.0.2.1']]);
+// Any other single-IP header (`preset` and `header` are mutually exclusive).
+TrustedProxy::middleware(['header' => 'X-Real-IP', 'proxies' => ['192.0.2.1']]);
 ```
 
-`proxies` entries are plain addresses or CIDR ranges, IPv4 and IPv6. A header
-from an untrusted hop, or one that is not a valid IP, is ignored.
+- `proxies` is **required**: entries are plain addresses or CIDR ranges, IPv4
+  and IPv6 (an IPv4-mapped `::ffff:a.b.c.d`, what a `[::]`-listening server
+  reports for IPv4 peers, matches IPv4 ranges). A malformed range never
+  matches — a typo cannot become "trust everyone".
+- A header from an untrusted hop, or one that is not a valid IP, is ignored.
+- The only way to skip the hop check is the explicit `'trustAnyHop' => true`,
+  for a process that is provably reachable through one proxy only. Never set
+  it on a server that can be reached directly: any caller could then send
+  `Fly-Client-IP: 127.0.0.1` and pass an IP allow-list.
 
-**Recipe: Cloudflare in front of Fly.io.** On Fly, `REMOTE_ADDR` is the Fly
-proxy, so the `cloudflare` preset's "immediate hop is Cloudflare" check can't
-hold — the CDN is two hops away and `xxx.fly.dev` stays reachable around it.
-Combine the `fly` preset with the origin guard instead:
+**Several proxies in a row (`chain`).** Behind Cloudflare → Fly the hop is
+Fly, `Fly-Client-IP` is *Cloudflare's* address (per
+[Fly's request headers](https://fly.io/docs/networking/request-headers/)),
+and the user is in `CF-Connecting-IP`. A single preset would hand you
+Cloudflare's IP — per-user rate limits would collapse onto Cloudflare's
+edge addresses. List the layers outermost-last; each applies only if the
+address resolved so far is one of that layer's proxies, and the last
+address that could be verified is the client:
+
+```php
+TrustedProxy::middleware(['chain' => [
+    ['preset' => 'fly',        'proxies' => ['fdaa::/16']],
+    ['preset' => 'cloudflare', 'proxies' => $cloudflareRanges],
+]]);
+```
+
+A request straight to `xxx.fly.dev` resolves to the caller's own address
+(the Fly layer applies, the Cloudflare layer does not), and a forged
+`CF-Connecting-IP` from a non-Cloudflare source is ignored.
+
+**Recipe: Cloudflare in front of Fly.io.**
 
 1. Cloudflare → Rules → Transform Rules → *Modify Request Header*: set
    `X-Origin-Secret` to a long random value for your zone.
 2. `fly secrets set ORIGIN_SECRET=<that value>` (rotate by setting the new
    value plus `ORIGIN_SECRET_PREVIOUS=<old>`, then dropping the latter).
-3. Compose the middlewares — outermost first, by hand (no chain runner):
+3. Guard first, then resolve the user's IP — composed by hand (no chain
+   runner) and installed as the router guard so `/_defer/*` and the profiler
+   are covered too:
 
 ```php
 <?php
-// src/Pages/middleware.php
+// public/index.php
 declare(strict_types=1);
 
-use Polidog\Relayer\Http\Cors;
+use Polidog\Relayer\Env;
 use Polidog\Relayer\Http\OriginGuard;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Http\TrustedProxy;
+use Polidog\Relayer\Relayer;
 
-$proxy = TrustedProxy::middleware(['preset' => 'fly']);
+$router = Relayer::boot(__DIR__ . '/..');
+
 $guard = OriginGuard::middleware([
     'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
     'except'         => ['/healthz'],
 ]);
-$cors = Cors::middleware(['origins' => ['https://app.example.com']]);
+$proxy = TrustedProxy::middleware(['chain' => [
+    ['preset' => 'fly',        'proxies' => ['fdaa::/16']],
+    ['preset' => 'cloudflare', 'proxies' => Env::readList('CLOUDFLARE_IP_RANGES')],
+]]);
 
-return fn (Request $request, Closure $next) => $proxy(
-    $request,
-    fn (Request $r) => $guard($r, fn (Request $r) => $cors($r, $next)),
-);
+$router
+    ->setGuard(fn (Request $request, Closure $next) => $guard($request, fn (Request $r) => $proxy($r, $next)))
+    ->run();
 ```
 
 4. Verify: `curl -I https://<app>.fly.dev/` is `403`, the custom domain
    (through Cloudflare) is `200`, and `/healthz` is `200` either way.
 
-The `example/` app ships this composition; it runs unguarded until you set
-`ORIGIN_SECRET`.
+`Cors` stays in `src/Pages/middleware.php` as before. The `example/` app ships
+this composition; it runs unguarded until you set `ORIGIN_SECRET`.
 
 ### Inspecting routes
 

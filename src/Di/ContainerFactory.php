@@ -25,6 +25,7 @@ use Polidog\Relayer\Db\CachingDatabase;
 use Polidog\Relayer\Db\Database;
 use Polidog\Relayer\Db\PdoDatabase;
 use Polidog\Relayer\Db\TraceableDatabase;
+use Polidog\Relayer\Env;
 use Polidog\Relayer\Http\Client\CachingHttpClient;
 use Polidog\Relayer\Http\Client\CurlHttpClient;
 use Polidog\Relayer\Http\Client\HttpClient;
@@ -814,9 +815,7 @@ final class ContainerFactory
      */
     private static function readEnv(string $name): string
     {
-        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
-
-        return \is_string($raw) ? \trim($raw) : '';
+        return Env::read($name) ?? '';
     }
 
     /**

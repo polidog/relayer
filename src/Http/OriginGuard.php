@@ -8,6 +8,7 @@ use Closure;
 use InvalidArgumentException;
 use Monolog\Handler\ErrorLogHandler;
 use Monolog\Logger;
+use Polidog\Relayer\Env;
 use Psr\Log\LoggerInterface;
 
 /**
@@ -18,24 +19,31 @@ use Psr\Log\LoggerInterface;
  * secret header on every request it forwards; this middleware checks that
  * header and answers `403` when it is missing or wrong, so a request that
  * bypasses the CDN (`curl https://<app>.fly.dev`) never reaches a route.
- * Wire it in `src/Pages/middleware.php`:
  *
- *   use Polidog\Relayer\Http\OriginGuard;
+ * Wire it as the router's **guard**, not in `middleware.php`: the guard runs
+ * before everything — deferred component fetches (`/_defer/{name}`), the dev
+ * profiler and the root middleware — whereas `middleware.php` wraps route
+ * dispatch only and is bypassed by those framework endpoints.
  *
- *   return OriginGuard::middleware([
- *       'header'         => 'X-Origin-Secret',
- *       'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
- *       'except'         => ['/healthz'],
- *       'mode'           => 'enforce', // or 'report'
- *   ]);
+ *   // public/index.php
+ *   Relayer::boot(__DIR__ . '/..')
+ *       ->setGuard(OriginGuard::middleware([
+ *           'header'         => 'X-Origin-Secret',
+ *           'secretsFromEnv' => ['ORIGIN_SECRET', 'ORIGIN_SECRET_PREVIOUS'],
+ *           'except'         => ['/healthz'],
+ *           'mode'           => 'enforce', // or 'report'
+ *           'logger'         => Relayer::container()->get(LoggerInterface::class),
+ *       ]))
+ *       ->run();
  *
- * - **Off by default**: with no (non-empty) secret configured every request
+ * - **Off by default**: with no (non-blank) secret configured every request
  *   passes through, so local runs and CI never turn into surprise 403s.
  * - `secretsFromEnv` names environment variables to read the secrets from,
- *   resolved the way the framework reads its own config (`$_ENV`, then
- *   `$_SERVER`, then `getenv()` — so a `.env.local` and a real `fly secrets`
- *   variable both work under any `variables_order`). Unset / blank names
- *   are skipped. `secrets` takes literal values instead (or in addition).
+ *   via {@see Env::read()} (`$_ENV`, then `$_SERVER`, then `getenv()`;
+ *   trimmed, blank = unset — so a `.env.local` and a real `fly secrets`
+ *   variable both work under any `variables_order`, and a trailing newline
+ *   from `fly secrets import` does not break every request). `secrets`
+ *   takes literal values instead (or in addition); they are trimmed too.
  * - Either list may hold several values so a rotation can accept the old
  *   and the new secret at once; each candidate is compared with
  *   `hash_equals` (constant time).
@@ -73,12 +81,14 @@ final class OriginGuard
     {
         $header = $config['header'] ?? self::DEFAULT_HEADER;
         $secrets = self::normalizeSecrets([
-            ...\array_map(self::readEnv(...), $config['secretsFromEnv'] ?? []),
+            ...\array_map(Env::read(...), $config['secretsFromEnv'] ?? []),
             ...\array_values($config['secrets'] ?? []),
         ]);
         $except = $config['except'] ?? [];
         $mode = $config['mode'] ?? self::MODE_ENFORCE;
-        $logger = $config['logger'] ?? null;
+        // Resolved once here, not per rejected request: a bypass scan must
+        // not allocate a logger per hit.
+        $logger = $config['logger'] ?? self::fallbackLogger();
 
         if ('' === \trim($header)) {
             throw new InvalidArgumentException('OriginGuard: "header" must be a non-empty header name.');
@@ -115,30 +125,27 @@ final class OriginGuard
                 return;
             }
 
-            // The presented value is deliberately not logged: a near-miss
-            // would leak most of the secret into the log sink.
-            $context = [
+            $enforce = self::MODE_ENFORCE === $mode;
+
+            // One message template for both modes (one pattern to search
+            // for); `outcome` tells them apart. The presented value is
+            // deliberately not logged: a near-miss would leak most of the
+            // secret into the log sink.
+            $logger->warning('OriginGuard {outcome} {method} {path} from {ip}: origin secret {reason}', [
+                'outcome' => $enforce ? 'rejected' : 'reported',
+                'mode' => $mode,
                 'reason' => $reason,
                 'header' => $header,
                 'method' => $request->method,
                 'path' => $request->path,
                 'ip' => $request->ip(),
-            ];
+            ]);
 
-            if (self::MODE_REPORT === $mode) {
-                ($logger ?? self::fallbackLogger())->warning(
-                    'OriginGuard would reject {method} {path} from {ip}: origin secret {reason} (report mode)',
-                    $context,
-                );
+            if (!$enforce) {
                 $next($request);
 
                 return;
             }
-
-            ($logger ?? self::fallbackLogger())->warning(
-                'OriginGuard rejected {method} {path} from {ip}: origin secret {reason}',
-                $context,
-            );
 
             if (!\headers_sent()) {
                 \header('Content-Type: text/plain; charset=utf-8');
@@ -150,23 +157,11 @@ final class OriginGuard
     }
 
     /**
-     * Same lookup order as the framework's own env reading: Symfony Dotenv
-     * populates `$_ENV` / `$_SERVER` (not `getenv()`), while a real process
-     * variable may be visible only through `getenv()` when `variables_order`
-     * lacks `E` (php.ini-production) — as under the built-in server.
-     */
-    private static function readEnv(string $name): ?string
-    {
-        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
-
-        return \is_string($raw) ? $raw : null;
-    }
-
-    /**
-     * Keep only non-empty strings. Unset env slots arrive as null, and a
-     * hand-built `secrets` list may carry `false` / '' from a failed lookup
-     * — none of those must count as a secret (an empty one would match an
-     * empty header).
+     * Keep only strings that are non-blank after trimming. Unset env slots
+     * arrive as null, a hand-built `secrets` list may carry `false` / '' from
+     * a failed lookup, and a value pasted with a trailing newline or made of
+     * whitespace must neither count as a secret (an empty one would match an
+     * empty header) nor silently fail to match the value the CDN sends.
      *
      * @param array<mixed> $secrets
      *
@@ -176,7 +171,11 @@ final class OriginGuard
     {
         $normalized = [];
         foreach ($secrets as $secret) {
-            if (\is_string($secret) && '' !== $secret) {
+            if (!\is_string($secret)) {
+                continue;
+            }
+            $secret = \trim($secret);
+            if ('' !== $secret) {
                 $normalized[] = $secret;
             }
         }
@@ -221,10 +220,10 @@ final class OriginGuard
     }
 
     /**
-     * Used when no `logger` is handed in: `middleware.php` is a plain
-     * required file, so reaching the DI logger takes an explicit
-     * `Relayer::container()->get(LoggerInterface::class)`. Without it the
-     * report still lands somewhere visible (the SAPI error log).
+     * Used when no `logger` is handed in, so the report still lands
+     * somewhere visible (the SAPI error log). Pass the DI logger
+     * (`Relayer::container()->get(LoggerInterface::class)`) to get the
+     * app's configured sink instead.
      */
     private static function fallbackLogger(): LoggerInterface
     {

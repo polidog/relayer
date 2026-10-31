@@ -353,17 +353,14 @@ final class Relayer
 
     private static function resolveSnapshotSecret(string $projectRoot, bool $isDev): string
     {
-        $explicit = $_ENV['USEPHP_SNAPSHOT_SECRET']
-            ?? $_SERVER['USEPHP_SNAPSHOT_SECRET']
-            ?? \getenv('USEPHP_SNAPSHOT_SECRET');
-
-        // Trim before return — secrets sourced from files often pick up a
-        // trailing newline. Without normalizing here, the HMAC would silently
+        // Env::read() trims — secrets sourced from files often pick up a
+        // trailing newline. Without normalizing, the HMAC would silently
         // diverge from the value an operator pasted into a .env file, and
         // every snapshot signature would fail verification with no obvious
         // cause.
-        if (\is_string($explicit) && '' !== \trim($explicit)) {
-            return \trim($explicit);
+        $explicit = Env::read('USEPHP_SNAPSHOT_SECRET');
+        if (null !== $explicit) {
+            return $explicit;
         }
 
         if (!$isDev) {
@@ -390,20 +387,7 @@ final class Relayer
      */
     private static function readEnvList(string $name): array
     {
-        $raw = $_ENV[$name] ?? $_SERVER[$name] ?? \getenv($name);
-        if (!\is_string($raw) || '' === \trim($raw)) {
-            return [];
-        }
-
-        $out = [];
-        foreach (\explode(',', $raw) as $entry) {
-            $entry = \trim($entry);
-            if ('' !== $entry) {
-                $out[] = $entry;
-            }
-        }
-
-        return $out;
+        return Env::readList($name);
     }
 
     /**
@@ -427,7 +411,7 @@ final class Relayer
 
     private static function isDev(): bool
     {
-        $env = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? \getenv('APP_ENV') ?: 'prod';
+        $env = Env::read('APP_ENV') ?? 'prod';
 
         return 'dev' === $env || 'development' === $env;
     }
@@ -453,9 +437,9 @@ final class Relayer
      */
     private static function isWarmEnabled(): bool
     {
-        $raw = $_ENV['RELAYER_WARM_CACHE'] ?? $_SERVER['RELAYER_WARM_CACHE'] ?? \getenv('RELAYER_WARM_CACHE');
+        $raw = Env::read('RELAYER_WARM_CACHE');
 
-        if (!\is_string($raw)) {
+        if (null === $raw) {
             return false;
         }
 

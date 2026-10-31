@@ -44,21 +44,77 @@ final class TrustedProxyTest extends TestCase
         self::assertSame('2001:db8::9', $seen->clientIp());
     }
 
-    public function testFlyPresetTrustsTheFlyProxyWithoutARangeList(): void
-    {
-        $proxy = TrustedProxy::middleware(['preset' => 'fly']);
-
-        $seen = $this->dispatch($proxy, $this->req('fdaa:0:1::3', ['fly-client-ip' => '198.51.100.7']));
-
-        self::assertSame('198.51.100.7', $seen->clientIp());
-    }
-
-    public function testFlyPresetEnforcesTheRangeListWhenGiven(): void
+    public function testFlyPresetHonorsTheHeaderOnlyFromTheFlyNetwork(): void
     {
         $proxy = TrustedProxy::middleware(['preset' => 'fly', 'proxies' => ['fdaa::/16']]);
 
         self::assertSame('198.51.100.7', $this->dispatch($proxy, $this->req('fdaa:0:1::3', ['fly-client-ip' => '198.51.100.7']))->clientIp());
-        self::assertSame('203.0.113.5', $this->dispatch($proxy, $this->req('203.0.113.5', ['fly-client-ip' => '198.51.100.7']))->clientIp());
+        // Reached without going through the Fly proxy: the header is forged.
+        self::assertSame('203.0.113.5', $this->dispatch($proxy, $this->req('203.0.113.5', ['fly-client-ip' => '127.0.0.1']))->clientIp());
+    }
+
+    public function testTrustAnyHopIsAnExplicitOptIn(): void
+    {
+        $proxy = TrustedProxy::middleware(['preset' => 'fly', 'trustAnyHop' => true]);
+
+        self::assertSame('198.51.100.7', $this->dispatch($proxy, $this->req('203.0.113.5', ['fly-client-ip' => '198.51.100.7']))->clientIp());
+    }
+
+    public function testIpv4MappedIpv6HopMatchesAnIpv4Range(): void
+    {
+        // A `[::]`-listening server reports IPv4 peers as ::ffff:a.b.c.d.
+        $proxy = TrustedProxy::middleware(['preset' => 'cloudflare', 'proxies' => self::CLOUDFLARE]);
+
+        $seen = $this->dispatch($proxy, $this->req('::ffff:173.245.48.10', ['cf-connecting-ip' => '198.51.100.7']));
+
+        self::assertSame('198.51.100.7', $seen->clientIp());
+    }
+
+    public function testChainResolvesTheUserBehindCloudflareInFrontOfFly(): void
+    {
+        $proxy = TrustedProxy::middleware(['chain' => [
+            ['preset' => 'fly', 'proxies' => ['fdaa::/16']],
+            ['preset' => 'cloudflare', 'proxies' => self::CLOUDFLARE],
+        ]]);
+
+        // Via Cloudflare: Fly-Client-IP is Cloudflare's address, the user is in CF-Connecting-IP.
+        $seen = $this->dispatch($proxy, $this->req('fdaa:0:1::3', [
+            'fly-client-ip' => '173.245.48.10',
+            'cf-connecting-ip' => '198.51.100.7',
+        ]));
+        self::assertSame('198.51.100.7', $seen->clientIp());
+        self::assertSame('fdaa:0:1::3', $seen->ip());
+
+        // Straight to xxx.fly.dev with a forged CF-Connecting-IP: the Fly
+        // layer applies (caller = 203.0.113.5), the Cloudflare layer does
+        // not (203.0.113.5 is not Cloudflare), so the forgery is ignored.
+        $seen = $this->dispatch($proxy, $this->req('fdaa:0:1::3', [
+            'fly-client-ip' => '203.0.113.5',
+            'cf-connecting-ip' => '127.0.0.1',
+        ]));
+        self::assertSame('203.0.113.5', $seen->clientIp());
+
+        // Not even via the Fly proxy: nothing is trusted.
+        $seen = $this->dispatch($proxy, $this->req('203.0.113.9', [
+            'fly-client-ip' => '173.245.48.10',
+            'cf-connecting-ip' => '198.51.100.7',
+        ]));
+        self::assertSame('203.0.113.9', $seen->clientIp());
+    }
+
+    public function testChainStopsAtAMalformedHeaderAndKeepsWhatWasVerified(): void
+    {
+        $proxy = TrustedProxy::middleware(['chain' => [
+            ['preset' => 'fly', 'proxies' => ['fdaa::/16']],
+            ['preset' => 'cloudflare', 'proxies' => self::CLOUDFLARE],
+        ]]);
+
+        $seen = $this->dispatch($proxy, $this->req('fdaa:0:1::3', [
+            'fly-client-ip' => '173.245.48.10',
+            'cf-connecting-ip' => 'not-an-ip',
+        ]));
+
+        self::assertSame('173.245.48.10', $seen->clientIp());
     }
 
     public function testXffWalksFromTheRightPastTrustedProxies(): void
@@ -91,7 +147,7 @@ final class TrustedProxyTest extends TestCase
 
     public function testMalformedHeaderValueIsIgnored(): void
     {
-        $proxy = TrustedProxy::middleware(['preset' => 'fly']);
+        $proxy = TrustedProxy::middleware(['preset' => 'fly', 'proxies' => ['fdaa::/16']]);
 
         $seen = $this->dispatch($proxy, $this->req('fdaa::1', ['fly-client-ip' => 'not-an-ip']));
 
@@ -148,13 +204,28 @@ final class TrustedProxyTest extends TestCase
 
         yield 'v6 /128 exact' => ['::1', ['::1/128'], true];
 
-        yield 'v6 against v4 range never matches' => ['::ffff:192.0.2.1', ['192.0.2.0/24'], false];
+        yield 'v6 against v4 range never matches' => ['2001:db8::1', ['192.0.2.0/24'], false];
 
         yield 'v4 against v6 range never matches' => ['192.0.2.1', ['::/0'], false];
 
         yield 'malformed ip never matches' => ['not-an-ip', ['0.0.0.0/0'], false];
 
         yield 'second range matches' => ['10.1.2.3', ['192.0.2.0/24', '10.0.0.0/8'], true];
+
+        yield 'mapped v4 in v4 range' => ['::ffff:173.245.48.10', ['173.245.48.0/20'], true];
+
+        yield 'mapped v4 outside v4 range' => ['::ffff:173.245.64.1', ['173.245.48.0/20'], false];
+
+        // A malformed range must never become "allow all".
+        yield 'non-numeric prefix' => ['8.8.8.8', ['10.0.0.0/abc'], false];
+
+        yield 'negative prefix' => ['8.8.8.8', ['10.0.0.0/-1'], false];
+
+        yield 'prefix too long' => ['10.0.0.1', ['10.0.0.0/33'], false];
+
+        yield 'empty prefix' => ['10.0.0.1', ['10.0.0.0/'], false];
+
+        yield 'malformed range address' => ['10.0.0.1', ['ten.0.0.0/8'], false];
     }
 
     /**
@@ -165,7 +236,7 @@ final class TrustedProxyTest extends TestCase
     {
         $this->expectException(InvalidArgumentException::class);
 
-        /** @var array{preset?: string, header?: string, proxies?: list<string>} $config */
+        /** @var array{preset?: string, header?: string, proxies?: list<string>, trustAnyHop?: bool, chain?: list<array{preset?: string, header?: string, proxies?: list<string>, trustAnyHop?: bool}>} $config */
         TrustedProxy::middleware($config);
     }
 
@@ -178,7 +249,17 @@ final class TrustedProxyTest extends TestCase
 
         yield 'xff without proxies' => [['preset' => 'xff']];
 
+        yield 'fly without proxies' => [['preset' => 'fly']];
+
         yield 'custom header without proxies' => [['header' => 'X-Real-IP']];
+
+        yield 'preset and header together' => [['preset' => 'fly', 'header' => 'True-Client-IP', 'proxies' => ['fdaa::/16']]];
+
+        yield 'empty chain' => [['chain' => []]];
+
+        yield 'chain with a bad layer' => [['chain' => [['preset' => 'cloudflare']]]];
+
+        yield 'chain mixed with a top-level layer' => [['chain' => [['preset' => 'fly', 'proxies' => ['fdaa::/16']]], 'preset' => 'xff']];
 
         yield 'unknown preset' => [['preset' => 'akamai', 'proxies' => ['10.0.0.0/8']]];
 

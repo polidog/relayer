@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router;
 
+use Closure;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Auth\SessionStorage;
+use Polidog\Relayer\Http\OriginGuard;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\InjectorContainer;
@@ -16,6 +18,7 @@ use Polidog\UsePhp\Psx\CompileCommand;
 use Polidog\UsePhp\Runtime\RenderContext;
 use Polidog\UsePhp\UsePHP;
 use Psr\Container\ContainerInterface;
+use Psr\Log\NullLogger;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 final class DeferDispatchTest extends TestCase
@@ -35,6 +38,7 @@ final class DeferDispatchTest extends TestCase
         unset(
             $_SERVER['REQUEST_METHOD'],
             $_SERVER['REQUEST_URI'],
+            $_SERVER['HTTP_X_ORIGIN_SECRET'],
         );
         $_GET = [];
         RenderContext::clearApp();
@@ -76,6 +80,56 @@ final class DeferDispatchTest extends TestCase
         self::assertStringNotContainsString('<!DOCTYPE', $output);
         self::assertStringNotContainsString('<html', $output);
         self::assertStringContainsString('<span data-id="greeting">hi Alice</span>', $output);
+    }
+
+    public function testGuardRunsBeforeDeferredDispatch(): void
+    {
+        // The deferred endpoint is dispatched before the root middleware, so
+        // an origin guard placed in middleware.php could be bypassed with a
+        // direct `/_defer/{name}` request. The router's guard must run first:
+        // without the secret the component must not execute at all.
+        \file_put_contents(
+            $this->workDir . '/src/Components/Greeting.psx',
+            <<<'PSX'
+                <?php
+                namespace App\Components;
+                use Polidog\UsePhp\Component\Defer;
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\fc;
+
+                return fc(
+                    function (array $props): Element {
+                        \file_put_contents($props['marker'], 'executed');
+
+                        return <span data-id="greeting">hi</span>;
+                    },
+                    defer: new Defer(name: 'greeting'),
+                );
+                PSX,
+        );
+        $marker = $this->workDir . '/component-ran';
+        $guard = OriginGuard::middleware(['secrets' => ['s3cret'], 'logger' => new NullLogger()]);
+        $usephp = $this->bootUsePhp();
+
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/_defer/greeting?marker=' . \rawurlencode($marker);
+        $_GET = ['marker' => $marker];
+
+        $output = $this->runApp($usephp, guard: $guard);
+
+        self::assertSame(403, \http_response_code());
+        self::assertSame('Forbidden', $output);
+        self::assertFileDoesNotExist($marker, 'the deferred component must not run for a rejected request');
+
+        // With the secret the same fetch goes through to the component.
+        $_SERVER['HTTP_X_ORIGIN_SECRET'] = 's3cret';
+
+        $output = $this->runApp($usephp, guard: $guard);
+
+        self::assertSame(200, \http_response_code());
+        self::assertStringContainsString('<span data-id="greeting">hi</span>', $output);
+        self::assertFileExists($marker);
     }
 
     public function testUnregisteredDeferNameReturns404(): void
@@ -238,7 +292,7 @@ final class DeferDispatchTest extends TestCase
         return $usephp;
     }
 
-    private function runApp(UsePHP $usephp, ?InjectorContainer $container = null): string
+    private function runApp(UsePHP $usephp, ?InjectorContainer $container = null, ?Closure $guard = null): string
     {
         \http_response_code(200);
 
@@ -248,6 +302,9 @@ final class DeferDispatchTest extends TestCase
             psxCacheDir: $this->workDir . '/var/cache/psx',
         );
         $app->setUsePhp($usephp);
+        if (null !== $guard) {
+            $app->setGuard($guard);
+        }
         // Mirrors Relayer::boot(): the router and the PSX registrar share one
         // container, which is how a deferred component reaches the per-request
         // Request the router stashes on it.
