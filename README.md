@@ -1728,10 +1728,28 @@ $container->register(NativePasswordHasher::class)
     ->setArguments([\PASSWORD_ARGON2ID]);
 ```
 
-`NativeSession` calls `session_start()` lazily on first read/write,
-so just resolving the service through DI does not eagerly emit
-`Set-Cookie`. It shares `$_SESSION` with the existing CSRF token
-machinery — no duplicate session starts.
+`NativeSession` starts the session lazily, so just resolving the service
+through DI does not eagerly emit `Set-Cookie`. Only a write creates a
+session: on a request without a session cookie, reads see an empty store
+and start nothing, so an anonymous visitor to a page that merely checks
+`$auth->user()` gets no `Set-Cookie` and stays CDN-cacheable. It shares
+`$_SESSION` with the existing CSRF token machinery — no duplicate session
+starts.
+
+The session cookie gets `HttpOnly`, `SameSite=Lax`, and `Secure` when
+`$_SERVER['HTTPS']` says the request came over TLS. Behind a proxy that
+terminates TLS, set `session.cookie_secure=1` or pass `HTTPS=on` to PHP;
+`X-Forwarded-Proto` is not consulted. Only attributes left at PHP's default
+are filled in, so your own values win: anything `session_set_cookie_params()`
+set before the session starts (`SameSite=Strict`, `lifetime`, `path`,
+`domain`), and `php.ini` / `-d` values including an explicit
+`session.cookie_httponly=0` (spell it `0`: PHP parses `Off` as blank, the same
+as a stock `php.ini`). A runtime `httponly => false` looks like the default,
+so to turn the cookie defaults off altogether call this before `run()`:
+
+```php
+Polidog\Relayer\Http\SessionStarter::leaveCookieParamsToApp();
+```
 
 ### Notes
 
@@ -2091,6 +2109,18 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   ordinary services with `#[Cache]` are ignored to avoid surprising header
   writes when fetched through the container.
 - All header writes are skipped once `headers_sent()` is true.
+- A declared policy is not overwritten by `session_start()`: the framework
+  sets `session_cache_limiter('')` once one applies. Pages without a policy
+  keep PHP's `no-store` when they use a session.
+- A response that used a session is never left storable by a shared cache. If
+  a session is active when headers go out, any policy other than `private` or
+  `noStore` is replaced with `Cache-Control: private, no-store`, so a logged-in
+  visitor gets an uncached copy of a `#[Cache(public: true)]` page whose layout
+  reads `$auth->user()`, while anonymous visitors still get the declared
+  policy. A page that wants browser caching for logged-in users declares
+  `private: true`. This uses `header_register_callback()`, which holds one
+  callback per request, so a callback your app registers later replaces it
+  (and it replaces one registered earlier).
 - The 304 short-circuit issues `exit;` from the PSR-11 adapter. It runs
   *before* the page is instantiated, so neither the page constructor nor its
   injected dependencies execute on a cache hit.
