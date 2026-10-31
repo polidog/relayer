@@ -240,7 +240,7 @@ the Next.js App Router. The conventions:
 | -------------------- | ------------------------------------------------------------------- |
 | `page.psx`           | Renders the route. One per directory.                               |
 | `layout.psx`         | Wraps every nested page; layouts stack from root to leaf.           |
-| `error.psx`          | Error page for 404 / `$ctx->abort()` statuses (root only).          |
+| `error.psx`          | Error page for 404 / `$ctx->abort()` / auth `401`+`403` (root only). |
 | `route.php`          | JSON API route (no HTML). Method-keyed handler map. One per directory. |
 | `[param]/`           | Dynamic segment; captured into `$this->getParam('param')`.          |
 | `(group)/`           | Route group: organises files without adding a URL segment. May hold its own `layout.psx`. |
@@ -436,8 +436,12 @@ src/Pages/
 ### Error pages
 
 A root `error.psx` (extending `ErrorPageComponent`) renders error responses
-inside the root layout — an unmatched route (404) and every `$ctx->abort()`
-status. It receives the status and message via `ErrorPageComponent`, so one
+inside the root layout — an unmatched route (404), every `$ctx->abort()`
+status, and the `401` / `403` from `#[Auth]` / `$ctx->requireAuth()`. If the
+root layout itself fails an auth guard or aborts while rendering the error,
+`error.psx` renders without it; if `error.psx` fails the same way, the default
+document is used. The status is unchanged either way. It receives the status
+and message via `ErrorPageComponent`, so one
 `error.psx` can branch on `getStatusCode()` for a 404 vs. 403 vs. 500 page.
 Without one, the framework emits a minimal default document.
 
@@ -1669,7 +1673,8 @@ final class ApiEndpoint extends PageComponent { /* ... */ }
 
 Anonymous requests get a `302 Location: /login?next=<requested-path>`
 (URL-encoded, same-origin only). Authenticated users lacking the
-required role get `403 Forbidden`.
+required role get `403 Forbidden`. Both `401` and `403` render
+[`error.psx`](#error-pages) (or the default error document).
 
 `#[Auth]` is evaluated before `#[Cache]`, so unauthorized requests
 never produce a cacheable `304` that could leak to anonymous viewers
