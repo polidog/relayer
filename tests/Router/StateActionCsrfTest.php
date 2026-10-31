@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\UsePhp\Runtime\ComponentState;
+use Polidog\UsePhp\UsePHP;
 
 /**
- * useState `setState` POSTs must carry the session-bound CSRF token.
+ * useState POSTs must carry the session-bound CSRF token or a signature.
  *
  * The `_usephp_component` id is rendered into the page and is not a secret,
  * so on its own it cannot authenticate a state write: without the token a
@@ -26,7 +28,7 @@ use Polidog\UsePhp\Runtime\ComponentState;
  */
 final class StateActionCsrfTest extends TestCase
 {
-    private const string COMPONENT_ID = 'page:/';
+    private const string COMPONENT_ID = 'page:/#page';
     private const string SET_STATE = '{"type":"setState","payload":{"index":0,"value":"forged"}}';
 
     private string $workDir;
@@ -120,8 +122,8 @@ final class StateActionCsrfTest extends TestCase
         self::assertSame('forged', $this->currentState());
         self::assertStringContainsString('value=forged', $output);
         // The partial response re-renders the setState form, which must
-        // carry the token again so the next client-side update succeeds.
-        self::assertStringContainsString($this->csrfField($token), $output);
+        // be signed again so the next client-side update succeeds.
+        self::assertStringContainsString('name="_usephp_action_sig"', $output);
     }
 
     #[RunInSeparateProcess]
@@ -134,6 +136,172 @@ final class StateActionCsrfTest extends TestCase
         // PRG: the redirect is the response, nothing of the page is emitted.
         self::assertSame('', $output);
         self::assertSame('forged', $this->currentState());
+    }
+
+    #[RunInSeparateProcess]
+    public function testActionTheServerDidNotRenderIsRejected(): void
+    {
+        $this->postStateAction(CsrfToken::getToken(), partial: false);
+        $_POST['_usephp_action'] = '{"type":"setState","payload":{"index":0,"value":999999}}';
+
+        $this->dispatch();
+
+        self::assertSame(400, \http_response_code());
+        self::assertSame('initial', $this->currentState());
+    }
+
+    #[RunInSeparateProcess]
+    public function testSignedActionWithoutTokenIsAccepted(): void
+    {
+        // What a defer fragment or a partial response posts: usePHP renders
+        // those forms, and they carry the session-bound signature only.
+        $this->postStateAction(CsrfToken::getToken(), partial: true);
+        unset($_POST['_usephp_csrf']);
+
+        $output = $this->dispatch();
+
+        self::assertSame(200, \http_response_code());
+        self::assertSame('forged', $this->currentState());
+        self::assertStringContainsString('value=forged', $output);
+    }
+
+    #[DataProvider('provideMalformedActionIsBadRequestCases')]
+    #[RunInSeparateProcess]
+    public function testMalformedActionIsBadRequest(string $action): void
+    {
+        $this->postStateAction(CsrfToken::getToken(), partial: false);
+        $_POST['_usephp_action'] = $action;
+
+        $this->dispatch();
+
+        self::assertSame(400, \http_response_code());
+        self::assertSame('initial', $this->currentState());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideMalformedActionIsBadRequestCases(): iterable
+    {
+        yield 'not json' => ['{'];
+
+        yield 'type is not a string' => ['{"type":123}'];
+
+        yield 'payload is not an object' => ['{"type":"setState","payload":"x"}'];
+    }
+
+    #[RunInSeparateProcess]
+    public function testFieldActionFormCarriesSessionToken(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/page.php',
+            <<<'PHP'
+                <?php
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\useFormAction;
+                use function Polidog\UsePhp\Runtime\useState;
+
+                return fn (): Closure => function (): Element {
+                    [$name, $setName] = useState('initial');
+
+                    return H::input(name: 'name', onChange: useFormAction(['name' => $setName]));
+                };
+                PHP,
+        );
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/';
+
+        $output = $this->dispatch();
+
+        self::assertStringContainsString($this->csrfField(CsrfToken::getToken()), $output);
+    }
+
+    #[RunInSeparateProcess]
+    public function testFieldActionCopiesSubmittedFields(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/page.php',
+            <<<'PHP'
+                <?php
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\useFormAction;
+                use function Polidog\UsePhp\Runtime\useState;
+
+                return fn (): Closure => function (): Element {
+                    [$name, $setName] = useState('initial');
+
+                    return H::form(
+                        onSubmit: useFormAction(['name' => $setName]),
+                        children: [H::input(name: 'name'), H::p(children: 'value=' . $name)],
+                    );
+                };
+                PHP,
+        );
+        $action = '{"type":"setFields","payload":{"fields":{"name":0}},"componentId":"page:\/#page","storageType":"session"}';
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['REQUEST_URI'] = '/';
+        $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+        $_POST = [
+            '_usephp_component' => self::COMPONENT_ID,
+            '_usephp_action' => $action,
+            '_usephp_action_sig' => (string) new UsePHP()->signAction(self::COMPONENT_ID, $action),
+            '_usephp_csrf' => CsrfToken::getToken(),
+            'name' => 'alice',
+        ];
+
+        $output = $this->dispatch();
+
+        self::assertStringContainsString('value=alice', $output);
+        self::assertSame('alice', $this->currentState());
+    }
+
+    #[RunInSeparateProcess]
+    public function testComponentActionRendersOnlyThatComponent(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/page.php',
+            <<<'PHP'
+                <?php
+                use Polidog\UsePhp\Html\H;
+                use Polidog\UsePhp\Runtime\Element;
+                use function Polidog\UsePhp\Runtime\fc;
+                use function Polidog\UsePhp\Runtime\useState;
+
+                return fn (): Closure => function (): Element {
+                    $Row = fc(function (array $props): Element {
+                        [$n, $setN] = useState(0);
+
+                        return H::button(onClick: fn () => $setN($n + 1), children: 'n=' . $n);
+                    }, 'row');
+
+                    return H::section(children: [H::h1(children: 'shell'), $Row(['key' => 'a']), $Row(['key' => 'b'])]);
+                };
+                PHP,
+        );
+        // The id usePHP gives the `fc()` on line 8 of page.php, keyed "a".
+        $id = 'FC@page.php:8#row/a';
+        $action = \json_encode(
+            ['type' => 'setState', 'payload' => ['index' => 0, 'value' => 1], 'componentId' => $id, 'storageType' => 'session'],
+            \JSON_THROW_ON_ERROR,
+        );
+
+        $_SERVER['REQUEST_METHOD'] = 'POST';
+        $_SERVER['REQUEST_URI'] = '/';
+        $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
+        $_POST = [
+            '_usephp_component' => $id,
+            '_usephp_action' => $action,
+            '_usephp_action_sig' => (string) new UsePHP()->signAction($id, $action),
+            '_usephp_csrf' => CsrfToken::getToken(),
+        ];
+
+        $output = $this->dispatch();
+
+        self::assertStringContainsString('n=1', $output);
+        self::assertStringNotContainsString('shell', $output);
+        self::assertStringNotContainsString('data-usephp="page:', $output);
     }
 
     #[RunInSeparateProcess]
@@ -185,6 +353,7 @@ final class StateActionCsrfTest extends TestCase
         ];
         if (null !== $csrf) {
             $_POST['_usephp_csrf'] = $csrf;
+            $_POST['_usephp_action_sig'] = (string) new UsePHP()->signAction(self::COMPONENT_ID, self::SET_STATE);
         }
     }
 

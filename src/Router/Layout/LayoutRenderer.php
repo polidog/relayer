@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Layout;
 
+use Closure;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormActionTransformer;
@@ -16,28 +17,35 @@ final class LayoutRenderer
 {
     private string $formActionUrl;
 
+    /**
+     * @param null|Closure(string, string): ?string $actionSigner signs each
+     *                                                            state action
+     *                                                            rendered, so
+     *                                                            only those can
+     *                                                            be replayed
+     */
     public function __construct(
         private readonly string $componentId = 'page',
         ?string $formActionUrl = null,
         private readonly ?SnapshotSerializer $snapshotSerializer = null,
+        private readonly ?Closure $actionSigner = null,
     ) {
         $this->formActionUrl = $formActionUrl ?? Request::fromGlobals()->uri();
     }
 
     public function render(Element $pageContent, LayoutStack $layouts): string
     {
-        if ($layouts->isEmpty()) {
-            $pageContent = FormActionTransformer::apply($pageContent, $this->formActionUrl);
-            \assert($pageContent instanceof Element);
+        return $this->renderElement($this->compose($pageContent, $layouts));
+    }
 
-            return $this->renderElement($pageContent);
-        }
-
+    /**
+     * The page wrapped in its layouts, with form actions normalized.
+     */
+    public function compose(Element $pageContent, LayoutStack $layouts): Element
+    {
         $currentContent = $pageContent;
 
-        $layoutsArray = $layouts->reversed();
-
-        foreach ($layoutsArray as $layout) {
+        foreach ($layouts->reversed() as $layout) {
             $layout->setChildren($currentContent);
             $currentContent = $layout->render();
         }
@@ -45,7 +53,7 @@ final class LayoutRenderer
         $currentContent = FormActionTransformer::apply($currentContent, $this->formActionUrl);
         \assert($currentContent instanceof Element);
 
-        return $this->renderElement($currentContent);
+        return $currentContent;
     }
 
     public function renderElement(Element $element): string
@@ -63,7 +71,7 @@ final class LayoutRenderer
      * unsigned state.
      *
      * The session-bound CSRF token is handed to the Renderer so every
-     * useState `setState` form it emits (`wire:click` → hidden-field form)
+     * useState form it emits (any `wire:*` event → hidden-field form)
      * carries `_usephp_csrf`, which AppRouter verifies before writing any
      * state. usePHP's client script submits the form's own FormData on the
      * partial (`X-UsePHP-Partial`) path, so the same hidden field covers
@@ -79,27 +87,20 @@ final class LayoutRenderer
             $this->componentId,
             $this->snapshotSerializer,
             csrfToken: $csrfToken,
+            actionSigner: $this->actionSigner,
         );
     }
 
-    private static function containsStateAction(Element|string $node): bool
+    private static function containsStateAction(Element $node): bool
     {
-        if (\is_string($node)) {
-            return false;
-        }
-
-        if (($node->props['wire:click'] ?? null) instanceof Action) {
-            return true;
+        foreach ($node->props as $name => $value) {
+            if ($value instanceof Action && \str_starts_with($name, 'wire:')) {
+                return true;
+            }
         }
 
         foreach ($node->children as $child) {
-            // PSX conditional children can leave nulls in the tree despite
-            // Element's phpdoc; see FormActionTransformer::apply().
-            // @phpstan-ignore identical.alwaysFalse
-            if (null === $child) {
-                continue;
-            }
-            if (self::containsStateAction($child)) {
+            if ($child instanceof Element && self::containsStateAction($child)) {
                 return true;
             }
         }

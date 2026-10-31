@@ -1166,12 +1166,20 @@ public function save(array $form): void
 
 Invalid CSRF tokens return a `403`.
 
-`useState` updates (`onClick={fn() => $setX(...)}`) are protected the same
-way: the rendered `setState` form carries the session-bound `_usephp_csrf`
-field automatically (usePHP's client sends it on the partial
-`X-UsePHP-Partial` update too), and a state POST with a missing or invalid
-token is answered with `403` without changing any state. Hand-written
-clients that POST `_usephp_action` / `_usephp_component` must include it.
+`useState` updates (`onClick`, `onChange`, `onInput`, `onSubmit` and
+`useFormAction()`) are protected the same way, and more strictly: each rendered
+action carries `_usephp_action_sig`, usePHP's signature over the action and the
+page it was rendered for, bound to the session. A POST whose action was not
+rendered by the server is rejected without changing any state, so a client
+cannot pick its own hook index or value. Without a valid signature or
+`_usephp_csrf` token the answer is `403`; with a valid token but a bad signature,
+or a malformed action, it is `400`. Logging in regenerates the session, so forms
+rendered before that are rejected too. The values `useFormAction()` copies are
+still client input: validate them before use.
+
+`fc()` components and components inside a defer keep their own state and update
+in place, on the page and in layouts. Actions are handled by
+`UsePHP::handleAction()`, which re-renders the page to find the component.
 
 Only methods the page class itself declares can be actions: passing an
 inherited framework method (or anything other than `[$this, 'method']`)

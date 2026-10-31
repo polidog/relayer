@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\StopRequest;
+use Polidog\UsePhp\UsePHP;
 
 /**
  * The two dispatch branches that answer a request without rendering a page:
@@ -95,11 +96,13 @@ final class ShortCircuitDispatchTest extends TestCase
 
         $_SERVER['REQUEST_METHOD'] = 'POST';
         $_SERVER['REQUEST_URI'] = '/?q=1';
+        $action = '{"type":"setState","payload":{"index":0,"value":"x"}}';
         $_POST = [
-            // Root page → pageId '/' → component id 'page:/'.
-            '_usephp_component' => 'page:/',
-            '_usephp_action' => '{"type":"setState","payload":{"index":0,"value":"x"}}',
+            // Root page → pageId '/' → component id 'page:/#page'.
+            '_usephp_component' => 'page:/#page',
+            '_usephp_action' => $action,
             '_usephp_csrf' => CsrfToken::getToken(),
+            '_usephp_action_sig' => (string) new UsePHP()->signAction('page:/#page', $action),
         ];
 
         $output = $this->dispatch();
