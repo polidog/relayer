@@ -11,6 +11,11 @@
   HTTP メソッド別のハンドラマップ、各ハンドラは `Response` を返す
   (`Response::json()` / `text()` / `noContent()` / `redirect()`)。
   `OPTIONS` / `HEAD` は Next.js Route Handlers と同じく自動合成
+- Go 製のネイティブルートハンドラ (`src/Pages/.../route.go` に
+  `func GET(w, r)` などを書く) — `relayer native:build` でコンパイルし、
+  Go 標準ライブラリの CGI としてリクエストごとに起動。Next.js の
+  "native language support" プロトタイプの Route Handlers 相当で、
+  CPU 負荷の高いエンドポイント向け
 - ページ／レイアウト単位の外部スクリプト (`$ctx->js()` /
   `PageComponent::addJs()` / `LayoutComponent::addJs()`) — バンドルの後、
   宣言順に `<body>` 末尾へ出力
@@ -287,6 +292,12 @@ vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
 だけで壊れません。
 
+`relayer compile` には `vendor/bin/relayer native:build`（Go 製ルート
+ハンドラ、[ネイティブルートハンドラ (Go)](#ネイティブルートハンドラ-go)
+参照）を意図的に **含めていません**。Go ツールチェーンが必要で、PHP だけの
+イメージにそれを載せる理由がないためです。`route.go` を持つプロジェクト
+では独立したステップとして実行してください。
+
 **読み取り専用ファイルシステム。** 雛形の `Dockerfile` は `prod`
 ターゲットで上の 3 ステップをすべて実行するので、イメージは実行時に
 何も生成せず、書き込み不可のファイルシステムで動かせます。
@@ -531,6 +542,119 @@ return [
   ページにはなりません）、`$ctx->redirect()` は従来どおり content-type
   非依存の `Location` を返します（エラーゲートではなくハンドラの意図的な
   動作のため）。
+
+### ネイティブルートハンドラ (Go)
+
+`route.go` は Go で書く API ルートです。URL のマッピングは `route.php` と
+同じで、ハンドラだけがネイティブバイナリにコンパイルされます。Next.js の
+"native language support" プロトタイプ（Go で書く Route Handlers。アプリの
+横で CPU 負荷の高い処理を担う）に合わせたもので、標準ライブラリの
+`http.HandlerFunc` シグネチャで `func GET` / `POST` / `PUT` / `PATCH` /
+`DELETE` / `HEAD` / `OPTIONS` を宣言するだけです — `main()` もフレームワーク
+の import も書きません。
+
+```go
+// src/Pages/api/hello/route.go
+package main
+
+import (
+    "encoding/json"
+    "net/http"
+)
+
+func GET(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"message": "Hello from Go!"})
+}
+```
+
+```bash
+vendor/bin/relayer native:build     # route.go を変更するたびに 1 回
+curl -i http://localhost:8080/api/hello
+```
+
+**ビルド。** `vendor/bin/relayer native:build` は `src/Pages` 配下の全
+`route.go` をコンパイルします。各ファイルについてエントリポイント
+（Go の `net/http/cgi` で 1 リクエストを処理し、メソッドで分岐する
+`main()`）を生成し、両方を標準ライブラリのみの `go.mod` と一緒に
+`var/cache/native/build/<slug>/` へ置き（`route.go` の隣に自前の `go.mod` /
+`go.sum` があればそちらを使うので、サードパーティのモジュールも使えます）、
+`go build -o var/cache/native/bin/<slug>` を実行します。`<slug>` は URL
+パターンの `/` を `__` に置き換えたもの（`/api/users/[id]` →
+`api__users__[id]`）。`PATH` 上の `go`（または `GO_BIN=/path/to/go`）が
+必要で、そのため `relayer compile` とは別コマンドです。ハンドラを 1 つも
+宣言していない、あるいは `package main` でない `route.go` はファイル名
+入りのメッセージでビルドを止め、コンパイルエラーは `go build` の出力を
+そのまま表示します。出力はルートごとに 1 行:
+
+```
+built  /api/hello  -> var/cache/native/bin/api__hello
+```
+
+リクエスト中に再ビルドすることは決してありません。未ビルドのルートは
+`native:build` の実行を促す本文の JSON `500` を返し、dev（`APP_ENV=dev`）
+ではバイナリが `route.go` より古いときも同じ応答に
+`(route.go is newer than the binary)` を添えます — ビルドし忘れた編集が
+バグに化けないためです。本番はデプロイが作ったものをそのまま使います。
+`var/cache/native/` は雛形の `.gitignore`（`/var/`）に含まれます。
+
+**リクエストの流れ。** 常駐する Go サーバはありません。PHP が
+**リクエストごとに** バイナリを CGI の子プロセスとして起動し
+（`proc_open`）、リクエストを CGI メタ変数として渡し、本文を stdin に
+流し、stdout から CGI 応答（`Status:` / ヘッダ / 空行 / 本文）を読み
+取ります。静的な Go バイナリの起動は 1 ミリ秒前後なので、1 呼び出しの
+オーバーヘッドは数ミリ秒です — その後に本当の仕事をするエンドポイント
+には十分で、200 µs で返る PHP のホットなルートの置き換えではありません。
+ハンドラから見えるものは:
+
+- `r.Method`、`r.URL`（`REQUEST_URI` 由来のパス＋クエリ）、`r.Header`
+  （全リクエストヘッダ、`HTTP_*` 経由）、`r.Host`、`r.RemoteAddr`、
+  `r.Body` — いずれも標準の変数（`REQUEST_METHOD`、`PATH_INFO`、
+  `QUERY_STRING`、`CONTENT_TYPE`、`CONTENT_LENGTH`、`REMOTE_ADDR`、
+  `HTTPS` など）から `net/http/cgi` が組み立てます。クライアントの
+  `Proxy:` ヘッダは転送しません（httpoxy 対策）。
+- 動的セグメントは **`RELAYER_ROUTE_PARAMS`** に JSON オブジェクトで
+  （`/api/users/[id]` なら `{"id":"42"}`）、パターン自体は
+  **`RELAYER_ROUTE_PATTERN`**（`/api/users/[id]`）で:
+
+  ```go
+  var params map[string]string
+  json.Unmarshal([]byte(os.Getenv("RELAYER_ROUTE_PARAMS")), &params)
+  id := params["id"]
+  ```
+- その下に PHP プロセスの環境変数（`DATABASE_DSN` など）があるので、
+  同じサービスに届きます。フレームワークの変数はクライアントが注入し
+  うるどんな値よりも常に優先されます。
+
+**メソッド。** 生成されるエントリポイントは `route.php` の規則を適用
+します: 未宣言の `OPTIONS` は `204` ＋ `Allow`、`GET` があって `HEAD` が
+未宣言なら `GET` を実行して本文を落とし、それ以外の未宣言メソッドは
+`405` ＋ `Allow`（JSON 本文）。`HEAD` / `OPTIONS` を自分で宣言すれば
+常にそちらが優先。`relayer routes` は宣言済みメソッドを `native` 行に
+表示します（`route.go` のテキスト走査なので、ビルド前でも出ます）。
+
+**失敗は JSON。** 非 0 終了（Go の `panic` を含む）、CGI 応答でない
+出力、タイムアウト超過はいずれも JSON `500`
+（`{"error": "Native route /api/hello failed: …"}`）で、HTML エラーページ
+にはなりません — `route.php` と同じく、ネイティブルートはエンドポイント
+だからです。プロセスが stderr に書いた内容は、PSR-3 ロガーが設定されて
+いれば `error` で記録されます（*成功した*実行の stderr は `warning` — Go
+の `log` パッケージの出力先です）。タイムアウトの既定は 30 秒で、`.env`
+の `NATIVE_ROUTE_TIMEOUT=10`（秒）で変更できます。`disable_functions` で
+`proc_open` を無効にした PHP ではネイティブルートは動かず、dispatch 時に
+その旨のエラーになります。
+
+**効かないもの。** `route.go` にはオートワイヤも `PageContext` も
+`Request` オブジェクトも `#[Auth]` / `requireAuth()` もありません —
+Go 側に見えるのは CGI 変数だけです。保護は `src/Pages/middleware.php`
+で行ってください。ミドルウェアはページや `route.php` と全く同じように
+ネイティブルートも包みます（`$next` を呼ばないミドルウェアなら Go
+プロセスは起動すらしません）。`_private` フォルダは他と同様に `route.go`
+も除外し、1 ディレクトリにハンドラは 1 つ: `route.go` と `route.php`
+（またはページファイル）の同居は、`page.psx` と `page.php` の同居と
+同じくスキャンエラーです。現時点の対応言語は Go のみですが、ルートの
+種別は意図的に言語非依存にしてあり、`route.rs` をルーターに手を入れずに
+足せる形になっています。
 
 ### ページ単位のスクリプト（`$ctx->js()` / `addJs()`）
 
@@ -844,15 +968,18 @@ fly secrets set \
 します:
 
 ```
-METHODS    PATH            TYPE  FILE
-GET,POST   /               page  src/Pages/page.psx
-GET,POST   /api/users      api   src/Pages/api/users/route.php
-GET,POST   /users/[id]     page  src/Pages/users/[id]/page.psx
+METHODS    PATH            TYPE    FILE
+GET,POST   /               page    src/Pages/page.psx
+GET        /api/hello      native  src/Pages/api/hello/route.go
+GET,POST   /api/users      api     src/Pages/api/users/route.php
+GET,POST   /users/[id]     page    src/Pages/users/[id]/page.psx
 ```
 
 page は `GET,POST` を表示します（POST はサーバアクション / `useState`
-がページに到達する経路）。API ルートは宣言済みメソッドを列挙します。
-読み込みに失敗した `route.php` は隠さず `?` ＋警告行で表示します。
+がページに到達する経路）。API ルートは宣言済みメソッドを、ネイティブ
+ルート（`route.go`）はテキスト走査で見つけた `func GET` などを列挙します
+（ビルド不要）。読み込みに失敗した `route.php` やハンドラ未宣言の
+`route.go` は隠さず `?` ＋警告行で表示します。
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 

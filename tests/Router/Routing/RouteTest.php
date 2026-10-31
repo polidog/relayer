@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Tests\Router\Routing;
 
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Routing\Route;
+use Polidog\Relayer\Router\Routing\RouteKind;
 
 final class RouteTest extends TestCase
 {
@@ -76,5 +77,27 @@ final class RouteTest extends TestCase
         );
 
         self::assertNull($route->match('/blog/hello/extra'));
+    }
+
+    public function testKindDefaultsFromTheLegacyIsApiFlag(): void
+    {
+        $page = new Route('/', '#^/$#', '/app/page.php', [], [], 0, 0);
+        self::assertSame(RouteKind::Page, $page->kind);
+        self::assertFalse($page->isApi);
+
+        $api = new Route('/api', '#^/api$#', '/app/api/route.php', [], [], 1, 1, true);
+        self::assertSame(RouteKind::Api, $api->kind);
+        self::assertTrue($api->isApi);
+    }
+
+    public function testExplicitKindWinsAndNativeIsNotApi(): void
+    {
+        $native = new Route('/api', '#^/api$#', '/app/api/route.go', [], [], 1, 1, kind: RouteKind::Native);
+        self::assertSame(RouteKind::Native, $native->kind);
+        self::assertFalse($native->isApi);
+        self::assertTrue($native->kind->isEndpoint());
+
+        $api = new Route('/api', '#^/api$#', '/app/api/route.php', [], [], 1, 1, false, RouteKind::Api);
+        self::assertTrue($api->isApi, 'an explicit kind overrides the legacy flag');
     }
 }

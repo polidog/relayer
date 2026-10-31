@@ -34,6 +34,14 @@ final class RoutesCommandTest extends TestCase
             $this->project . '/src/Pages/api/items/[id]/route.php',
             "<?php\n\nreturn ['DELETE' => static fn () => null];\n",
         );
+
+        \mkdir($this->project . '/src/Pages/api/hello-go', 0o755, true);
+        \file_put_contents(
+            $this->project . '/src/Pages/api/hello-go/route.go',
+            "package main\n\nimport \"net/http\"\n\n"
+            . "func POST(w http.ResponseWriter, r *http.Request) {}\n"
+            . "func GET(w http.ResponseWriter, r *http.Request) {}\n",
+        );
     }
 
     protected function tearDown(): void
@@ -57,6 +65,20 @@ final class RoutesCommandTest extends TestCase
         // api with declared methods
         self::assertMatchesRegularExpression('#GET,POST\s+/api/items\s+api\s+src/Pages/api/items/route\.php#', $out);
         self::assertMatchesRegularExpression('#DELETE\s+/api/items/\[id\]\s+api#', $out);
+        // native (route.go): methods from a text scan, no build needed
+        self::assertMatchesRegularExpression('#GET,POST\s+/api/hello-go\s+native\s+src/Pages/api/hello-go/route\.go#', $out);
+    }
+
+    public function testNativeRouteWithoutHandlersIsListedWithAWarning(): void
+    {
+        \file_put_contents($this->project . '/src/Pages/api/hello-go/route.go', "package main\n");
+
+        $status = RoutesCommand::run([], $this->capture(), $this->project);
+        $out = $this->captured();
+
+        self::assertSame(0, $status);
+        self::assertMatchesRegularExpression('#\?\s+/api/hello-go\s+native#', $out);
+        self::assertStringContainsString('warning: src/Pages/api/hello-go/route.go: declares no handler', $out);
     }
 
     public function testMissingSrcPagesReturnsError(): void

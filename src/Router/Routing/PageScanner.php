@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Routing;
 
+use Polidog\Relayer\Router\Native\GoRouteFile;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -16,6 +17,11 @@ final class PageScanner
     // form — `route.php` only. A directory holds a page OR a route, never
     // both (same rule the Next.js App Router enforces for page/route).
     private const ROUTE_FILE = 'route.php';
+    // A handler in another language (Go today). Built ahead of time by
+    // `relayer native:build` and run as a CGI process; discovered here so
+    // it takes part in matching, sorting and `relayer routes` exactly like
+    // the PHP kinds. Same one-handler-per-directory rule.
+    private const NATIVE_ROUTE_FILE = GoRouteFile::NAME;
     private const LAYOUT_FILES = ['layout.psx', 'layout.php'];
     private const ERROR_FILES = ['error.psx', 'error.php'];
     private const DYNAMIC_SEGMENT_PATTERN = '/^\[([a-zA-Z_][a-zA-Z0-9_]*)\]$/';
@@ -56,7 +62,7 @@ final class PageScanner
         $patternSource = [];
 
         foreach ($this->findRoutables($appDir) as $routable) {
-            $route = $this->createRoute($appDir, $routable['path'], $routable['isApi']);
+            $route = $this->createRoute($appDir, $routable['path'], $routable['kind']);
 
             if (isset($patternSource[$route->pattern])) {
                 throw new RuntimeException(\sprintf(
@@ -100,21 +106,25 @@ final class PageScanner
 
     /**
      * Discover the routable file in each directory under $appDir. A
-     * directory contributes at most one route, backed by either a page
-     * file (`page.psx` / `page.php`) or an API handler (`route.php`).
+     * directory contributes at most one route, backed by a page file
+     * (`page.psx` / `page.php`), an API handler (`route.php`) or a native
+     * handler (`route.go`).
      *
-     * Two ambiguities are rejected with an actionable error rather than
-     * picking one silently — both almost always mean a leftover file:
+     * Ambiguities are rejected with an actionable error rather than
+     * picking one silently — they almost always mean a leftover file:
      *  - `page.psx` AND `page.php` in the same directory;
-     *  - a page file AND `route.php` in the same directory (a segment is
-     *    either a rendered page or a JSON endpoint, not both).
+     *  - a page file AND a `route.*` in the same directory (a segment is
+     *    either a rendered page or an endpoint, not both);
+     *  - `route.php` AND `route.go` in the same directory (one handler,
+     *    one language).
      *
-     * @return list<array{path: string, isApi: bool}>
+     * @return list<array{path: string, kind: RouteKind}>
      */
     private function findRoutables(string $appDir): array
     {
-        // Per directory: collected page-file candidates + the route.php path.
-        /** @var array<string, array{pages: array<string, string>, route: null|string}> $perDir */
+        // Per directory: collected page-file candidates + the route.php /
+        // route.go paths.
+        /** @var array<string, array{pages: array<string, string>, route: null|string, native: null|string}> $perDir */
         $perDir = [];
 
         $iterator = new RecursiveIteratorIterator(
@@ -136,12 +146,14 @@ final class PageScanner
                 continue;
             }
 
-            $perDir[$dir] ??= ['pages' => [], 'route' => null];
+            $perDir[$dir] ??= ['pages' => [], 'route' => null, 'native' => null];
 
             if (\in_array($name, self::PAGE_FILES, true)) {
                 $perDir[$dir]['pages'][$name] = $file->getPathname();
             } elseif (self::ROUTE_FILE === $name) {
                 $perDir[$dir]['route'] = $file->getPathname();
+            } elseif (self::NATIVE_ROUTE_FILE === $name) {
+                $perDir[$dir]['native'] = $file->getPathname();
             }
         }
 
@@ -149,6 +161,7 @@ final class PageScanner
         foreach ($perDir as $dir => $found) {
             $pages = $found['pages'];
             $route = $found['route'];
+            $native = $found['native'];
 
             if (\count($pages) > 1) {
                 throw new RuntimeException(
@@ -157,32 +170,46 @@ final class PageScanner
                 );
             }
 
-            if ([] !== $pages && null !== $route) {
-                throw new RuntimeException(
-                    "Both a page file and route.php exist in {$dir}. "
+            if ([] !== $pages && (null !== $route || null !== $native)) {
+                throw new RuntimeException(\sprintf(
+                    'Both a page file and %s exist in %s. '
                     . 'A directory maps to a rendered page OR a JSON API route, not both.',
-                );
+                    null !== $route ? self::ROUTE_FILE : self::NATIVE_ROUTE_FILE,
+                    $dir,
+                ));
+            }
+
+            if (null !== $route && null !== $native) {
+                throw new RuntimeException(\sprintf(
+                    'Both %s and %s exist in %s. '
+                    . 'A directory maps to ONE handler — keep the PHP route or the native one, not both.',
+                    self::ROUTE_FILE,
+                    self::NATIVE_ROUTE_FILE,
+                    $dir,
+                ));
             }
 
             if ([] !== $pages) {
-                $routables[] = ['path' => \reset($pages), 'isApi' => false];
+                $routables[] = ['path' => \reset($pages), 'kind' => RouteKind::Page];
             } elseif (null !== $route) {
-                $routables[] = ['path' => $route, 'isApi' => true];
+                $routables[] = ['path' => $route, 'kind' => RouteKind::Api];
+            } elseif (null !== $native) {
+                $routables[] = ['path' => $native, 'kind' => RouteKind::Native];
             }
         }
 
         return $routables;
     }
 
-    private function createRoute(string $appDir, string $filePath, bool $isApi): Route
+    private function createRoute(string $appDir, string $filePath, RouteKind $kind): Route
     {
         $routeDir = \dirname($filePath);
         $relativePath = $this->getRelativePath($appDir, $routeDir);
 
         $pattern = $this->buildPattern($relativePath);
         [$regex, $paramNames] = $this->buildRegex($pattern);
-        // API routes render no HTML, so layouts never apply to them.
-        $layoutPaths = $isApi ? [] : $this->findLayouts($appDir, $routeDir);
+        // Endpoints (API / native) render no HTML, so layouts never apply.
+        $layoutPaths = $kind->isEndpoint() ? [] : $this->findLayouts($appDir, $routeDir);
 
         $segments = '/' === $pattern ? [] : \explode('/', \trim($pattern, '/'));
         $totalSegments = \count($segments);
@@ -202,7 +229,7 @@ final class PageScanner
             paramNames: $paramNames,
             staticSegments: $staticSegments,
             totalSegments: $totalSegments,
-            isApi: $isApi,
+            kind: $kind,
         );
     }
 

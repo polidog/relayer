@@ -14,6 +14,7 @@ use Polidog\Relayer\Profiler\ProfilerStorage;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\Component\PageContext;
+use Polidog\Relayer\Router\Native\NativeDispatcher;
 use Polidog\Relayer\Router\Routing\CompiledRoutes;
 use Polidog\Relayer\Router\Routing\PageScanner;
 use Polidog\UsePhp\Runtime\ComponentState;
@@ -83,6 +84,20 @@ final class Relayer
      * artifact can never collide with a hand-written framework class.
      */
     public const COMPILED_CONTAINER_CLASS = 'Polidog\Relayer\Generated\CompiledContainer';
+
+    /**
+     * Where `relayer native:build` writes the per-route Go binaries, and
+     * where the router looks for them at dispatch. One binary per
+     * `route.go`, named by {@see Router\Native\NativeSlug}.
+     */
+    public const NATIVE_BIN_DIR = 'var/cache/native/bin';
+
+    /**
+     * Scratch space for `relayer native:build`: one directory per route
+     * holding the copied `route.go`, the generated entrypoint and `go.mod`.
+     * Safe to delete; the next build recreates it.
+     */
+    public const NATIVE_BUILD_DIR = 'var/cache/native/build';
 
     private static ?ContainerInterface $container = null;
 
@@ -243,10 +258,17 @@ final class Relayer
         // guard so it also covers the defer + profiler endpoints. Nothing
         // set → nothing installed; `->setGuard()` on the returned router
         // replaces it.
-        $guard = GuardFactory::fromEnv(self::resolveLogger($psr));
+        $logger = self::resolveLogger($psr);
+
+        $guard = GuardFactory::fromEnv($logger);
         if (null !== $guard) {
             $router->setGuard($guard);
         }
+
+        // Native routes (`route.go`): point the router at this project's
+        // built binaries. Dev refuses a binary older than its source with
+        // a hint; prod serves whatever the deploy built.
+        $router->setNativeDispatcher(NativeDispatcher::forProject($projectRoot, $isDev, $logger));
 
         return $router;
     }

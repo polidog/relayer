@@ -61,7 +61,11 @@ final class CompiledRoutes
                 'paramNames' => $route->paramNames,
                 'staticSegments' => $route->staticSegments,
                 'totalSegments' => $route->totalSegments,
+                // `isApi` stays for artifacts read by an older framework;
+                // `kind` is what this version reads back (it is the only
+                // one that can say "native").
                 'isApi' => $route->isApi,
+                'kind' => $route->kind->value,
             ];
         }
 
@@ -152,7 +156,33 @@ final class CompiledRoutes
             staticSegments: self::int($entry, 'staticSegments'),
             totalSegments: self::int($entry, 'totalSegments'),
             isApi: self::bool($entry, 'isApi'),
+            kind: self::kind($entry),
         );
+    }
+
+    /**
+     * The route kind, or null for an artifact written before `kind`
+     * existed — {@see Route} then derives it from `isApi`, so an old
+     * compiled file keeps loading until it is regenerated.
+     *
+     * @param array<mixed, mixed> $entry
+     */
+    private static function kind(array $entry): ?RouteKind
+    {
+        if (!\array_key_exists('kind', $entry)) {
+            return null;
+        }
+
+        $value = $entry['kind'];
+        $kind = \is_string($value) ? RouteKind::tryFrom($value) : null;
+        if (null === $kind) {
+            throw self::malformed('kind', 'one of ' . \implode(', ', \array_map(
+                static fn (RouteKind $k): string => '"' . $k->value . '"',
+                RouteKind::cases(),
+            )));
+        }
+
+        return $kind;
     }
 
     /**
