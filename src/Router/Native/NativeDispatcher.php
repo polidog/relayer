@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Native;
 
+use Closure;
 use JsonException;
 use Polidog\Relayer\Env;
 use Polidog\Relayer\Http\Request;
@@ -82,6 +83,33 @@ final class NativeDispatcher
     public function binaryFor(Route $route): string
     {
         return $this->binDir . '/' . NativeSlug::forPattern($route->pattern);
+    }
+
+    /**
+     * The binary `middleware.go` is compiled to.
+     */
+    public function middlewareBinary(): string
+    {
+        return $this->binDir . '/' . NativeSlug::MIDDLEWARE;
+    }
+
+    /**
+     * The Go root middleware, sharing this dispatcher's runner (timeout),
+     * dev hints and logger with the native routes.
+     *
+     * @param string                    $source         path of the `middleware.go`
+     * @param Closure(Request): ?string $matchedPattern see {@see NativeProxy::__construct()}
+     */
+    public function proxy(string $source, Closure $matchedPattern): NativeProxy
+    {
+        return new NativeProxy(
+            $this->middlewareBinary(),
+            $source,
+            $this->runner,
+            $matchedPattern,
+            $this->devHints,
+            $this->logger,
+        );
     }
 
     /**

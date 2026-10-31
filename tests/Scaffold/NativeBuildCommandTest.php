@@ -61,7 +61,7 @@ final class NativeBuildCommandTest extends TestCase
         $status = NativeBuildCommand::run([], $this->capture(), $this->project);
 
         self::assertSame(0, $status);
-        self::assertStringContainsString('No native routes (route.go) found', $this->captured());
+        self::assertStringContainsString('No native routes (route.go) or middleware.go found', $this->captured());
     }
 
     public function testMissingToolchainPointsAtGoBin(): void
@@ -157,6 +157,52 @@ final class NativeBuildCommandTest extends TestCase
         self::assertFileDoesNotExist($this->project . '/' . Relayer::NATIVE_BIN_DIR . '/api__hello');
     }
 
+    public function testBuildsMiddlewareGoToTheMiddlewareBinary(): void
+    {
+        $this->requireGo();
+        \unlink($this->project . '/src/Pages/api/hello/route.go');
+        $this->middlewareGo(<<<'GO'
+            package main
+
+            import "net/http"
+
+            func Proxy(w http.ResponseWriter, r *http.Request) {
+            	w.Header().Set("Relayer-Next", "1")
+            }
+            GO);
+
+        $status = NativeBuildCommand::run([], $this->capture(), $this->project);
+        $out = $this->captured();
+
+        self::assertSame(0, $status, $out);
+        self::assertStringContainsString('built  middleware  -> ' . Relayer::NATIVE_BIN_DIR . '/middleware', $out);
+        self::assertFileExists($this->project . '/' . Relayer::NATIVE_BIN_DIR . '/middleware');
+        self::assertFileExists($this->project . '/' . Relayer::NATIVE_BUILD_DIR . '/middleware/' . GoEntrypoint::FILE_NAME);
+    }
+
+    public function testMiddlewareGoWithoutProxyFailsBeforeNeedingGo(): void
+    {
+        $_ENV[GoToolchain::ENV_GO_BIN] = $this->project . '/no-such-go';
+        $this->middlewareGo("package main\n\nimport \"net/http\"\n\nfunc Handle(w http.ResponseWriter, r *http.Request) {}\n");
+
+        $status = NativeBuildCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(1, $status);
+        self::assertStringContainsString('src/Pages/middleware.go declares no `func Proxy(w http.ResponseWriter, r *http.Request)`', $this->captured());
+    }
+
+    public function testARouteThatWouldShadowTheMiddlewareBinaryIsRejected(): void
+    {
+        $_ENV[GoToolchain::ENV_GO_BIN] = $this->project . '/no-such-go';
+        $this->middlewareGo("package main\n\nimport \"net/http\"\n\nfunc Proxy(w http.ResponseWriter, r *http.Request) {}\n");
+        $this->routeGo('middleware', "package main\n\nimport \"net/http\"\n\nfunc GET(w http.ResponseWriter, r *http.Request) {}\n");
+
+        $status = NativeBuildCommand::run([], $this->capture(), $this->project);
+
+        self::assertSame(1, $status);
+        self::assertStringContainsString('src/Pages/middleware/route.go would be built to the same binary as middleware.go', $this->captured());
+    }
+
     public function testMissingSrcPagesReturnsError(): void
     {
         $bare = \sys_get_temp_dir() . '/relayer-native-bare-' . \bin2hex(\random_bytes(6));
@@ -195,6 +241,11 @@ final class NativeBuildCommandTest extends TestCase
         if (null === GoToolchain::locate()) {
             self::markTestSkipped('Go toolchain not available (install Go or set GO_BIN)');
         }
+    }
+
+    private function middlewareGo(string $source): void
+    {
+        \file_put_contents($this->project . '/src/Pages/middleware.go', $source);
     }
 
     private function routeGo(string $dir, string $source): void

@@ -15,7 +15,9 @@
   `func GET(w, r)` などを書く) — `relayer native:build` でコンパイルし、
   Go 標準ライブラリの CGI としてリクエストごとに起動。Next.js の
   "native language support" プロトタイプの Route Handlers 相当で、
-  CPU 負荷の高いエンドポイント向け
+  CPU 負荷の高いエンドポイント向け — その Proxy 相当として
+  `src/Pages/middleware.go` の `func Proxy(w, r)` をルートミドルウェアに
+  でき、`Relayer-Next` ヘッダで続行を指示
 - ページ／レイアウト単位の外部スクリプト (`$ctx->js()` /
   `PageComponent::addJs()` / `LayoutComponent::addJs()`) — バンドルの後、
   宣言順に `<body>` 末尾へ出力
@@ -574,7 +576,8 @@ curl -i http://localhost:8080/api/hello
 ```
 
 **ビルド。** `vendor/bin/relayer native:build` は `src/Pages` 配下の全
-`route.go` をコンパイルします。各ファイルについてエントリポイント
+`route.go`（とルート直下の `middleware.go`、[Go で書く](#go-で書くmiddlewarego)
+参照）をコンパイルします。各ファイルについてエントリポイント
 （Go の `net/http/cgi` で 1 リクエストを処理し、メソッドで分岐する
 `main()`）を生成し、両方を標準ライブラリのみの `go.mod` と一緒に
 `var/cache/native/build/<slug>/` へ置き（`route.go` の隣に自前の `go.mod` /
@@ -646,10 +649,12 @@ built  /api/hello  -> var/cache/native/bin/api__hello
 
 **効かないもの。** `route.go` にはオートワイヤも `PageContext` も
 `Request` オブジェクトも `#[Auth]` / `requireAuth()` もありません —
-Go 側に見えるのは CGI 変数だけです。保護は `src/Pages/middleware.php`
-で行ってください。ミドルウェアはページや `route.php` と全く同じように
-ネイティブルートも包みます（`$next` を呼ばないミドルウェアなら Go
-プロセスは起動すらしません）。`_private` フォルダは他と同様に `route.go`
+Go 側に見えるのは CGI 変数だけです。保護はルートミドルウェア —
+`src/Pages/middleware.php`、またはその Go 版
+[`middleware.go`](#go-で書くmiddlewarego) — で行ってください。
+ミドルウェアはページや `route.php` と全く同じようにネイティブルートも
+包みます（`$next` を呼ばないミドルウェアなら Go プロセスは起動すら
+しません）。`_private` フォルダは他と同様に `route.go`
 も除外し、1 ディレクトリにハンドラは 1 つ: `route.go` と `route.php`
 （またはページファイル）の同居は、`page.psx` と `page.php` の同居と
 同じくスキャンエラーです。現時点の対応言語は Go のみですが、ルートの
@@ -804,6 +809,80 @@ return Cors::middleware([
 `Access-Control-Allow-Origin` を付与します。`credentials: true` と
 `origins: ['*']` の併用時はリクエスト Origin を反映します（仕様上 `*` と
 credentials は併用不可のため）。
+
+#### Go で書く（`middleware.go`）
+
+ルートミドルウェアは PHP の代わりに Go でも書けます — Next.js の
+native language プロトタイプの "Proxy in Go" に当たる部分です。
+`src/Pages/middleware.go` は `package main` に `func Proxy(w
+http.ResponseWriter, r *http.Request)` を 1 つ書くだけ（Next.js の
+`proxy()` に揃えた名前。`main()` もフレームワークの import も不要）。
+[`route.go`](#ネイティブルートハンドラ-go) と同じ `vendor/bin/relayer
+native:build` で `var/cache/native/bin/middleware` にビルドされ、
+`middleware.php` と同様にルートマッチの **前に** リクエストごとに
+起動します。
+
+CGI には「次のハンドラへ続行する」という概念がないので、Go 側は
+レスポンスヘッダで振る舞いを指示します:
+
+```go
+// src/Pages/middleware.go
+package main
+
+import "net/http"
+
+func Proxy(w http.ResponseWriter, r *http.Request) {
+    // 短絡: Relayer-Next が無ければ、これがそのまま最終応答
+    if r.Header.Get("X-Api-Key") == "" && len(r.URL.Path) >= 4 && r.URL.Path[:4] == "/api" {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(401)
+        w.Write([]byte(`{"error":"missing api key"}`))
+        return
+    }
+
+    // 続行: Relayer-Next があれば、マッチしたページ / ルートが実行される
+    w.Header().Set("Relayer-Next", "1")
+    w.Header().Set("Relayer-Request-Header-X-User", "42") // ルートから見えるリクエストヘッダ
+    w.Header().Set("X-Proxied-By", "go")                  // 最終応答にマージされるレスポンスヘッダ
+}
+```
+
+- **`Relayer-Next: 1`** がある → 続行。本文は無視します。渡す `Request`
+  には 2 種類の書き換え指示が効きます: `Relayer-Rewrite-Path: /other`
+  でそのパスでルーティング（1 つだけ）、`Relayer-Request-Header-<Name>:
+  value` でリクエストヘッダ `<Name>` を追加／上書き（複数可。ルート側の
+  `$request->header('x-user')` で読めます。プロキシ自身の `r.Header` は
+  変わりません）。それ以外のレスポンスヘッダ（`Set-Cookie` / `X-*` など）
+  は **最終応答にマージ** され、ページ / ルートが自分のヘッダを書く前に
+  出力されます（`NextResponse.next({ headers })` と同じ形）。`Status:`
+  は適用されません。
+- **`Relayer-Next` が無い** → 短絡。`Status:`（既定 200）/ ヘッダ / 本文
+  をそのまま送り、他には何も動きません — ページも `route.php` も
+  `route.go` も。
+- `Relayer-*` ヘッダはどちらの場合もクライアントには届きません。
+- プロキシに渡る CGI 環境は `route.go` と同じですが、ルート変数は
+  渡しません（マッチ前に走るため）。代わりに **`RELAYER_MATCHED_PATTERN`**
+  に、そのパスがマッチするであろうパターン（`/api/users/[id]`）、404 なら
+  空が入ります。`matcher` 相当の設定はなく、`r.URL.Path` を見て自分で
+  分岐します。
+- ミドルウェアはアプリに 1 つ: `middleware.php` **と** `middleware.go`
+  が両方あると、毎リクエスト両方のパスを含む `RuntimeException` に
+  なります。`relayer routes` の末尾に `middleware  src/Pages/middleware.go
+  (native)`（または `(php)`）の行が出るので、どちらが生きているか確認
+  できます。
+- 失敗はページへのリクエストでも JSON `500` です — 未ビルド
+  （`native:build` の案内付き。dev では `middleware.go` がバイナリより
+  新しいときも）、`panic`、CGI でない出力、`NATIVE_ROUTE_TIMEOUT` 超過の
+  いずれも。ページ描画パイプラインに入る前に落ちているので、エラー
+  ページは描けないためです。stderr は PSR-3 ロガーに `error` で記録
+  されます。
+- プロセスモデルは `route.go` と同じで、リクエストごとに Go プロセスが
+  1 つ起動します。つまり **すべての** ページとルートに数ミリ秒が乗ります。
+  フレームワークの `/_defer/*` と `/_profiler` は `middleware.php` と
+  同じくこの外で動きます — それらも覆う必要があるチェックは
+  `AppRouter::setGuard()`（後述）に置いてください。`example/` には
+  `middleware.go` を **置いていません**（置くと example の全リクエストが
+  Go 必須になるため）。上のスニペットがそのまま完全な例です。
 
 #### オリジン保護と trusted proxy（CDN の裏で動かす）
 
@@ -973,13 +1052,17 @@ GET,POST   /               page    src/Pages/page.psx
 GET        /api/hello      native  src/Pages/api/hello/route.go
 GET,POST   /api/users      api     src/Pages/api/users/route.php
 GET,POST   /users/[id]     page    src/Pages/users/[id]/page.psx
+
+middleware  src/Pages/middleware.php  (php)
 ```
 
 page は `GET,POST` を表示します（POST はサーバアクション / `useState`
 がページに到達する経路）。API ルートは宣言済みメソッドを、ネイティブ
 ルート（`route.go`）はテキスト走査で見つけた `func GET` などを列挙します
 （ビルド不要）。読み込みに失敗した `route.php` やハンドラ未宣言の
-`route.go` は隠さず `?` ＋警告行で表示します。
+`route.go` は隠さず `?` ＋警告行で表示します。末尾の行はルートミドル
+ウェアがあるときにそれを示します — `middleware.php` なら `(php)`、
+`middleware.go` なら `(native)`。
 
 ## サーバアクション (フォーム / CSRF 保護付き)
 

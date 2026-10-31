@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Scaffold;
 
 use Closure;
 use Polidog\Relayer\Router\Api\RouteHandlers;
+use Polidog\Relayer\Router\Native\GoMiddlewareFile;
 use Polidog\Relayer\Router\Native\GoRouteFile;
 use Polidog\Relayer\Router\Routing\PageScanner;
 use Polidog\Relayer\Router\Routing\RouteKind;
@@ -25,7 +26,8 @@ use Throwable;
  * safe) and degrades to `?` if it cannot be loaded, rather than aborting
  * the whole listing. Native routes (`route.go`) list the handlers found by
  * {@see GoRouteFile} — a text scan, so the listing works before anything
- * is built and without a Go toolchain.
+ * is built and without a Go toolchain. The root middleware, if any, is
+ * named on a trailing line with its flavour (`php` / `native`).
  */
 final class RoutesCommand
 {
@@ -106,6 +108,23 @@ final class RoutesCommand
         \array_unshift($rows, ['METHODS', 'PATH', 'TYPE', 'FILE']);
         foreach (self::format($rows) as $line) {
             $write($line);
+        }
+
+        $php = $appDir . '/middleware.php';
+        $native = $appDir . '/' . GoMiddlewareFile::NAME;
+        if (\is_file($php) && \is_file($native)) {
+            $warnings[] = \sprintf(
+                'warning: both %s and %s exist; the app refuses every request until one is removed',
+                self::relative($root, $php),
+                self::relative($root, $native),
+            );
+        } elseif (\is_file($php) || \is_file($native)) {
+            $write('');
+            $write(\sprintf(
+                'middleware  %s  (%s)',
+                self::relative($root, \is_file($php) ? $php : $native),
+                \is_file($php) ? 'php' : 'native',
+            ));
         }
 
         if ([] !== $warnings) {

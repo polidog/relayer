@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Scaffold;
 use Closure;
 use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\Native\GoEntrypoint;
+use Polidog\Relayer\Router\Native\GoMiddlewareFile;
 use Polidog\Relayer\Router\Native\GoRouteFile;
 use Polidog\Relayer\Router\Native\GoToolchain;
 use Polidog\Relayer\Router\Native\NativeSlug;
@@ -16,8 +17,9 @@ use Polidog\Relayer\Router\Routing\RouteKind;
 use RuntimeException;
 
 /**
- * `relayer native:build` — compile every `route.go` under `src/Pages` into
- * the binary the router starts per request.
+ * `relayer native:build` — compile every `route.go` under `src/Pages`, and
+ * the root `middleware.go` when there is one, into the binaries the router
+ * starts per request.
  *
  * A `route.go` has no `main()` (handlers only, like the Next.js
  * prototype), so for each one this:
@@ -79,8 +81,15 @@ final class NativeBuildCommand
             }
         }
 
-        if ([] === $natives) {
-            $write(\sprintf('No native routes (%s) found under src/Pages.', GoRouteFile::NAME));
+        $middlewareSource = $appDir . '/' . GoMiddlewareFile::NAME;
+        $hasMiddleware = \is_file($middlewareSource);
+
+        if ([] === $natives && !$hasMiddleware) {
+            $write(\sprintf(
+                'No native routes (%s) or %s found under src/Pages.',
+                GoRouteFile::NAME,
+                GoMiddlewareFile::NAME,
+            ));
 
             return 0;
         }
@@ -122,7 +131,50 @@ final class NativeBuildCommand
                 return 1;
             }
 
+            if ($hasMiddleware && NativeSlug::MIDDLEWARE === NativeSlug::forPattern($route->pattern)) {
+                $write(\sprintf(
+                    '%s would be built to the same binary as %s (%s/%s). Rename the route.',
+                    $relativeSource,
+                    GoMiddlewareFile::NAME,
+                    Relayer::NATIVE_BIN_DIR,
+                    NativeSlug::MIDDLEWARE,
+                ));
+
+                return 1;
+            }
+
             $jobs[] = [$route, $source, $declared];
+        }
+
+        $middleware = null;
+        if ($hasMiddleware) {
+            $middleware = @\file_get_contents($middlewareSource);
+            $relativeMiddleware = self::relative($root, $middlewareSource);
+
+            if (!\is_string($middleware)) {
+                $write(\sprintf('Could not read %s.', $relativeMiddleware));
+
+                return 1;
+            }
+
+            if (!GoMiddlewareFile::isMainPackage($middleware)) {
+                $write(\sprintf(
+                    '%s must declare `package main` (the generated entrypoint lives in the same package).',
+                    $relativeMiddleware,
+                ));
+
+                return 1;
+            }
+
+            if (!GoMiddlewareFile::declaresProxy($middleware)) {
+                $write(\sprintf(
+                    '%s declares no `func %s(w http.ResponseWriter, r *http.Request)`.',
+                    $relativeMiddleware,
+                    GoMiddlewareFile::HANDLER,
+                ));
+
+                return 1;
+            }
         }
 
         $go = GoToolchain::locate();
@@ -139,6 +191,21 @@ final class NativeBuildCommand
             if (0 !== ($status = self::buildRoute($route, $source, $declared, $go, $root, $binDir, $buildDir, $write))) {
                 return $status;
             }
+        }
+
+        if (null !== $middleware) {
+            return self::compile(
+                NativeSlug::MIDDLEWARE,
+                \dirname($middlewareSource),
+                [GoMiddlewareFile::NAME => $middleware, GoEntrypoint::FILE_NAME => GoEntrypoint::renderProxy()],
+                NativeSlug::MIDDLEWARE,
+                self::relative($root, $middlewareSource),
+                $go,
+                $root,
+                $binDir,
+                $buildDir,
+                $write,
+            );
         }
 
         return 0;
@@ -158,8 +225,42 @@ final class NativeBuildCommand
         string $buildDir,
         Closure $write,
     ): int {
-        $relativeSource = self::relative($root, $route->pagePath);
-        $slug = NativeSlug::forPattern($route->pattern);
+        return self::compile(
+            NativeSlug::forPattern($route->pattern),
+            \dirname($route->pagePath),
+            [GoRouteFile::NAME => $source, GoEntrypoint::FILE_NAME => GoEntrypoint::render($declared)],
+            $route->pattern,
+            self::relative($root, $route->pagePath),
+            $go,
+            $root,
+            $binDir,
+            $buildDir,
+            $write,
+        );
+    }
+
+    /**
+     * Lay out `var/cache/native/build/<slug>/` and `go build` it to
+     * `var/cache/native/bin/<slug>`.
+     *
+     * @param string                $sourceDir where the user's file lives (its `go.mod`
+     *                                         / `go.sum` are honoured)
+     * @param array<string, string> $files     file name => contents to write into the build dir
+     * @param string                $label     what the `built` line names (pattern or `middleware`)
+     * @param Closure(string): void $write
+     */
+    private static function compile(
+        string $slug,
+        string $sourceDir,
+        array $files,
+        string $label,
+        string $relativeSource,
+        string $go,
+        string $root,
+        string $binDir,
+        string $buildDir,
+        Closure $write,
+    ): int {
         $workDir = $buildDir . '/' . $slug;
         $binary = $binDir . '/' . $slug;
 
@@ -179,17 +280,11 @@ final class NativeBuildCommand
             }
         }
 
-        $routeDir = \dirname($route->pagePath);
-        $files = [
-            GoRouteFile::NAME => $source,
-            GoEntrypoint::FILE_NAME => GoEntrypoint::render($declared),
-        ];
-
         // Respect a user-provided module (third-party deps, a pinned `go`
         // directive); otherwise generate a stdlib-only one.
-        $userGoMod = @\file_get_contents($routeDir . '/go.mod');
+        $userGoMod = @\file_get_contents($sourceDir . '/go.mod');
         $files['go.mod'] = \is_string($userGoMod) ? $userGoMod : GoEntrypoint::renderGoMod(NativeSlug::moduleName($slug));
-        $userGoSum = @\file_get_contents($routeDir . '/go.sum');
+        $userGoSum = @\file_get_contents($sourceDir . '/go.sum');
         if (\is_string($userGoSum)) {
             $files['go.sum'] = $userGoSum;
         }
@@ -205,7 +300,7 @@ final class NativeBuildCommand
         [$exit, $output] = GoToolchain::build($go, $workDir, $binary);
 
         if (0 !== $exit) {
-            $write(\sprintf('failed  %s  (%s)', $route->pattern, $relativeSource));
+            $write(\sprintf('failed  %s  (%s)', $label, $relativeSource));
             foreach (\explode("\n", $output) as $line) {
                 if ('' !== $line) {
                     $write('  ' . $line);
@@ -215,7 +310,7 @@ final class NativeBuildCommand
             return 1;
         }
 
-        $write(\sprintf('built  %s  -> %s', $route->pattern, self::relative($root, $binary)));
+        $write(\sprintf('built  %s  -> %s', $label, self::relative($root, $binary)));
 
         return 0;
     }

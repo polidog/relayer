@@ -20,6 +20,13 @@ final class NativeSlug
     /** The slug of the root pattern `/`, which has no segments to join. */
     public const ROOT = 'index';
 
+    /**
+     * The binary name of `middleware.go`. It is not a route, so it has no
+     * pattern to derive a slug from; the build refuses a route whose slug
+     * would collide with it (a `src/Pages/middleware/route.go`).
+     */
+    public const MIDDLEWARE = 'middleware';
+
     public static function forPattern(string $pattern): string
     {
         $trimmed = \trim($pattern, '/');
