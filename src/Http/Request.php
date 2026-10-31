@@ -202,6 +202,35 @@ final readonly class Request
     }
 
     /**
+     * A copy with one request header added or replaced (names are
+     * case-insensitive). This is how a proxy middleware (`middleware.go`'s
+     * `Relayer-Request-Header-*`) annotates the request the route then
+     * sees — e.g. a resolved user id — without a side channel.
+     */
+    public function withHeader(string $name, string $value): self
+    {
+        $headers = $this->headers;
+        $headers[\strtolower($name)] = $value;
+
+        return new self(
+            method: $this->method,
+            path: $this->path,
+            query: $this->query,
+            post: $this->post,
+            headers: $headers,
+            cookies: $this->cookies,
+            locale: $this->locale,
+            uri: $this->uri,
+            files: $this->files,
+            body: $this->body,
+            ip: $this->ip,
+            host: $this->host,
+            scheme: $this->scheme,
+            clientIp: $this->clientIp,
+        );
+    }
+
+    /**
      * A copy carrying the resolved locale.
      */
     public function withLocale(string $locale): self

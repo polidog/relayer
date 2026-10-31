@@ -37,6 +37,7 @@ use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Layout\ScriptCollection;
+use Polidog\Relayer\Router\Native\GoMiddlewareFile;
 use Polidog\Relayer\Router\Native\NativeDispatcher;
 use Polidog\Relayer\Router\Routing\RouteKind;
 use Polidog\Relayer\Router\Routing\RouteMatch;
@@ -676,27 +677,55 @@ final class AppRouter
             'routePath' => $match->getPagePath(),
         ]);
 
+        $this->nativeDispatcher()->dispatch($match->route, $match->getParams(), $this->request());
+    }
+
+    private function nativeDispatcher(): NativeDispatcher
+    {
         // Default mirrors psxCacheDir's: the project root is taken to be
         // the parent of the app directory. Relayer::boot() always sets an
         // explicit dispatcher rooted at the real project root.
-        $this->nativeDispatcher ??= NativeDispatcher::forProject(\dirname($this->appDirectory), false);
-
-        $this->nativeDispatcher->dispatch($match->route, $match->getParams(), $this->request());
+        return $this->nativeDispatcher ??= NativeDispatcher::forProject(\dirname($this->appDirectory), false);
     }
 
     /**
-     * Load the optional root middleware (`<appDir>/middleware.php`). The
-     * file `return`s a single `fn(Request $request, Closure $next)` closure
+     * Load the optional root middleware: `<appDir>/middleware.php`, a file
+     * that `return`s a single `fn(Request $request, Closure $next)` closure
      * — `require`d fresh each request (declaration-free, like `route.php`),
-     * so it must only return the closure. Absent file → no middleware.
+     * so it must only return the closure — or `<appDir>/middleware.go`, a
+     * Go `func Proxy(w, r)` run through {@see NativeProxy} with the same
+     * closure contract. One middleware per app: both files present is an
+     * error naming them, not a silent pick. Neither file → no middleware.
      *
      * @return null|Closure(Request, Closure): void
      */
     private function loadMiddleware(): ?Closure
     {
         $file = $this->appDirectory . '/middleware.php';
+        $native = $this->appDirectory . '/' . GoMiddlewareFile::NAME;
 
-        if (!\file_exists($file)) {
+        $hasPhp = \file_exists($file);
+        $hasNative = \file_exists($native);
+
+        if ($hasPhp && $hasNative) {
+            throw new RuntimeException(\sprintf(
+                'One middleware per app: both %s and %s exist. Keep one of them.',
+                $file,
+                $native,
+            ));
+        }
+
+        if ($hasNative) {
+            // The proxy runs before matching, so hand it a way to ask what
+            // the path *would* match (RELAYER_MATCHED_PATTERN) without
+            // dispatching anything.
+            return $this->nativeDispatcher()->proxy(
+                $native,
+                fn (Request $request): ?string => $this->router->match($request->path)?->route->pattern,
+            )->middleware();
+        }
+
+        if (!$hasPhp) {
             return null;
         }
 

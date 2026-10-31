@@ -31,8 +31,6 @@ final class GoRouteFile
 
     private const HANDLER_PATTERN = '/^func (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s*\(/m';
 
-    private const PACKAGE_MAIN_PATTERN = '/^package\s+main\b/m';
-
     /**
      * The handler methods `$source` declares, sorted. Empty when it
      * declares none (a build error, surfaced by the build command).
@@ -41,7 +39,7 @@ final class GoRouteFile
      */
     public static function declaredMethods(string $source): array
     {
-        if (1 > \preg_match_all(self::HANDLER_PATTERN, self::stripComments($source), $matches)) {
+        if (1 > \preg_match_all(self::HANDLER_PATTERN, GoSource::stripComments($source), $matches)) {
             return [];
         }
 
@@ -76,19 +74,6 @@ final class GoRouteFile
 
     public static function isMainPackage(string $source): bool
     {
-        return 1 === \preg_match(self::PACKAGE_MAIN_PATTERN, self::stripComments($source));
-    }
-
-    /**
-     * Drop line and block comments so a commented-out handler is not
-     * mistaken for a declared one. Deliberately does not parse string
-     * literals: a `"func GET("` inside a string is contrived enough not
-     * to pay a tokenizer for.
-     */
-    private static function stripComments(string $source): string
-    {
-        $stripped = \preg_replace('#/\*.*?\*/#s', '', $source) ?? $source;
-
-        return \preg_replace('#//[^\n]*#', '', $stripped) ?? $stripped;
+        return GoSource::isMainPackage($source);
     }
 }
