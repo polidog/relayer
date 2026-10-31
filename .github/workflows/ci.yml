@@ -51,6 +51,15 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
+      # Native route handlers (`route.go`) are compiled by `relayer
+      # native:build` in the test suite; without a toolchain those tests
+      # skip themselves, which would silently drop the coverage here.
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
       - name: PHPUnit
         run: vendor/bin/phpunit
 

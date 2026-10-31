@@ -37,6 +37,8 @@ use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Layout\ScriptCollection;
+use Polidog\Relayer\Router\Native\NativeDispatcher;
+use Polidog\Relayer\Router\Routing\RouteKind;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
@@ -120,6 +122,13 @@ final class AppRouter
 
     /** @var null|Closure(Request, Closure): void */
     private ?Closure $guard = null;
+
+    /**
+     * Serves `route.go` matches. {@see Relayer::boot()} wires one for the
+     * project; {@see handleNativeMatch()} falls back to a default beside
+     * the app directory when nothing was set (tests, bare `create()`).
+     */
+    private ?NativeDispatcher $nativeDispatcher = null;
 
     public function __construct(
         string $appDirectory,
@@ -286,6 +295,17 @@ final class AppRouter
     public function setGuard(Closure $guard): self
     {
         $this->guard = $guard;
+
+        return $this;
+    }
+
+    /**
+     * Where native routes (`route.go`) find their built binaries and how
+     * they run — see {@see NativeDispatcher}.
+     */
+    public function setNativeDispatcher(NativeDispatcher $dispatcher): self
+    {
+        $this->nativeDispatcher = $dispatcher;
 
         return $this;
     }
@@ -468,8 +488,14 @@ final class AppRouter
 
     private function handleMatch(RouteMatch $match): void
     {
-        if ($match->route->isApi) {
+        if (RouteKind::Api === $match->route->kind) {
             $this->handleApiMatch($match);
+
+            return;
+        }
+
+        if (RouteKind::Native === $match->route->kind) {
+            $this->handleNativeMatch($match);
 
             return;
         }
@@ -627,6 +653,35 @@ final class AppRouter
         }
 
         ($omitBody ? $result->withoutBody() : $result)->send();
+    }
+
+    /**
+     * Dispatch a native route (`route.go`): hand the match to the
+     * {@see NativeDispatcher}, which runs the prebuilt binary as a CGI
+     * process and writes its response (or a JSON `500`).
+     *
+     * Same position in the pipeline as {@see handleApiMatch()}: inside the
+     * root middleware, after `_private` exclusion at scan time, with its
+     * own profiler event. Unlike `route.php` nothing is autowired and no
+     * `PageContext` exists — the Go side gets the request as CGI variables
+     * and the params as `RELAYER_ROUTE_PARAMS`; auth belongs in
+     * `middleware.php`, in front of it.
+     */
+    private function handleNativeMatch(RouteMatch $match): void
+    {
+        $this->profiler?->collect('route', 'native', [
+            'pattern' => $match->route->pattern,
+            'method' => $this->readMethod(),
+            'params' => $match->getParams(),
+            'routePath' => $match->getPagePath(),
+        ]);
+
+        // Default mirrors psxCacheDir's: the project root is taken to be
+        // the parent of the app directory. Relayer::boot() always sets an
+        // explicit dispatcher rooted at the real project root.
+        $this->nativeDispatcher ??= NativeDispatcher::forProject(\dirname($this->appDirectory), false);
+
+        $this->nativeDispatcher->dispatch($match->route, $match->getParams(), $this->request());
     }
 
     /**

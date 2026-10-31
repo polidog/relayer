@@ -11,6 +11,10 @@ Opinionated, batteries-included framework on top of
   map of autowired handlers, each returning a `Response`
   (`Response::json()` / `text()` / `noContent()` / `redirect()`);
   `OPTIONS` / `HEAD` synthesized like Next.js Route Handlers
+- Native route handlers in Go (`src/Pages/.../route.go`, `func GET(w, r)`
+  and friends) — compiled by `relayer native:build`, run per request as a
+  CGI process via the Go stdlib; the Next.js "native language support"
+  prototype's Route Handlers, for CPU-heavy endpoints
 - Per-page / per-layout external scripts (`$ctx->js()` /
   `PageComponent::addJs()` / `LayoutComponent::addJs()`) emitted at the end
   of `<body>` after the bundle, in declaration order
@@ -283,6 +287,12 @@ scaffolded `php.ini` carries the production block). Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
 
+`relayer compile` deliberately does **not** include `vendor/bin/relayer
+native:build` (Go route handlers, see
+[Native route handlers (Go)](#native-route-handlers-go)): it needs a Go
+toolchain, which a PHP-only image has no reason to carry. Run it as its
+own step when the project has a `route.go`.
+
 **Read-only filesystem.** The scaffolded `Dockerfile` runs all three steps
 in its `prod` target, so the image generates nothing at runtime and can be
 served with an immutable filesystem. `compose.yaml` ships that shape as a
@@ -527,6 +537,119 @@ return [
   likewise become a JSON error with that status (never the HTML error
   page); `$ctx->redirect()` still produces a content-type-neutral
   `Location` response (a deliberate handler action, not an error gate).
+
+### Native route handlers (Go)
+
+A `route.go` is an API route written in Go — the same URL mapping as
+`route.php`, with the handler compiled to a native binary. This mirrors the
+Next.js "native language support" prototype (Route Handlers in Go, for
+CPU-heavy work beside the app): declare `func GET` / `POST` / `PUT` /
+`PATCH` / `DELETE` / `HEAD` / `OPTIONS` with the stdlib's
+`http.HandlerFunc` signature, nothing else — no `main()`, no framework
+import.
+
+```go
+// src/Pages/api/hello/route.go
+package main
+
+import (
+    "encoding/json"
+    "net/http"
+)
+
+func GET(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]string{"message": "Hello from Go!"})
+}
+```
+
+```bash
+vendor/bin/relayer native:build     # once per change to a route.go
+curl -i http://localhost:8080/api/hello
+```
+
+**Build.** `vendor/bin/relayer native:build` compiles every `route.go`
+under `src/Pages`. For each one it generates the entrypoint (a `main()`
+that serves one request through Go's `net/http/cgi` and switches on the
+method), copies both into `var/cache/native/build/<slug>/` with a
+stdlib-only `go.mod` (a `go.mod` / `go.sum` you place beside the
+`route.go` is used instead, so third-party modules work), and runs
+`go build -o var/cache/native/bin/<slug>`. `<slug>` is the URL pattern
+with `/` → `__` (`/api/users/[id]` → `api__users__[id]`). It needs `go`
+on `PATH` — or `GO_BIN=/path/to/go` — and is a separate command from
+`relayer compile` for that reason. A `route.go` that declares no handler,
+or is not `package main`, fails the build with a message naming the file;
+a compile error prints `go build`'s output verbatim. Output is one line
+per route:
+
+```
+built  /api/hello  -> var/cache/native/bin/api__hello
+```
+
+Nothing is rebuilt at request time, ever. An unbuilt route answers a JSON
+`500` whose body says to run `native:build`; in dev (`APP_ENV=dev`) a
+binary older than its `route.go` gets the same answer with
+`(route.go is newer than the binary)` appended, so an edit you forgot to
+rebuild cannot masquerade as a bug. Production serves whatever the deploy
+built. `var/cache/native/` is covered by the scaffolded `.gitignore`
+(`/var/`).
+
+**How a request runs.** There is no resident Go server: PHP starts the
+binary **per request** as a CGI child (`proc_open`), passes the request as
+CGI meta-variables, streams the body to its stdin and reads a CGI response
+(`Status:` / headers / blank line / body) back from stdout. A static Go
+binary starts in about a millisecond, so the overhead is in the low
+single-digit milliseconds per call — fine for an endpoint that then does
+real work, not a replacement for a hot PHP route that returns in 200 µs.
+Specifically, the handler sees:
+
+- `r.Method`, `r.URL` (path + query string, from `REQUEST_URI`),
+  `r.Header` (every request header, as `HTTP_*`), `r.Host`, `r.RemoteAddr`
+  and `r.Body` — all filled in by `net/http/cgi` from the standard
+  variables (`REQUEST_METHOD`, `PATH_INFO`, `QUERY_STRING`,
+  `CONTENT_TYPE`, `CONTENT_LENGTH`, `REMOTE_ADDR`, `HTTPS`, …). A client
+  `Proxy:` header is never forwarded (httpoxy).
+- Dynamic segments as **`RELAYER_ROUTE_PARAMS`**, a JSON object
+  (`{"id":"42"}` for `/api/users/[id]`), and the pattern itself as
+  **`RELAYER_ROUTE_PATTERN`** (`/api/users/[id]`):
+
+  ```go
+  var params map[string]string
+  json.Unmarshal([]byte(os.Getenv("RELAYER_ROUTE_PARAMS")), &params)
+  id := params["id"]
+  ```
+- The PHP process's environment underneath (`DATABASE_DSN` & co.), so a
+  handler can reach the same services. Framework variables always win over
+  anything a client could inject.
+
+**Methods.** The generated entrypoint applies the `route.php` rules: an
+undeclared `OPTIONS` → `204` + `Allow`; an undeclared `HEAD` with a `GET`
+→ runs `GET` and drops the body; any other undeclared method → `405` +
+`Allow` with a JSON body. Declaring `HEAD` / `OPTIONS` yourself always
+wins. `relayer routes` lists the declared methods (a text scan of the
+`route.go`, so it works before anything is built) in a `native` row.
+
+**Failures are JSON.** A non-zero exit (a Go `panic` included), output
+that is not a CGI response, or a run longer than the timeout answers a
+JSON `500` (`{"error": "Native route /api/hello failed: …"}`), never the
+HTML error page — like `route.php`, a native route is an endpoint. What the
+process wrote to stderr is logged at `error` through the PSR-3 logger when
+one is configured (and at `warning` after a *successful* run — that is
+where Go's `log` package writes). The timeout defaults to 30 seconds;
+`NATIVE_ROUTE_TIMEOUT=10` (seconds) in `.env` changes it. A PHP with
+`proc_open` in `disable_functions` cannot run native routes and says so at
+dispatch.
+
+**What does not apply.** A `route.go` gets no autowiring, no
+`PageContext`, no `Request` object and no `#[Auth]` / `requireAuth()` —
+the Go side only ever sees CGI variables. Protect it from
+`src/Pages/middleware.php`, which wraps native routes exactly like pages
+and `route.php` (a middleware that does not call `$next` means the Go
+process is never started). `_private` folders exclude a `route.go` as
+they do everything else, and a directory holds one handler: `route.go`
+beside `route.php` or a page file is a scan error, like `page.psx` beside
+`page.php`. Go is the only language today; the route kind is deliberately
+language-neutral so a `route.rs` could join without touching the router.
 
 ### Per-page scripts (`$ctx->js()` / `addJs()`)
 
@@ -840,15 +963,18 @@ unguarded until you set these in its `.env.local`.
 the same scanner the router uses:
 
 ```
-METHODS    PATH            TYPE  FILE
-GET,POST   /               page  src/Pages/page.psx
-GET,POST   /api/users      api   src/Pages/api/users/route.php
-GET,POST   /users/[id]     page  src/Pages/users/[id]/page.psx
+METHODS    PATH            TYPE    FILE
+GET,POST   /               page    src/Pages/page.psx
+GET        /api/hello      native  src/Pages/api/hello/route.go
+GET,POST   /api/users      api     src/Pages/api/users/route.php
+GET,POST   /users/[id]     page    src/Pages/users/[id]/page.psx
 ```
 
 Pages report `GET,POST` (POST is how server actions / `useState` reach a
-page); API routes list their declared methods. A `route.php` that fails to
-load is shown as `?` with a warning line, not silently hidden.
+page); API routes list their declared methods, and native routes
+(`route.go`) the `func GET` & co. found by a text scan — no build needed.
+A `route.php` that fails to load, or a `route.go` that declares no
+handler, is shown as `?` with a warning line, not silently hidden.
 
 ## Server Actions (form / CSRF-protected)
 

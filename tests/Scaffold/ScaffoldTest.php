@@ -383,4 +383,14 @@ final class ScaffoldTest extends TestCase
             }
         }
     }
+
+    public function testGitignoreCoversTheNativeBuildOutput(): void
+    {
+        $gitignore = Scaffold::files()['.gitignore'];
+
+        // `relayer native:build` writes under var/cache/native/; the whole
+        // var/ tree is ignored, so no per-feature entry is needed and
+        // existing projects need no `upgrade` to pick it up.
+        self::assertStringContainsString("/var/\n", $gitignore);
+    }
 }

@@ -38,6 +38,7 @@ final class InitCommand
           relayer compile            build all deploy artifacts: .psx, routes, DI container
           relayer routes:compile     write the precompiled route artifact (run at deploy)
           relayer container:compile  dump the DI container to PHP (run at deploy)
+          relayer native:build       compile every route.go to var/cache/native/bin (needs Go)
           relayer profiler:clear     delete cached dev profiler data (var/cache/profiler)
 
         Run inside a project that has already required the framework
@@ -84,6 +85,10 @@ final class InitCommand
 
         if ('container:compile' === $command) {
             return ContainerCompileCommand::run(\array_slice($args, 1), $write, $cwd);
+        }
+
+        if ('native:build' === $command) {
+            return NativeBuildCommand::run(\array_slice($args, 1), $write, $cwd);
         }
 
         if ('profiler:clear' === $command) {

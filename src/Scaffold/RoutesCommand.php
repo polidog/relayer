@@ -6,7 +6,9 @@ namespace Polidog\Relayer\Scaffold;
 
 use Closure;
 use Polidog\Relayer\Router\Api\RouteHandlers;
+use Polidog\Relayer\Router\Native\GoRouteFile;
 use Polidog\Relayer\Router\Routing\PageScanner;
+use Polidog\Relayer\Router\Routing\RouteKind;
 use RuntimeException;
 use Throwable;
 
@@ -21,7 +23,9 @@ use Throwable;
  * For API routes (`route.php`) the declared HTTP methods are listed; this
  * `require`s the file (the route contract is declaration-free, so that is
  * safe) and degrades to `?` if it cannot be loaded, rather than aborting
- * the whole listing.
+ * the whole listing. Native routes (`route.go`) list the handlers found by
+ * {@see GoRouteFile} — a text scan, so the listing works before anything
+ * is built and without a Go toolchain.
  */
 final class RoutesCommand
 {
@@ -62,7 +66,7 @@ final class RoutesCommand
         foreach ($collection as $route) {
             $file = self::relative($root, $route->pagePath);
 
-            if ($route->isApi) {
+            if (RouteKind::Api === $route->kind) {
                 try {
                     $methods = \implode(',', RouteHandlers::fromFile($route->pagePath)->allowedMethods());
                 } catch (Throwable $e) {
@@ -72,13 +76,23 @@ final class RoutesCommand
                     $methods = '?';
                     $warnings[] = 'warning: ' . $file . ': ' . $e->getMessage();
                 }
+            } elseif (RouteKind::Native === $route->kind) {
+                $source = @\file_get_contents($route->pagePath);
+                $declared = \is_string($source) ? GoRouteFile::declaredMethods($source) : [];
+                if ([] === $declared) {
+                    $methods = '?';
+                    $warnings[] = 'warning: ' . $file . ': declares no handler '
+                        . '(expected e.g. `func GET(w http.ResponseWriter, r *http.Request)`)';
+                } else {
+                    $methods = \implode(',', $declared);
+                }
             } else {
                 // Pages dispatch GET (render) and POST (server actions /
                 // useState), so both reach a page.
                 $methods = 'GET,POST';
             }
 
-            $rows[] = [$methods, $route->pattern, $route->isApi ? 'api' : 'page', $file];
+            $rows[] = [$methods, $route->pattern, $route->kind->value, $file];
         }
 
         if ([] === $rows) {

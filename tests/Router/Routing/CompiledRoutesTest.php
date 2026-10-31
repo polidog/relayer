@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Router\Routing\CompiledRoutes;
 use Polidog\Relayer\Router\Routing\PageScanner;
 use Polidog\Relayer\Router\Routing\Route;
+use Polidog\Relayer\Router\Routing\RouteKind;
 
 final class CompiledRoutesTest extends TestCase
 {
@@ -55,6 +56,7 @@ final class CompiledRoutesTest extends TestCase
                 self::assertSame($route->staticSegments, $copy->staticSegments);
                 self::assertSame($route->totalSegments, $copy->totalSegments);
                 self::assertSame($route->isApi, $copy->isApi);
+                self::assertSame($route->kind, $copy->kind);
             }
         } finally {
             @\unlink($file);
@@ -96,6 +98,104 @@ final class CompiledRoutesTest extends TestCase
             \file_put_contents($file, "<?php\nreturn 'not-an-array';\n");
 
             $this->expectExceptionMessage('did not return an array');
+            CompiledRoutes::load($file, $this->appDir);
+        } finally {
+            @\unlink($file);
+        }
+    }
+
+    public function testNativeRoutesRoundTripWithTheirKind(): void
+    {
+        $appDir = \realpath(__DIR__ . '/../fixtures/native-app') ?: '';
+        $scanned = (new PageScanner($appDir))->scan();
+        $php = CompiledRoutes::export($scanned, $appDir);
+
+        self::assertStringContainsString("'kind' => 'native'", $php);
+        self::assertStringContainsString("'pagePath' => 'api/hello/route.go'", $php);
+
+        $file = \sys_get_temp_dir() . '/compiled-routes-native-' . \uniqid() . '.php';
+
+        try {
+            \file_put_contents($file, $php);
+            $loaded = CompiledRoutes::load($file, $appDir);
+
+            $kinds = [];
+            foreach ($loaded as $route) {
+                $kinds[$route->pattern] = $route->kind;
+            }
+
+            self::assertSame(RouteKind::Native, $kinds['/api/hello']);
+            self::assertSame(RouteKind::Native, $kinds['/api/users/[id]']);
+            self::assertSame(RouteKind::Page, $kinds['/']);
+        } finally {
+            @\unlink($file);
+        }
+    }
+
+    public function testAnArtifactWithoutKindStillLoadsFromIsApi(): void
+    {
+        $file = \sys_get_temp_dir() . '/compiled-routes-legacy-' . \uniqid() . '.php';
+
+        try {
+            \file_put_contents($file, <<<'PHP'
+                <?php
+                return [
+                    [
+                        'pattern' => '/',
+                        'regex' => '#^/$#',
+                        'pagePath' => 'page.php',
+                        'layoutPaths' => [],
+                        'paramNames' => [],
+                        'staticSegments' => 0,
+                        'totalSegments' => 0,
+                        'isApi' => false,
+                    ],
+                    [
+                        'pattern' => '/ping',
+                        'regex' => '#^/ping$#',
+                        'pagePath' => 'ping/route.php',
+                        'layoutPaths' => [],
+                        'paramNames' => [],
+                        'staticSegments' => 1,
+                        'totalSegments' => 1,
+                        'isApi' => true,
+                    ],
+                ];
+                PHP);
+
+            $kinds = [];
+            foreach (CompiledRoutes::load($file, $this->appDir) as $route) {
+                $kinds[$route->pattern] = $route->kind;
+            }
+
+            self::assertSame(RouteKind::Page, $kinds['/']);
+            self::assertSame(RouteKind::Api, $kinds['/ping']);
+        } finally {
+            @\unlink($file);
+        }
+    }
+
+    public function testLoadRejectsAnUnknownKind(): void
+    {
+        $file = \sys_get_temp_dir() . '/compiled-routes-badkind-' . \uniqid() . '.php';
+
+        try {
+            \file_put_contents($file, <<<'PHP'
+                <?php
+                return [[
+                    'pattern' => '/',
+                    'regex' => '#^/$#',
+                    'pagePath' => 'page.php',
+                    'layoutPaths' => [],
+                    'paramNames' => [],
+                    'staticSegments' => 0,
+                    'totalSegments' => 0,
+                    'isApi' => false,
+                    'kind' => 'wasm',
+                ]];
+                PHP);
+
+            $this->expectExceptionMessage('"kind" must be one of');
             CompiledRoutes::load($file, $this->appDir);
         } finally {
             @\unlink($file);
