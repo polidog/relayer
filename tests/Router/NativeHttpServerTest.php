@@ -92,6 +92,27 @@ final class NativeHttpServerTest extends TestCase
             }
             GO);
 
+        self::write('src/Pages/form/route.go', <<<'GO'
+            package main
+
+            import (
+            	"encoding/json"
+            	"net/http"
+            )
+
+            func POST(w http.ResponseWriter, r *http.Request) {
+            	out := map[string]any{}
+            	if err := r.ParseMultipartForm(1 << 20); err != nil {
+            		out["error"] = err.Error()
+            	} else {
+            		out["values"] = r.MultipartForm.Value
+            		out["files"] = len(r.MultipartForm.File)
+            	}
+            	w.Header().Set("Content-Type", "application/json")
+            	json.NewEncoder(w).Encode(out)
+            }
+            GO);
+
         $log = [];
         $status = NativeBuildCommand::run([], static function (string $line) use (&$log): void {
             $log[] = $line;
@@ -163,6 +184,35 @@ final class NativeHttpServerTest extends TestCase
         $decoded = self::decode($body);
         self::assertSame('/upload', $decoded['pathInfo'] ?? null);
         self::assertSame('/old-upload', $decoded['urlPath'] ?? null);
+    }
+
+    public function testAnEmptyFormDataReachesGoAsAValidMultipart(): void
+    {
+        [$status, , $body] = $this->request('POST', '/form', "--B--\r\n", 'multipart/form-data; boundary=B');
+
+        self::assertSame(200, $status, $body);
+        self::assertSame(['files' => 0, 'values' => []], self::decode($body));
+    }
+
+    public function testAFormWithOnlyAnEmptyFileInputReachesGoAsAValidMultipart(): void
+    {
+        $form = "--B\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"\"\r\n"
+            . "Content-Type: application/octet-stream\r\n\r\n\r\n--B--\r\n";
+
+        [$status, , $body] = $this->request('POST', '/form', $form, 'multipart/form-data; boundary=B');
+
+        self::assertSame(200, $status, $body);
+        self::assertSame(['files' => 0, 'values' => []], self::decode($body));
+    }
+
+    public function testAFieldNameEndingInABackslashRoundTripsToGo(): void
+    {
+        $form = "--B\r\nContent-Disposition: form-data; name=\"field\\\\\"\r\n\r\nvalue\r\n--B--\r\n";
+
+        [$status, , $body] = $this->request('POST', '/form', $form, 'multipart/form-data; boundary=B');
+
+        self::assertSame(200, $status, $body);
+        self::assertSame(['files' => 0, 'values' => ['field\\' => ['value']]], self::decode($body));
     }
 
     /**

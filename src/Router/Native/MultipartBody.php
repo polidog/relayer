@@ -21,7 +21,9 @@ use Polidog\Relayer\Http\UploadedFile;
  * The rebuilt body is equivalent, not identical: fields come before files,
  * and PHP's own limits (`upload_max_filesize`, `post_max_size`,
  * `max_file_uploads`, …) have already applied. An upload PHP rejected
- * raises instead of quietly vanishing, as does a body PHP dropped whole.
+ * raises instead of quietly vanishing, as does a body PHP dropped whole. A
+ * form with nothing in it stays a valid multipart body (just the closing
+ * boundary), because Go's parser treats a truly empty one as an error.
  */
 final class MultipartBody
 {
@@ -54,19 +56,31 @@ final class MultipartBody
             }
         }
 
+        $length = (int) ($request->header('content-length') ?? '0');
+
         if ('' === $parts) {
-            // A request that announced a body but left nothing behind: PHP
-            // discards everything past post_max_size.
-            if ((int) ($request->header('content-length') ?? '0') > 0 && [] === $request->files()) {
+            // PHP discards everything past post_max_size. Anything smaller
+            // that parsed to nothing really was an empty form (an empty
+            // `FormData`, or only unselected file inputs), still a body.
+            if (self::exceedsPostMaxSize($length)) {
                 throw new NativeProcessException(
-                    'multipart request body was dropped by PHP (is it larger than post_max_size?)',
+                    'multipart request body was dropped by PHP (it is larger than post_max_size)',
                 );
             }
 
-            return '';
+            if (0 === $length) {
+                return '';
+            }
         }
 
         return $parts . '--' . $boundary . "--\r\n";
+    }
+
+    private static function exceedsPostMaxSize(int $length): bool
+    {
+        $limit = \ini_parse_quantity((string) \ini_get('post_max_size'));
+
+        return $limit > 0 && $length > $limit;
     }
 
     private static function boundary(string $contentType): ?string
@@ -143,11 +157,13 @@ final class MultipartBody
     }
 
     /**
-     * The escaping browsers apply to `name` / `filename` (WHATWG form
-     * encoding), so a crafted name cannot break out of its header.
+     * Escape for a quoted-string: `\` as the MIME parser on the Go side reads
+     * it (left alone, a trailing one would swallow the closing quote), then
+     * `"` and line breaks as browsers encode them, so a crafted name cannot
+     * break out of its header.
      */
     private static function quote(string $value): string
     {
-        return \str_replace(["\r", "\n", '"'], ['%0D', '%0A', '%22'], $value);
+        return \str_replace(['\\', "\r", "\n", '"'], ['\\\\', '%0D', '%0A', '%22'], $value);
     }
 }

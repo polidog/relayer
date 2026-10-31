@@ -94,6 +94,58 @@ final class MultipartBodyTest extends TestCase
         self::assertStringNotContainsString('doc', MultipartBody::for($request));
     }
 
+    public function testAFormWithOnlyAnEmptyFileInputIsAValidEmptyMultipart(): void
+    {
+        $request = new Request(
+            'POST',
+            '/',
+            headers: ['content-type' => self::CONTENT_TYPE, 'content-length' => '120'],
+            files: ['doc' => new UploadedFile('', '', 0, '', \UPLOAD_ERR_NO_FILE)],
+            body: '',
+        );
+
+        self::assertSame("--XBOUNDARY--\r\n", MultipartBody::for($request));
+    }
+
+    public function testAnEmptyFormDataIsAValidEmptyMultipart(): void
+    {
+        $request = new Request(
+            'POST',
+            '/',
+            headers: ['content-type' => self::CONTENT_TYPE, 'content-length' => '15'],
+            body: '',
+        );
+
+        self::assertSame("--XBOUNDARY--\r\n", MultipartBody::for($request));
+    }
+
+    public function testARequestWithNoBodyStaysEmpty(): void
+    {
+        $request = new Request('POST', '/', headers: ['content-type' => self::CONTENT_TYPE], body: '');
+
+        self::assertSame('', MultipartBody::for($request));
+    }
+
+    public function testBackslashesInNamesAreEscaped(): void
+    {
+        $this->tmp = (string) \tempnam(\sys_get_temp_dir(), 'mp');
+        \file_put_contents($this->tmp, 'x');
+
+        $request = new Request(
+            'POST',
+            '/',
+            post: ['field\\' => 'value'],
+            headers: ['content-type' => self::CONTENT_TYPE],
+            files: ['doc' => new UploadedFile('a\b.txt', 'text/plain', 1, $this->tmp)],
+            body: '',
+        );
+
+        $body = MultipartBody::for($request);
+
+        self::assertStringContainsString('name="field\\\"' . "\r\n", $body);
+        self::assertStringContainsString('filename="a\\\b.txt"' . "\r\n", $body);
+    }
+
     public function testAnUploadPhpRejectedRaises(): void
     {
         $request = new Request(
@@ -109,12 +161,17 @@ final class MultipartBodyTest extends TestCase
         MultipartBody::for($request);
     }
 
-    public function testABodyPhpDroppedRaises(): void
+    public function testABodyLargerThanPostMaxSizeRaises(): void
     {
+        $limit = \ini_parse_quantity((string) \ini_get('post_max_size'));
+        if ($limit <= 0) {
+            self::markTestSkipped('post_max_size is unlimited');
+        }
+
         $request = new Request(
             'POST',
             '/',
-            headers: ['content-type' => self::CONTENT_TYPE, 'content-length' => '999999'],
+            headers: ['content-type' => self::CONTENT_TYPE, 'content-length' => (string) ($limit + 1)],
             body: '',
         );
 
