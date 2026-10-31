@@ -308,8 +308,9 @@ final class Scaffold
             ## Production
 
             `APP_ENV=dev` compiles `.psx`, scans routes, and rebuilds the
-            DI container on the fly. For deploys, unset (or change)
-            `APP_ENV` and precompile all three once:
+            DI container on the fly. For deploys, set `APP_ENV=prod` in
+            `.env.local` or the real environment (unsetting it falls back
+            to `.env`, which says `dev`) and precompile all three once:
 
             ```bash
             composer install --no-dev --classmap-authoritative

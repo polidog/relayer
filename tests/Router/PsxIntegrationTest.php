@@ -88,6 +88,53 @@ final class PsxIntegrationTest extends TestCase
         self::assertStringContainsString('Auto-compiled', $output);
     }
 
+    public function testScalarExpressionsAmongSeveralChildrenRenderUnderStrictTypes(): void
+    {
+        // Issue #80. Several children compile to `children: [...]`, which H's
+        // signature accepts, so the scalars reach FormActionTransformer. A
+        // lone typed-tag child (`<p>{42}</p>`) fails earlier, in usePHP's
+        // H::p() signature, and is out of this test's reach.
+        \file_put_contents(
+            $this->workDir . '/page.psx',
+            <<<'PSX'
+            <?php
+            declare(strict_types=1);
+
+            use Polidog\UsePhp\Html\H;
+            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Relayer\Router\Component\PageContext;
+
+            return function (PageContext $ctx) {
+                return function (): Element {
+                    $n = 42;
+                    $zero = 0;
+                    $hidden = false;
+
+                    return <div>
+                        <p>Count: {$n}</p>
+                        <p>Zero: {$zero}</p>
+                        <p>Flag:{$hidden}</p>
+                        <p data-x="1">{$n}</p>
+                    </div>;
+                };
+            };
+            PSX,
+        );
+
+        $app = AppRouter::create(
+            $this->workDir,
+            autoCompilePsx: true,
+            psxCacheDir: $this->workDir . '/cache',
+        );
+
+        $output = $this->runApp($app, '/');
+
+        self::assertStringContainsString('<p>Count: 42</p>', $output);
+        self::assertStringContainsString('<p>Zero: 0</p>', $output);
+        self::assertStringContainsString('<p>Flag:</p>', $output);
+        self::assertStringContainsString('<p data-x="1">42</p>', $output);
+    }
+
     public function testStaleCacheIsTreatedAsAuthoritativeWithoutAutoCompile(): void
     {
         // Production-mode contract: once `usephp compile` produced a cache

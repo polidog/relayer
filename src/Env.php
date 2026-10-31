@@ -17,6 +17,42 @@ namespace Polidog\Relayer;
 final class Env
 {
     /**
+     * Make real process variables visible to Symfony Dotenv, so they win
+     * over `.env` files.
+     *
+     * Dotenv decides whether a variable already exists by looking only at
+     * `$_ENV` / `$_SERVER`, never at `getenv()`. When `variables_order` lacks
+     * `E` and the SAPI does not import the environment into `$_SERVER` (the
+     * built-in server), it therefore cannot see a real `APP_ENV=prod` and
+     * overwrites it with the `.env` value.
+     *
+     * Values go into `$_ENV` only, which is enough for Dotenv and
+     * {@see read()}. `$_SERVER` is where {@see Http\Request} and the auth
+     * layer read request data from, so a variable named `REMOTE_ADDR` or
+     * `CONTENT_TYPE` copied there would pass as part of the request.
+     *
+     * Skipped:
+     * - names already in `$_ENV` / `$_SERVER`, which keep their precedence;
+     * - `HTTP_*`, because a CGI SAPI puts request headers in the process
+     *   environment, where a client could otherwise set them (httpoxy);
+     * - `SYMFONY_DOTENV_*`, because Dotenv overwrites any variable listed in
+     *   `SYMFONY_DOTENV_VARS`, which would undo the point of this method.
+     */
+    public static function importProcessEnvironment(): void
+    {
+        foreach (\getenv() as $name => $value) {
+            // PHP turns a numeric variable name into an int array key.
+            $name = (string) $name;
+            if (\str_starts_with($name, 'HTTP_') || \str_starts_with($name, 'SYMFONY_DOTENV_')) {
+                continue;
+            }
+            if (!isset($_ENV[$name]) && !isset($_SERVER[$name])) {
+                $_ENV[$name] = $value;
+            }
+        }
+    }
+
+    /**
      * The trimmed value of `$name`, or null when it is unset or blank.
      */
     public static function read(string $name): ?string

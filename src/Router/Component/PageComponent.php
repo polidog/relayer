@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Router\Component;
 
 use InvalidArgumentException;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\SessionStarter;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
@@ -173,7 +174,7 @@ abstract class PageComponent extends BaseComponent
 
     protected function getSession(string $key): mixed
     {
-        $this->ensureSession();
+        SessionStarter::resume();
 
         return $_SESSION[$key] ?? null;
     }
@@ -187,13 +188,6 @@ abstract class PageComponent extends BaseComponent
         $method = $this->resolveHandlerMethod($handler);
 
         return FormAction::create(static::class, $method, $args);
-    }
-
-    private function ensureSession(): void
-    {
-        if (\PHP_SESSION_NONE === \session_status()) {
-            \session_start();
-        }
     }
 
     /**
