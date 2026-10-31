@@ -79,6 +79,12 @@ final class PsxComponentRegistrar
             return true;
         }
 
+        // A usePHP update can change the compiler's output for unchanged
+        // sources; compile() records the version the cache was built with.
+        if (@\file_get_contents(self::versionPath($manifestPath)) !== (string) CompileCommand::CACHE_VERSION) {
+            return true;
+        }
+
         // The deferred-manifest sidecar is produced as part of the same
         // compile pass as manifest.php (use-php >= 0.4.0). A cache produced
         // by an older use-php version would have manifest.php but no
@@ -142,6 +148,16 @@ final class PsxComponentRegistrar
                 . "Run `vendor/bin/usephp compile {$componentsDir}` to see the underlying error.",
             );
         }
+
+        \file_put_contents(
+            self::versionPath(\rtrim($cacheDir, '/') . '/' . CompileCommand::MANIFEST_FILENAME),
+            (string) CompileCommand::CACHE_VERSION,
+        );
+    }
+
+    private static function versionPath(string $manifestPath): string
+    {
+        return $manifestPath . '.version';
     }
 
     private static function registerContainerAwareComponents(

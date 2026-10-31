@@ -1723,8 +1723,12 @@ final class AppRouter
             );
         }
 
+        // The version sidecar catches a usePHP update that changed the
+        // compiler's output while the source stayed as it was.
+        $versionPath = $compiledPath . '.version';
         $needsCompile = !\file_exists($compiledPath)
-            || @\filemtime($compiledPath) < @\filemtime($psxPath);
+            || @\filemtime($compiledPath) < @\filemtime($psxPath)
+            || @\file_get_contents($versionPath) !== (string) CompileCommand::CACHE_VERSION;
 
         if ($needsCompile) {
             $this->ensureCacheDir();
@@ -1738,6 +1742,7 @@ final class AppRouter
             }
             $compiled = $compiler->compile($source);
             $this->atomicWrite($compiledPath, $compiled);
+            $this->atomicWrite($versionPath, (string) CompileCommand::CACHE_VERSION);
         }
 
         return $compiledPath;
