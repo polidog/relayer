@@ -281,7 +281,7 @@ final class AuthFailureErrorPageTest extends TestCase
         require $this->workDir . '/page.php';
 
         // InjectorContainer exits on false, so this cannot go through run().
-        self::assertFalse(AuthGuard::enforce('App\AuthFailure\GuardedPage', $this->authenticator(null), '/'));
+        self::assertFalse(AuthGuard::enforce('App\AuthFailure\GuardedPage', $this->authenticator(null)));
     }
 
     /**
