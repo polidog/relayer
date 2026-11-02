@@ -2054,10 +2054,12 @@ ETag comparison follows the weak comparison rules of RFC 7232 §2.3.2, so
 `W/"v1"` and `"v1"` match each other and `*` matches any tag.
 
 A request with a session cookie or an `Authorization` header always renders and
-never gets a 304, and so does one whose session is already active when the
+never gets a 304, and so does one that has started a session by the time the
 policy is evaluated (a `middleware.php` that logged the visitor in from a
-remember-me cookie). A validator says nothing about who is asking, so a browser
-that cached the page anonymously would otherwise keep that copy after logging in.
+remember-me cookie), even if it closed the session again with
+`session_write_close()` before calling `$next()`. A validator says nothing
+about who is asking, so a browser that cached the page anonymously would
+otherwise keep that copy after logging in.
 
 A response to a request carrying an `Authorization` header is never left
 storable by a shared cache either: any policy other than `private` or `noStore`
@@ -2217,8 +2219,9 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   sets `session_cache_limiter('')` once one applies. Pages without a policy
   keep PHP's `no-store` when they use a session.
 - A response that used a session is never left storable by a shared cache. If
-  a session is active when headers go out, any policy other than `private` or
-  `noStore` is replaced with `Cache-Control: private, no-store`, so a logged-in
+  a session is active when headers go out, or this response issues the session
+  cookie of one that was started and already closed, any policy other than
+  `private` or `noStore` is replaced with `Cache-Control: private, no-store`, so a logged-in
   visitor gets an uncached copy of a `#[Cache(public: true)]` page whose layout
   reads `$auth->user()`, while anonymous visitors still get the declared
   policy. A page that wants browser caching for logged-in users declares

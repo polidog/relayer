@@ -165,11 +165,11 @@ final class CachePolicy
      * confirm the client's validator against, so such a request never matches.
      *
      * A request carrying a session cookie or credentials always renders, and
-     * so does one whose session is already active (a middleware that logged
+     * so does one that started a session of its own (a middleware that logged
      * the visitor in from a remember-me cookie, with no session cookie sent
-     * yet). The validator says nothing about who is asking, so a browser that
-     * cached the page anonymously and then logged in would otherwise be told
-     * to keep that copy.
+     * yet), even if it already closed it again. The validator says nothing
+     * about who is asking, so a browser that cached the page anonymously and
+     * then logged in would otherwise be told to keep that copy.
      *
      * Credentials on $request also withdraw a shared-cacheable policy, as
      * {@see emit()} does for the ones it finds in the globals: a middleware may
@@ -283,8 +283,39 @@ final class CachePolicy
         $sessionName = \session_name();
 
         return (false !== $sessionName && null !== $request->cookie($sessionName))
-            || \PHP_SESSION_ACTIVE === \session_status()
+            || self::sessionInUse()
             || self::carriesCredentials($request);
+    }
+
+    /**
+     * True if this request has a session: one that is active now, or one it
+     * started and already closed (`session_write_close()` before `$next()`, to
+     * release the lock). The latter is no longer visible in
+     * `session_status()`, but the session cookie it issued is still queued on
+     * this response, and only on this one, so it needs no per-request state of
+     * its own to forget in a worker.
+     */
+    private static function sessionInUse(): bool
+    {
+        return \PHP_SESSION_ACTIVE === \session_status() || self::sessionCookieQueued();
+    }
+
+    private static function sessionCookieQueued(): bool
+    {
+        $name = \session_name();
+        if (false === $name) {
+            return false;
+        }
+
+        foreach (\headers_list() as $header) {
+            if (0 === \strncasecmp($header, 'Set-Cookie:', 11)
+                && \str_starts_with(\ltrim(\substr($header, 11)), $name . '=')
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -328,10 +359,11 @@ final class CachePolicy
      * With the limiter off, nothing would stop a response that used a session
      * from going out as declared, and a CDN could then serve one visitor's
      * rendering (or their `Set-Cookie`) to everyone. A policy that allows
-     * shared storage is therefore withdrawn at the last moment if a session is
-     * active by the time headers go out. It has to be that late: layouts render
-     * after this runs, and the session may be started by code the framework
-     * does not own. A `private` / `no-store` policy is already safe and stays
+     * shared storage is therefore withdrawn at the last moment if the request
+     * has a session by the time headers go out, including one a middleware
+     * started and closed before the page ran. It has to be that late: layouts
+     * render after this runs, and the session may be started by code the
+     * framework does not own. A `private` / `no-store` policy is already safe and stays
      * as declared.
      */
     private static function reconcileWithSession(Cache $cache): void
@@ -343,7 +375,9 @@ final class CachePolicy
         if (\PHP_SESSION_NONE === \session_status()) {
             $previous = \session_cache_limiter('');
             self::$limiterBeforePolicy ??= false === $previous ? null : $previous;
-        } elseif ([] !== self::buildDirectives($cache)) {
+        }
+
+        if ([] !== self::buildDirectives($cache) && self::sessionInUse()) {
             // Started before this ran: the limiter's leftovers would contradict
             // the Cache-Control about to replace its own.
             \header_remove('Expires');
@@ -355,7 +389,7 @@ final class CachePolicy
         }
 
         \header_register_callback(static function (): void {
-            if (\PHP_SESSION_ACTIVE === \session_status()) {
+            if (self::sessionInUse()) {
                 \header(self::NOT_SHARED);
             }
         });

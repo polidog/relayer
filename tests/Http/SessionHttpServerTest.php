@@ -255,6 +255,40 @@ final class SessionHttpServerTest extends TestCase
     }
 
     #[DataProvider('publicEtagPages')]
+    public function testASessionAMiddlewareStartedAndClosedIsNeverAnsweredWithA304(string $path): void
+    {
+        // The session is no longer active when the page runs, but this
+        // response still issues the visitor a session cookie.
+        [$status, $headers] = $this->get($path, ['X-Test-Remember-Me-Closed: 1', 'If-None-Match: "v1"']);
+
+        self::assertSame(200, $status);
+        self::assertArrayHasKey('set-cookie', $headers);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testASessionAMiddlewareStartedAndClosedMakesARenderingNotSharedCacheable(string $path): void
+    {
+        [$status, $headers] = $this->get($path, ['X-Test-Remember-Me-Closed: 1']);
+
+        self::assertSame(200, $status);
+        self::assertArrayHasKey('set-cookie', $headers);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+        self::assertArrayNotHasKey('expires', $headers);
+        self::assertArrayNotHasKey('pragma', $headers);
+    }
+
+    public function testAPrivatePolicySurvivesASessionAMiddlewareStartedAndClosed(): void
+    {
+        [$status, $headers] = $this->get('/private-etag', ['X-Test-Remember-Me-Closed: 1']);
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, max-age=60'], $headers['cache-control'] ?? null);
+        self::assertArrayNotHasKey('expires', $headers);
+        self::assertArrayNotHasKey('pragma', $headers);
+    }
+
+    #[DataProvider('publicEtagPages')]
     public function testAnAuthorizationAMiddlewareAddedIsNotSharedCacheable(string $path): void
     {
         [$status, $headers] = $this->get($path, ['X-Test-Inject-Authorization: 1', 'If-None-Match: "v1"']);
@@ -472,6 +506,12 @@ final class SessionHttpServerTest extends TestCase
                 if (null !== $request->header('x-test-remember-me')) {
                     session_start();
                     $_SESSION['user'] = 'alice';
+                }
+                if (null !== $request->header('x-test-remember-me-closed')) {
+                    // Writes and releases the session lock before rendering.
+                    session_start();
+                    $_SESSION['user'] = 'alice';
+                    session_write_close();
                 }
                 if (null !== $request->header('x-test-inject-authorization')) {
                     $request = $request->withHeader('Authorization', 'Bearer injected');
