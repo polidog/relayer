@@ -40,6 +40,12 @@ final class NativeHttpServerTest extends TestCase
             \$root = dirname(__DIR__);
             Polidog\\Relayer\\Router\\AppRouter::create(\$root . '/src/Pages')
                 ->setNativeDispatcher(Polidog\\Relayer\\Router\\Native\\NativeDispatcher::forProject(\$root, false))
+                // Routes a request on the path in X-Guard-Rewrite, the way an
+                // app's guard may substitute a Request.
+                ->setGuard(static function (Polidog\\Relayer\\Http\\Request \$request, Closure \$next): void {
+                    \$rewrite = \$request->header('x-guard-rewrite');
+                    \$next(null === \$rewrite ? \$request : \$request->withPath(\$rewrite));
+                })
                 ->run();
             PHP);
         self::write('src/Pages/about/page.php', <<<'PHP'
@@ -322,6 +328,30 @@ final class NativeHttpServerTest extends TestCase
         }
     }
 
+    public function testAGuardRewriteNeverSendsGoAnUnparseableTarget(): void
+    {
+        // Go gets the client's target as REQUEST_URI whatever the request is
+        // routed on; `net/http/cgi` cannot parse these and would answer 500.
+        foreach (['/%zz', '/%zz?a=1', '/a%00b', '//about'] as $path) {
+            foreach (['/about', '/upload'] as $rewrite) {
+                [$status, $headers, $body] = $this->request('GET', $path, requestHeaders: ['X-Guard-Rewrite: ' . $rewrite]);
+
+                self::assertSame(404, $status, $path . ' -> ' . $rewrite);
+                self::assertArrayNotHasKey('x-proxied-by', $headers, $path . ' -> ' . $rewrite);
+                self::assertSame('{"error":"Not Found"}', $body, $path . ' -> ' . $rewrite);
+            }
+        }
+    }
+
+    public function testAGuardRewriteKeepsTheClientsTargetForGo(): void
+    {
+        [$status, $headers, $body] = $this->request('GET', '/old?q=%zz', requestHeaders: ['X-Guard-Rewrite: /about']);
+
+        self::assertSame(200, $status, $body);
+        self::assertStringContainsString('About page', $body);
+        self::assertSame('go', $headers['x-proxied-by'] ?? null);
+    }
+
     public function testAGoProxySeesEverySpellingOfAProtectedPath(): void
     {
         self::assertSame(403, $this->request('GET', '/gone')[0]);
@@ -360,14 +390,20 @@ final class NativeHttpServerTest extends TestCase
     }
 
     /**
+     * @param list<string> $requestHeaders
+     *
      * @return array{int, array<string, string>, string}
      */
-    private function request(string $method, string $path, string $body = '', string $contentType = ''): array
+    private function request(string $method, string $path, string $body = '', string $contentType = '', array $requestHeaders = []): array
     {
+        if ('' !== $contentType) {
+            $requestHeaders[] = 'Content-Type: ' . $contentType;
+        }
+
         $context = \stream_context_create(['http' => [
             'method' => $method,
             'content' => $body,
-            'header' => '' !== $contentType ? 'Content-Type: ' . $contentType : '',
+            'header' => $requestHeaders,
             'ignore_errors' => true,
             'timeout' => 10,
             'proxy' => '',

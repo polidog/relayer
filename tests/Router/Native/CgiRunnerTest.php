@@ -191,6 +191,31 @@ final class CgiRunnerTest extends TestCase
         (new CgiRunner())->run($this->workDir . '/does-not-exist', new Request('GET', '/'));
     }
 
+    public function testATargetGoCannotParseIsNeverHandedToTheHandler(): void
+    {
+        $marker = $this->workDir . '/ran';
+        $binary = $this->script("touch '{$marker}'\nprintf 'Content-Type: text/plain\\r\\n\\r\\nok'");
+
+        try {
+            (new CgiRunner())->run($binary, new Request('GET', '/%zz', uri: '/%zz')->withPath('/safe'));
+            self::fail('expected a NativeProcessException');
+        } catch (NativeProcessException $e) {
+            self::assertStringContainsString('request target "/%zz" cannot be passed', $e->getMessage());
+        }
+
+        self::assertFileDoesNotExist($marker);
+    }
+
+    public function testAnAbsoluteFormTargetIsPassedInOriginForm(): void
+    {
+        $request = new Request('GET', '/old', uri: 'http://example.com/old?q=1', host: 'example.com');
+
+        $env = (new CgiRunner())->environment($request, '');
+
+        self::assertSame('/old?q=1', $env['REQUEST_URI']);
+        self::assertSame('q=1', $env['QUERY_STRING']);
+    }
+
     private function script(string $body): string
     {
         $path = $this->workDir . '/handler-' . \bin2hex(\random_bytes(3));

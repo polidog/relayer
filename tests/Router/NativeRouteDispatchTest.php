@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router;
 
+use Closure;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Relayer;
@@ -279,8 +280,39 @@ final class NativeRouteDispatchTest extends TestCase
         self::assertSame(418, \http_response_code());
     }
 
+    public function testAGuardRewriteNeverSendsGoAnUnparseableTarget(): void
+    {
+        // Go gets the client's target as REQUEST_URI whatever the request is
+        // routed on, and `net/http/cgi` cannot parse `/%zz`.
+        $guard = static function (Request $request, Closure $next): void {
+            $next($request->withPath('/api/users/42'));
+        };
+
+        $out = $this->dispatch(self::$built, 'GET', '/%zz', guard: $guard);
+
+        self::assertSame(404, \http_response_code(), $out);
+        self::assertSame('{"error":"Not Found"}', $out);
+        self::assertSame([], $this->logger->records, 'Go was not started, so nothing failed');
+    }
+
+    public function testAGuardRewriteKeepsTheClientsTargetForGo(): void
+    {
+        $guard = static function (Request $request, Closure $next): void {
+            $next($request->withPath('/api/users/42'));
+        };
+
+        $out = $this->dispatch(self::$built, 'GET', '/old?page=%zz', guard: $guard);
+
+        self::assertSame('{"id":"42"}', $out);
+        self::assertSame(200, \http_response_code());
+        if (\function_exists('xdebug_get_headers')) {
+            self::assertContains('X-Query: page=%zz', \xdebug_get_headers());
+        }
+    }
+
     /**
-     * @param array<string, string> $headers
+     * @param array<string, string>                $headers
+     * @param null|Closure(Request, Closure): void $guard
      */
     private function dispatch(
         string $root,
@@ -289,6 +321,7 @@ final class NativeRouteDispatchTest extends TestCase
         array $headers = [],
         bool $dev = true,
         int $timeout = CgiRunner::DEFAULT_TIMEOUT,
+        ?Closure $guard = null,
     ): string {
         $this->clearRequestHeaders();
         $_SERVER['REQUEST_URI'] = $uri;
@@ -308,6 +341,9 @@ final class NativeRouteDispatchTest extends TestCase
         );
 
         $app = AppRouter::create($root . '/src/Pages')->setNativeDispatcher($dispatcher);
+        if (null !== $guard) {
+            $app->setGuard($guard);
+        }
 
         \ob_start();
 

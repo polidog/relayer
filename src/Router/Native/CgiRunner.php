@@ -68,7 +68,9 @@ final class CgiRunner
     {
         $env = \getenv();
 
-        $uri = $request->uri();
+        // The client's target, which is what Go builds `r.URL` from; the
+        // path the request is routed on goes in PATH_INFO.
+        $uri = CgiRequestUri::of($request) ?? $request->uri();
         $queryAt = \strpos($uri, '?');
         $query = false === $queryAt ? '' : \substr($uri, $queryAt + 1);
 
@@ -120,8 +122,11 @@ final class CgiRunner
      *
      * @param array<string, string> $extra additional environment variables (framework-owned)
      *
-     * @throws NativeProcessException on a start failure, non-zero exit,
-     *                                timeout, or non-CGI output
+     * @throws NativeProcessException on a request target Go cannot take
+     *                                ({@see CgiRequestUri} — callers answer
+     *                                404 before getting here), a start
+     *                                failure, non-zero exit, timeout, or
+     *                                non-CGI output
      * @throws RuntimeException       when `proc_open` is disabled in this PHP
      */
     public function run(string $binary, Request $request, array $extra = []): NativeRun
@@ -131,6 +136,10 @@ final class CgiRunner
                 'Native routes start the handler with proc_open(), which this PHP '
                 . 'has disabled (php.ini disable_functions). Enable it or drop the route.go.',
             );
+        }
+
+        if (null === CgiRequestUri::of($request)) {
+            throw new NativeProcessException(\sprintf('request target "%s" cannot be passed to a native handler', \addcslashes($request->uri(), "\0..\37\177\\\"")));
         }
 
         $body = MultipartBody::for($request);
