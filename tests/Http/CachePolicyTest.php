@@ -7,6 +7,7 @@ namespace Polidog\Relayer\Tests\Http;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Http\CachePolicy;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Tests\Fixtures\CachedPage;
 use Polidog\Relayer\Tests\Fixtures\DynamicEtagPage;
 use stdClass;
@@ -115,6 +116,55 @@ final class CachePolicyTest extends TestCase
         $_SERVER['HTTP_IF_NONE_MATCH'] = '"v1"';
 
         self::assertTrue(CachePolicy::isNotModified(new Cache(etag: 'v1')));
+    }
+
+    public function testASessionCookieIsNeverAnsweredWithA304(): void
+    {
+        // A browser that cached the anonymous page and then logged in would
+        // otherwise keep showing that copy: the ETag says nothing about who asks.
+        $request = new Request(
+            method: 'GET',
+            path: '/',
+            headers: ['if-none-match' => '"v1"'],
+            cookies: [(string) \session_name() => 'abc'],
+        );
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(etag: 'v1'), $request));
+    }
+
+    public function testASessionCookieAlsoDisablesTheLastModifiedShortcut(): void
+    {
+        $request = new Request(
+            method: 'GET',
+            path: '/',
+            headers: ['if-modified-since' => 'Wed, 01 Jan 2031 00:00:00 GMT'],
+            cookies: [(string) \session_name() => 'abc'],
+        );
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(lastModified: '2030-01-01T00:00:00Z'), $request));
+    }
+
+    public function testABearerTokenIsNeverAnsweredWithA304(): void
+    {
+        $request = new Request(
+            method: 'GET',
+            path: '/',
+            headers: ['if-none-match' => '"v1"', 'authorization' => 'Bearer abc'],
+        );
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(etag: 'v1'), $request));
+    }
+
+    public function testAnUnrelatedCookieKeepsThe304(): void
+    {
+        $request = new Request(
+            method: 'GET',
+            path: '/',
+            headers: ['if-none-match' => '"v1"'],
+            cookies: ['theme' => 'dark'],
+        );
+
+        self::assertTrue(CachePolicy::isNotModified(new Cache(etag: 'v1'), $request));
     }
 
     public function testIsNotModifiedMatchesWeakAgainstStrongPerRfc7232(): void

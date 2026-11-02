@@ -156,11 +156,20 @@ final class CachePolicy
      * Per RFC 7232 §3.3, `If-Modified-Since` is ignored whenever
      * `If-None-Match` is present. Without a server ETag there is nothing to
      * confirm the client's validator against, so such a request never matches.
+     *
+     * A request carrying a session cookie or credentials always renders. The
+     * validator says nothing about who is asking, so a browser that cached the
+     * page anonymously and then logged in would otherwise be told to keep that
+     * copy.
      */
     public static function isNotModified(Cache $cache, ?Request $request = null): bool
     {
         $request ??= Request::fromGlobals();
         if (!$request->isGet() && !$request->isMethod('HEAD')) {
+            return false;
+        }
+
+        if (self::identifiesAClient($request)) {
             return false;
         }
 
@@ -249,6 +258,14 @@ final class CachePolicy
         }
 
         return $quoted;
+    }
+
+    private static function identifiesAClient(Request $request): bool
+    {
+        $sessionName = \session_name();
+
+        return (false !== $sessionName && null !== $request->cookie($sessionName))
+            || null !== self::requestHeader($request, 'authorization');
     }
 
     /**
