@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Psx;
 
+use Polidog\Rosanna\Defer\DeclaresDefer;
 use Polidog\Rosanna\Defer\DeferredManifestCompiler;
 use Polidog\Rosanna\Defer\RosannaDefer;
 use Polidog\Rosanna\Psx\CompileCommand;
@@ -13,6 +14,7 @@ use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
 use SplFileInfo;
+use Throwable;
 
 /**
  * Compile reusable PSX components on demand and register the resulting
@@ -58,7 +60,15 @@ final class PsxComponentRegistrar
 
         $app->loadComponentManifest($manifestPath);
         if (null !== $container) {
-            $app->setArgumentResolver(new ContainerPsxArgumentResolver($container, $manifestPath));
+            // Replaces Rosanna's own loading of the same entries. A closure's
+            // Defer declaration is not read here, but the deferred manifest
+            // loaded above has already registered its endpoint.
+            foreach (PsxRenderer::readArrayFile($manifestPath) as $fqcn => $entry) {
+                $file = \is_array($entry) ? ($entry['file'] ?? null) : null;
+                if (\is_string($fqcn) && \is_string($file)) {
+                    $app->registerComponent($fqcn, new ContainerPsxComponent($fqcn, $file, $container));
+                }
+            }
         }
 
         return $manifestPath;
@@ -109,7 +119,7 @@ final class PsxComponentRegistrar
         \ob_start();
 
         try {
-            $exitCode = (new CompileCommand((new DeferredManifestCompiler())->compile(...)))->run(
+            $exitCode = (new CompileCommand(self::writeDeferredManifest(...)))->run(
                 [$componentsDir, '--cache=' . $cacheDir],
                 $componentsDir,
             );
@@ -128,6 +138,48 @@ final class PsxComponentRegistrar
             self::versionPath(\rtrim($cacheDir, '/') . '/' . PsxRenderer::MANIFEST_FILENAME),
             (string) CompileCommand::CACHE_VERSION,
         );
+    }
+
+    /**
+     * What {@see DeferredManifestCompiler::compile()} writes, for a compile
+     * that shares its process with rendering. That one requires each file to
+     * read its declaration, so rendering the file afterwards would run it twice.
+     *
+     * @param array<string, string> $components FQCN => source path
+     *
+     * @return list<string> the paths that changed
+     */
+    private static function writeDeferredManifest(array $components, string $cacheDir, string $buildId, bool $check): array
+    {
+        $entries = [];
+        foreach ($components as $fqcn => $source) {
+            $artifact = CompileCommand::cachePathFor($cacheDir, $source);
+            // Only files mentioning Defer are executed: this runs their top level.
+            if (!\str_contains((string) @\file_get_contents($artifact), 'Defer')) {
+                continue;
+            }
+
+            try {
+                $component = CompiledPsxFile::load($artifact);
+            } catch (Throwable $e) {
+                throw new RuntimeException("Error: failed to load {$artifact} ({$source}) while scanning for deferred components: {$e->getMessage()}", previous: $e);
+            }
+
+            $defer = $component instanceof DeclaresDefer ? $component->deferDeclaration() : null;
+            if (null === $defer) {
+                continue;
+            }
+            if (isset($entries[$defer->name])) {
+                throw new RuntimeException("Error: duplicate deferred component name '{$defer->name}'\n  registered by: {$entries[$defer->name]['component']}\n  also by:       {$fqcn}");
+            }
+            $entries[$defer->name] = ['component' => $fqcn, 'cacheControl' => $defer->cacheControl];
+        }
+        \ksort($entries, \SORT_STRING);
+
+        $path = $cacheDir . \DIRECTORY_SEPARATOR . PsxRenderer::DEFERRED_MANIFEST_FILENAME;
+        $manifest = '<?php return ' . \var_export([PsxRenderer::BUILD_ID_KEY => $buildId] + $entries, true) . ";\n";
+
+        return CompileCommand::writeIfChanged($path, $manifest, $check) ? [$path] : [];
     }
 
     private static function versionPath(string $manifestPath): string
