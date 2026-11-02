@@ -77,8 +77,7 @@ php -S 127.0.0.1:8000 -t public
 
 `composer install` (rather than `dump-autoload`) so the `App\` autoload
 *and* the publish scripts `init` just added both apply — the latter emits
-`public/rosanna-defer.js`, which the default document references on pages with a
-defer placeholder.
+`public/rosanna-defer.js`, which the default document references on every page.
 
 It is idempotent and non-destructive:
 
@@ -190,6 +189,22 @@ $router->setJsPath('/assets/app.js');
 $router->addCssPath('/assets/style.css');
 $router->run();
 ```
+
+The default document loads `rosanna-defer.js` on every page. To load it only on
+pages that rendered a defer placeholder, opt in:
+
+```php
+use Polidog\Relayer\Router\Document\HtmlDocument;
+
+$router = Relayer::boot(__DIR__ . '/..');
+$router->setDocument(HtmlDocument::create()->loadClientScriptOnlyWithDefer());
+$router->run();
+```
+
+A page without a placeholder then has no `window.Rosanna`. A logout form on such
+a page cannot call `clearDeferCache()`, so a user-specific `localCache` fragment
+survives logout and a shared device can show it to the next user. Use the option
+only if no page without a placeholder needs `window.Rosanna`.
 
 ## Environment Variables
 
@@ -2840,11 +2855,6 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
    gitignored `.env.local`; other checkouts need `echo APP_ENV=dev > .env.local`.
 7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
    that relies on it.
-8. `rosanna-defer.js` now loads only on pages with a defer placeholder. If a page
-   without one calls `window.Rosanna` (such as `clearDeferCache()` on a logout
-   form), call `HtmlDocument::alwaysIncludeClientScript()`. Otherwise a
-   `localCache` fragment is not cleared, and a shared device can show the
-   previous user's content.
 
 Forms rendered by the previous version stop working when you deploy, because
 the field names and the session keys changed. Purge your CDN at deploy time so

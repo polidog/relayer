@@ -10,7 +10,7 @@ final class HtmlDocument implements DocumentInterface
     private string $title = 'Relayer App';
     private string $jsPath = '/rosanna-defer.js';
     private bool $clientScriptNeeded = true;
-    private bool $alwaysIncludeClientScript = false;
+    private bool $loadClientScriptOnlyWithDefer = false;
 
     /** @var array<int, string> */
     private array $cssPaths = [];
@@ -69,19 +69,23 @@ final class HtmlDocument implements DocumentInterface
     }
 
     /**
-     * Load the client script on every page, not only on those with a defer
-     * placeholder. For an app that calls `window.Rosanna` from a page without
-     * one, such as `clearDeferCache()` on a logout form.
+     * Load the client script only on pages that rendered a defer placeholder.
+     *
+     * Opt-in because such a page has no `window.Rosanna`: a logout form on it
+     * cannot call `clearDeferCache()`, so a user-specific `localCache` fragment
+     * survives logout and a shared device can show it to the next user. Use
+     * this only if no page without a placeholder needs `window.Rosanna`.
      */
-    public function alwaysIncludeClientScript(): self
+    public function loadClientScriptOnlyWithDefer(): self
     {
-        $this->alwaysIncludeClientScript = true;
+        $this->loadClientScriptOnlyWithDefer = true;
 
         return $this;
     }
 
     /**
-     * @internal the page renderer reports whether this page has a placeholder
+     * @internal the page renderer reports whether this page has a placeholder,
+     *           which matters only under {@see loadClientScriptOnlyWithDefer()}
      */
     public function setClientScriptNeeded(bool $needed): self
     {
@@ -200,7 +204,7 @@ HTML;
 
     private function getClientScriptTag(): string
     {
-        if (!$this->clientScriptNeeded && !$this->alwaysIncludeClientScript) {
+        if ($this->loadClientScriptOnlyWithDefer && !$this->clientScriptNeeded) {
             return '';
         }
 

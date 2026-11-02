@@ -9,8 +9,9 @@ use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\Document\HtmlDocument;
 
 /**
- * The defer client script is only for pages with something to fetch, and a
- * page is otherwise exactly what its layouts and page rendered.
+ * Every page loads the defer client script unless the app opts in to loading
+ * it only with a placeholder, and a page is otherwise exactly what its layouts
+ * and page rendered.
  */
 final class ClientScriptDispatchTest extends TestCase
 {
@@ -49,30 +50,42 @@ final class ClientScriptDispatchTest extends TestCase
         unset($_SERVER['REQUEST_METHOD'], $_SERVER['REQUEST_URI']);
     }
 
-    public function testAPageWithoutADeferLoadsNoClientScript(): void
+    public function testAPageWithoutADeferLoadsTheClientScriptByDefault(): void
     {
-        self::assertStringNotContainsString(self::CLIENT_SCRIPT, $this->dispatch(AppRouter::create($this->workDir), '/plain'));
+        self::assertStringContainsString(self::CLIENT_SCRIPT, $this->dispatch(AppRouter::create($this->workDir), '/plain'));
     }
 
-    public function testAPageWithADeferLoadsTheClientScript(): void
+    public function testAPageWithADeferLoadsTheClientScriptByDefault(): void
     {
         self::assertStringContainsString(self::CLIENT_SCRIPT, $this->dispatch(AppRouter::create($this->workDir), '/deferred'));
     }
 
-    public function testTheNeedForTheScriptIsDecidedPerRequest(): void
+    public function testTheOptInLeavesTheScriptOffAPageWithoutADefer(): void
     {
-        $router = AppRouter::create($this->workDir);
-
-        $this->dispatch($router, '/deferred');
-
-        self::assertStringNotContainsString(self::CLIENT_SCRIPT, $this->dispatch($router, '/plain'));
+        self::assertStringNotContainsString(self::CLIENT_SCRIPT, $this->dispatch($this->onDemandRouter(), '/plain'));
     }
 
-    public function testAnAppCanAskForTheScriptOnEveryPage(): void
+    public function testTheOptInLoadsTheScriptOnAPageWithADefer(): void
     {
-        $router = AppRouter::create($this->workDir)->setDocument(HtmlDocument::create()->alwaysIncludeClientScript());
+        self::assertStringContainsString(self::CLIENT_SCRIPT, $this->dispatch($this->onDemandRouter(), '/deferred'));
+    }
 
-        self::assertStringContainsString(self::CLIENT_SCRIPT, $this->dispatch($router, '/plain'));
+    public function testTheNeedForTheScriptIsDecidedPerRequest(): void
+    {
+        $router = $this->onDemandRouter();
+
+        $this->dispatch($router, '/deferred');
+        self::assertStringNotContainsString(self::CLIENT_SCRIPT, $this->dispatch($router, '/plain'));
+        self::assertStringContainsString(self::CLIENT_SCRIPT, $this->dispatch($router, '/deferred'));
+    }
+
+    public function testARequestDoesNotChangeTheConfiguredDocument(): void
+    {
+        $document = HtmlDocument::create()->loadClientScriptOnlyWithDefer();
+
+        $this->dispatch(AppRouter::create($this->workDir)->setDocument($document), '/plain');
+
+        self::assertStringContainsString(self::CLIENT_SCRIPT, $document->render('<p>unreported</p>'));
     }
 
     public function testThePageIsNotWrappedInAFrameworkElement(): void
@@ -81,6 +94,11 @@ final class ClientScriptDispatchTest extends TestCase
 
         self::assertStringNotContainsString('data-rosanna=', $html);
         self::assertStringContainsString("<body>\n    <p>plain</p>", $html);
+    }
+
+    private function onDemandRouter(): AppRouter
+    {
+        return AppRouter::create($this->workDir)->setDocument(HtmlDocument::create()->loadClientScriptOnlyWithDefer());
     }
 
     private function dispatch(AppRouter $router, string $path): string
