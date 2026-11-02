@@ -2042,8 +2042,19 @@ ETag comparison follows the weak comparison rules of RFC 7232 §2.3.2, so
 `W/"v1"` and `"v1"` match each other and `*` matches any tag.
 
 A request with a session cookie or an `Authorization` header always renders and
-never gets a 304. A validator says nothing about who is asking, so a browser that
-cached the page anonymously would otherwise keep that copy after logging in.
+never gets a 304, and so does one whose session is already active when the
+policy is evaluated (a `middleware.php` that logged the visitor in from a
+remember-me cookie). A validator says nothing about who is asking, so a browser
+that cached the page anonymously would otherwise keep that copy after logging in.
+
+A response to a request carrying an `Authorization` header is never left
+storable by a shared cache either: any policy other than `private` or `noStore`
+goes out as `Cache-Control: private, no-store`, on class and function pages
+alike. This also covers a header a middleware added with
+`$request->withHeader()` and the `REDIRECT_HTTP_AUTHORIZATION` copy Apache/CGI
+hands over, which `Request` reads as `authorization` when the real header is
+missing. A session cookie on its own does not count: a page that never touches
+the session keeps its declared policy (see the session note below).
 
 ### Example
 

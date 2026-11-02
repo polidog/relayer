@@ -16,6 +16,9 @@ use ReflectionClass;
  */
 final class CachePolicy
 {
+    /** What a policy that would let a shared cache store the response is replaced with. */
+    private const string NOT_SHARED = 'Cache-Control: private, no-store';
+
     private static ?string $limiterBeforePolicy = null;
 
     /**
@@ -128,6 +131,10 @@ final class CachePolicy
         if (null !== $lastModified) {
             \header('Last-Modified: ' . \gmdate('D, d M Y H:i:s', $lastModified) . ' GMT');
         }
+
+        if (self::carriesCredentials(Request::fromGlobals())) {
+            self::withdrawFromSharedCaches($cache);
+        }
     }
 
     /**
@@ -157,14 +164,25 @@ final class CachePolicy
      * `If-None-Match` is present. Without a server ETag there is nothing to
      * confirm the client's validator against, so such a request never matches.
      *
-     * A request carrying a session cookie or credentials always renders. The
-     * validator says nothing about who is asking, so a browser that cached the
-     * page anonymously and then logged in would otherwise be told to keep that
-     * copy.
+     * A request carrying a session cookie or credentials always renders, and
+     * so does one whose session is already active (a middleware that logged
+     * the visitor in from a remember-me cookie, with no session cookie sent
+     * yet). The validator says nothing about who is asking, so a browser that
+     * cached the page anonymously and then logged in would otherwise be told
+     * to keep that copy.
+     *
+     * Credentials on $request also withdraw a shared-cacheable policy, as
+     * {@see emit()} does for the ones it finds in the globals: a middleware may
+     * have added them with {@see Request::withHeader()}, which only the
+     * routed request carries.
      */
     public static function isNotModified(Cache $cache, ?Request $request = null): bool
     {
         $request ??= Request::fromGlobals();
+        if (self::carriesCredentials($request)) {
+            self::withdrawFromSharedCaches($cache);
+        }
+
         if (!$request->isGet() && !$request->isMethod('HEAD')) {
             return false;
         }
@@ -265,7 +283,38 @@ final class CachePolicy
         $sessionName = \session_name();
 
         return (false !== $sessionName && null !== $request->cookie($sessionName))
-            || null !== self::requestHeader($request, 'authorization');
+            || \PHP_SESSION_ACTIVE === \session_status()
+            || self::carriesCredentials($request);
+    }
+
+    /**
+     * Only `Authorization` counts. A session cookie alone does not: a page
+     * that never touches the session renders the same for everyone, and one
+     * that does is caught when the session becomes active
+     * ({@see reconcileWithSession()}).
+     */
+    private static function carriesCredentials(Request $request): bool
+    {
+        return null !== self::requestHeader($request, 'authorization');
+    }
+
+    /**
+     * A response rendered for credentials may be personal, so a policy that
+     * lets a shared cache store it is replaced; `private` / `noStore` already
+     * keep it out of one and stay as declared.
+     */
+    private static function withdrawFromSharedCaches(Cache $cache): void
+    {
+        if (\headers_sent() || !self::allowsSharedStorage($cache)) {
+            return;
+        }
+
+        \header(self::NOT_SHARED);
+    }
+
+    private static function allowsSharedStorage(Cache $cache): bool
+    {
+        return !$cache->noStore && !($cache->private && !$cache->public);
     }
 
     /**
@@ -301,13 +350,13 @@ final class CachePolicy
             \header_remove('Pragma');
         }
 
-        if ($cache->noStore || ($cache->private && !$cache->public)) {
+        if (!self::allowsSharedStorage($cache)) {
             return;
         }
 
         \header_register_callback(static function (): void {
             if (\PHP_SESSION_ACTIVE === \session_status()) {
-                \header('Cache-Control: private, no-store');
+                \header(self::NOT_SHARED);
             }
         });
     }

@@ -20,6 +20,7 @@ final class CachePolicyTest extends TestCase
             $_SERVER['REQUEST_METHOD'],
             $_SERVER['HTTP_IF_NONE_MATCH'],
             $_SERVER['HTTP_IF_MODIFIED_SINCE'],
+            $_SERVER['REDIRECT_HTTP_AUTHORIZATION'],
         );
     }
 
@@ -153,6 +154,15 @@ final class CachePolicyTest extends TestCase
         );
 
         self::assertFalse(CachePolicy::isNotModified(new Cache(etag: 'v1'), $request));
+    }
+
+    public function testARedirectHttpAuthorizationIsNeverAnsweredWithA304(): void
+    {
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['HTTP_IF_NONE_MATCH'] = '"v1"';
+        $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] = 'Bearer abc';
+
+        self::assertFalse(CachePolicy::isNotModified(new Cache(etag: 'v1')));
     }
 
     public function testAnUnrelatedCookieKeepsThe304(): void

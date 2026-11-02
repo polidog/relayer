@@ -64,6 +64,46 @@ final class RequestTest extends TestCase
         self::assertSame('42', $req->header('content-length'));
     }
 
+    public function testFromGlobalsReadsRedirectHttpAuthorizationAsTheAuthorizationHeader(): void
+    {
+        // Apache/CGI + mod_rewrite passes the header on under this key only.
+        $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer abc'];
+
+        self::assertSame('Bearer abc', Request::fromGlobals()->header('Authorization'));
+    }
+
+    public function testARealAuthorizationHeaderWinsOverTheRedirectCopy(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/',
+            'HTTP_AUTHORIZATION' => 'Bearer real',
+            'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer redirect',
+        ];
+
+        self::assertSame('Bearer real', Request::fromGlobals()->header('authorization'));
+    }
+
+    public function testAnEmptyAuthorizationHeaderFallsBackToTheRedirectCopy(): void
+    {
+        // The same order ServerAuthorizationHeader reads them in.
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/',
+            'HTTP_AUTHORIZATION' => '',
+            'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer redirect',
+        ];
+
+        self::assertSame('Bearer redirect', Request::fromGlobals()->header('authorization'));
+    }
+
+    public function testAnEmptyRedirectCopyAddsNoAuthorizationHeader(): void
+    {
+        $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'REDIRECT_HTTP_AUTHORIZATION' => ''];
+
+        self::assertNull(Request::fromGlobals()->header('authorization'));
+    }
+
     public function testPostAndQueryReturnNullForMissingOrNonString(): void
     {
         $req = new Request(

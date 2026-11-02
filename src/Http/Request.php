@@ -75,6 +75,14 @@ final readonly class Request
                 $headers[$headerName] = $_SERVER[$serverKey];
             }
         }
+        // Apache/CGI + mod_rewrite drops `Authorization` unless a rewrite
+        // rule passes it on, which then arrives under this key. Read in the
+        // same order as ServerAuthorizationHeader, so whatever authenticated
+        // the request is what everything else (CachePolicy) sees too.
+        $redirected = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null;
+        if (\is_string($redirected) && '' !== $redirected && '' === ($headers['authorization'] ?? '')) {
+            $headers['authorization'] = $redirected;
+        }
 
         $cookies = [];
         foreach ($_COOKIE as $key => $value) {

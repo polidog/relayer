@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Http;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -205,6 +206,81 @@ final class SessionHttpServerTest extends TestCase
         self::assertStringContainsString('no-store', $cacheControl);
     }
 
+    #[DataProvider('publicEtagPages')]
+    public function testAnAnonymousRevalidationStillGetsA304WithTheDeclaredPolicy(string $path): void
+    {
+        [$status, $headers] = $this->get($path, ['If-None-Match: "v1"']);
+
+        self::assertSame(304, $status);
+        self::assertSame(['public, max-age=60'], $headers['cache-control'] ?? null);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testABearerRenderingOfAPublicPageIsNotSharedCacheable(string $path): void
+    {
+        [$status, $headers] = $this->get($path, ['Authorization: Bearer abc']);
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testABearerRevalidationRendersAndIsNotSharedCacheable(string $path): void
+    {
+        [$status, $headers] = $this->get($path, ['Authorization: Bearer abc', 'If-None-Match: "v1"']);
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testAnAuthorizationOnlyReachingPhpAsRedirectHttpAuthorizationIsSeen(string $path): void
+    {
+        // Apache/CGI + mod_rewrite: the header arrives as REDIRECT_HTTP_AUTHORIZATION only.
+        [$status, $headers] = $this->get($path, ['X-Test-Redirect-Authorization: Bearer abc', 'If-None-Match: "v1"']);
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testASessionAMiddlewareStartedIsNeverAnsweredWithA304(string $path): void
+    {
+        // A remember-me login: no session cookie or Authorization came in.
+        [$status, $headers] = $this->get($path, ['X-Test-Remember-Me: 1', 'If-None-Match: "v1"']);
+
+        self::assertSame(200, $status);
+        self::assertArrayHasKey('set-cookie', $headers);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testAnAuthorizationAMiddlewareAddedIsNotSharedCacheable(string $path): void
+    {
+        [$status, $headers] = $this->get($path, ['X-Test-Inject-Authorization: 1', 'If-None-Match: "v1"']);
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function publicEtagPages(): iterable
+    {
+        yield 'class page (#[Cache])' => ['/etag-class'];
+
+        yield 'function page ($ctx->cache())' => ['/etag-function'];
+    }
+
+    public function testAPrivatePolicyStaysAsDeclaredForABearerRequest(): void
+    {
+        [$status, $headers] = $this->get('/private-etag', ['Authorization: Bearer abc']);
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, max-age=60'], $headers['cache-control'] ?? null);
+    }
+
     private function login(): string
     {
         return \explode(';', $this->lastSessionCookie($this->get('/login')[1]))[0];
@@ -289,6 +365,9 @@ final class SessionHttpServerTest extends TestCase
             require '{$autoload}';
             if (isset(\$_SERVER['HTTP_X_TEST_TLS'])) {
                 \$_SERVER['HTTPS'] = 'on';
+            }
+            if (isset(\$_SERVER['HTTP_X_TEST_REDIRECT_AUTHORIZATION'])) {
+                \$_SERVER['REDIRECT_HTTP_AUTHORIZATION'] = \$_SERVER['HTTP_X_TEST_REDIRECT_AUTHORIZATION'];
             }
             if (isset(\$_SERVER['HTTP_X_TEST_APP_PARAMS'])) {
                 session_set_cookie_params(['samesite' => 'Strict', 'path' => '/login', 'lifetime' => 3600]);
@@ -383,6 +462,42 @@ final class SessionHttpServerTest extends TestCase
             'GuardedPrivatePage',
             "#[\\Polidog\\Relayer\\Auth\\Auth]\n#[\\Polidog\\Relayer\\Http\\Cache(maxAge: 60, private: true)]",
             "return new Element('p', [], ['guarded']);",
+        ));
+        // Stands in for a remember-me login and for a proxy middleware
+        // that turns some other credential into an Authorization header.
+        self::write('src/Pages/middleware.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Http\Request;
+            return static function (Request $request, Closure $next): void {
+                if (null !== $request->header('x-test-remember-me')) {
+                    session_start();
+                    $_SESSION['user'] = 'alice';
+                }
+                if (null !== $request->header('x-test-inject-authorization')) {
+                    $request = $request->withHeader('Authorization', 'Bearer injected');
+                }
+                $next($request);
+            };
+            PHP);
+        self::write('src/Pages/etag-class/page.php', self::page(
+            'EtagClassPage',
+            "#[\\Polidog\\Relayer\\Http\\Cache(maxAge: 60, public: true, etag: 'v1')]",
+            "return new Element('p', [], ['etag']);",
+        ));
+        self::write('src/Pages/etag-function/page.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Http\Cache;
+            use Polidog\Relayer\Router\Component\PageContext;
+            use Polidog\Rosanna\Runtime\Element;
+            return static function (PageContext $ctx): Closure {
+                $ctx->cache(new Cache(maxAge: 60, public: true, etag: 'v1'));
+                return static fn (): Element => new Element('p', [], ['etag']);
+            };
+            PHP);
+        self::write('src/Pages/private-etag/page.php', self::page(
+            'PrivateEtagPage',
+            "#[\\Polidog\\Relayer\\Http\\Cache(maxAge: 60, private: true, etag: 'v1')]",
+            "return new Element('p', [], ['private etag']);",
         ));
         self::write('src/Pages/no-policy/layout.php', self::readsAuthLayout('NoPolicyLayout'));
         self::write('src/Pages/no-policy/page.php', self::page(
