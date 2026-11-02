@@ -59,16 +59,20 @@ final class PsxComponentRegistrar
         }
 
         $app->loadComponentManifest($manifestPath);
-        if (null !== $container) {
-            // Replaces Rosanna's own loading of the same entries. A closure's
-            // Defer declaration is not read here, but the deferred manifest
-            // loaded above has already registered its endpoint.
-            foreach (PsxRenderer::readArrayFile($manifestPath) as $fqcn => $entry) {
-                $file = \is_array($entry) ? ($entry['file'] ?? null) : null;
-                if (\is_string($fqcn) && \is_string($file)) {
-                    $app->registerComponent($fqcn, new ContainerPsxComponent($fqcn, $file, $container));
-                }
+        // Replaces Rosanna's own loading of the same entries, which requires
+        // each file again: a compile above may have executed it already, and a
+        // worker boots more than once. A closure's Defer declaration is not
+        // read here, but the deferred manifest loaded above has already
+        // registered its endpoint.
+        foreach (PsxRenderer::readArrayFile($manifestPath) as $fqcn => $entry) {
+            $file = \is_array($entry) ? ($entry['file'] ?? null) : null;
+            if (!\is_string($fqcn) || !\is_string($file)) {
+                continue;
             }
+            $parameters = $entry['parameters'] ?? [];
+            $app->registerComponent($fqcn, null !== $container
+                ? new ContainerPsxComponent($fqcn, $file, $container)
+                : new ManifestPsxComponent($fqcn, $file, \is_array($parameters) ? $parameters : []));
         }
 
         return $manifestPath;

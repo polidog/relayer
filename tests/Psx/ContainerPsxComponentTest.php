@@ -232,6 +232,26 @@ final class ContainerPsxComponentTest extends TestCase
         self::assertSame('<p>new</p>', $this->renderFqcn($this->configure(), 'App\Components\Thing'));
     }
 
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testARecompiledFileDeclaringAFunctionKeepsServingTheOldOneInTheProcess(): void
+    {
+        $errorLog = $this->workDir . '/error.log';
+        \ini_set('error_log', $errorLog);
+
+        self::assertSame('<p>old</p>', $this->renderFile('function helper(): string { return "old"; }
+            return fn(array $props) => <p>{helper()}</p>;'));
+
+        \file_put_contents(
+            $this->workDir . '/Components/Thing.psx',
+            "<?php\nnamespace App\\Components;\nfunction helper(): string { return \"new\"; }\nreturn fn(array \$props) => <p>{helper()}!</p>;\n",
+        );
+        \touch($this->workDir . '/Components/Thing.psx', \time() + 10);
+
+        self::assertSame('<p>old</p>', $this->renderFqcn($this->configure(), 'App\Components\Thing'));
+        self::assertStringContainsString('App\Components\helper', (string) \file_get_contents($errorLog));
+    }
+
     public function testACompiledFileHasNoClassScope(): void
     {
         $html = $this->renderFile('$probe = function (): void {};
