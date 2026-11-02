@@ -174,39 +174,14 @@ final class RequestDispatch
             // The route dispatch — match + page/API handling + the
             // Auth/Redirect translation. `$next` for the middleware.
             $dispatch = function (Request $request): void {
-                // A middleware MAY pass a different Request to $next; honor
-                // it so the documented contract is real — route by its path
-                // and let the rest of dispatch see it as the current request
-                // (the API dispatcher reads its method).
-                $request = $this->resolveLocale($request);
-                $this->request = $request;
-                // resolveLocale() is idempotent and early-returns for an
-                // already-resolved Request, so it will NOT have refreshed the
-                // container's injected Request when middleware substituted one
-                // (e.g. `$next($request->withPath(...))`, which preserves
-                // locale()). Push it here so pages injected with `Request`
-                // observe the actually-routed request, not the pre-middleware
-                // one. Idempotent no-op on the normal path.
-                if ($this->env->container instanceof InjectorContainer) {
-                    $this->env->container->setCurrentRequest($request);
-                }
-
-                $match = $this->env->router->match($request->path);
-
-                if (null === $match) {
-                    $this->handleNotFound();
-
-                    return;
-                }
-
+                // A short-circuit (304 to a conditional GET, a class page's
+                // #[Auth] redirect) is a complete response, not a failure,
+                // so it ends here: a middleware wrapping `$next()` in
+                // `catch (\Throwable)` would otherwise turn it into an error
+                // response. The middleware's code after `$next()` still runs.
                 try {
-                    $this->handleMatch($match);
-                } catch (AuthorizationException $exception) {
-                    $this->handleAuthorizationFailure($exception);
-                } catch (RedirectException $exception) {
-                    $this->handleRedirect($exception);
-                } catch (HttpException $exception) {
-                    $this->handleHttpException($exception);
+                    $this->dispatchRoute($request);
+                } catch (StopRequest) {
                 }
             };
 
@@ -222,18 +197,60 @@ final class RequestDispatch
                 $dispatch($request);
             }
         } catch (StopRequest) {
-            // A short-circuit branch (304 answer to a conditional GET, PRG
-            // redirect after a state action) already produced the complete
-            // response. Nothing to add — fall through to the cleanup in
-            // `finally` and return normally, so a worker keeps running.
+            // A short-circuit outside the route dispatch (one the middleware
+            // itself raised) already produced the complete response. Nothing
+            // to add — fall through to the cleanup in `finally` and return
+            // normally, so a worker keeps running.
         } catch (Throwable $exception) {
             // Outside the middleware, so a `middleware.php` wrapping `$next()`
             // in its own try/catch keeps seeing the exception first. A page's
             // or route's control-flow exceptions never get here: the dispatch
-            // closure translates them and StopRequest is caught above.
+            // closure translates them and stops StopRequest itself.
             $this->errors->respondToUncaught($exception, $this->request, $outputLevel, true);
         } finally {
             $this->end();
+        }
+    }
+
+    /**
+     * The body of the `$next` closure: route the (possibly substituted)
+     * Request and translate a page's control-flow exceptions into responses.
+     */
+    private function dispatchRoute(Request $request): void
+    {
+        // A middleware MAY pass a different Request to $next; honor
+        // it so the documented contract is real — route by its path
+        // and let the rest of dispatch see it as the current request
+        // (the API dispatcher reads its method).
+        $request = $this->resolveLocale($request);
+        $this->request = $request;
+        // resolveLocale() is idempotent and early-returns for an
+        // already-resolved Request, so it will NOT have refreshed the
+        // container's injected Request when middleware substituted one
+        // (e.g. `$next($request->withPath(...))`, which preserves
+        // locale()). Push it here so pages injected with `Request`
+        // observe the actually-routed request, not the pre-middleware
+        // one. Idempotent no-op on the normal path.
+        if ($this->env->container instanceof InjectorContainer) {
+            $this->env->container->setCurrentRequest($request);
+        }
+
+        $match = $this->env->router->match($request->path);
+
+        if (null === $match) {
+            $this->handleNotFound();
+
+            return;
+        }
+
+        try {
+            $this->handleMatch($match);
+        } catch (AuthorizationException $exception) {
+            $this->handleAuthorizationFailure($exception);
+        } catch (RedirectException $exception) {
+            $this->handleRedirect($exception);
+        } catch (HttpException $exception) {
+            $this->handleHttpException($exception);
         }
     }
 
