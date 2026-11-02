@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Psx;
 
 use Closure;
-use Polidog\UsePhp\Psx\CompileCommand;
-use Polidog\UsePhp\Runtime\Element;
-use Polidog\UsePhp\Runtime\FunctionComponent;
-use Polidog\UsePhp\UsePHP;
+use Polidog\Rosanna\Defer\Deferred;
+use Polidog\Rosanna\Defer\DeferredManifestCompiler;
+use Polidog\Rosanna\Defer\RosannaDefer;
+use Polidog\Rosanna\Psx\CompileCommand;
+use Polidog\Rosanna\Runtime\Element;
+use Polidog\Rosanna\Runtime\PsxRenderer;
 use Psr\Container\ContainerInterface;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
@@ -20,7 +22,7 @@ use SplFileInfo;
 
 /**
  * Compile reusable PSX components on demand and register the resulting
- * manifest with a {@see UsePHP} instance.
+ * manifest with a {@see RosannaDefer} instance.
  *
  * The .psx files inside `src/Components/` (or whatever directory the caller
  * passes) are PascalCase by convention so {@see CompileCommand} adds them to
@@ -36,7 +38,7 @@ final class PsxComponentRegistrar
      * for apps that don't use defer / shared PSX components yet.
      */
     public static function configure(
-        UsePHP $app,
+        RosannaDefer $app,
         string $componentsDir,
         string $cacheDir,
         bool $autoCompile,
@@ -46,7 +48,7 @@ final class PsxComponentRegistrar
             return null;
         }
 
-        $manifestPath = \rtrim($cacheDir, '/') . '/' . CompileCommand::MANIFEST_FILENAME;
+        $manifestPath = \rtrim($cacheDir, '/') . '/' . PsxRenderer::MANIFEST_FILENAME;
 
         if ($autoCompile && self::needsCompile($componentsDir, $manifestPath)) {
             self::compile($componentsDir, $cacheDir);
@@ -56,7 +58,7 @@ final class PsxComponentRegistrar
             // Either compile failed silently or autoCompile is off and no
             // pre-compiled manifest exists. Either way there's nothing to
             // register — surfacing this is the user's responsibility (deploy
-            // step runs `vendor/bin/usephp compile`).
+            // step runs `vendor/bin/rosanna-defer compile`).
             return null;
         }
 
@@ -79,22 +81,17 @@ final class PsxComponentRegistrar
             return true;
         }
 
-        // A usePHP update can change the compiler's output for unchanged
+        // A Rosanna update can change the compiler's output for unchanged
         // sources; compile() records the version the cache was built with.
         if (@\file_get_contents(self::versionPath($manifestPath)) !== (string) CompileCommand::CACHE_VERSION) {
             return true;
         }
 
-        // The deferred-manifest sidecar is produced as part of the same
-        // compile pass as manifest.php (use-php >= 0.4.0). A cache produced
-        // by an older use-php version would have manifest.php but no
-        // deferred-manifest.php — recompile in that case so deferred
-        // endpoints actually register. The sidecar's legitimate absence is
-        // "no .psx file declares a Defer"; detect that by scanning sources
-        // for the marker rather than guessing.
-        $deferredManifestPath = \dirname($manifestPath) . '/' . CompileCommand::DEFERRED_MANIFEST_FILENAME;
-        $hasDeferredManifest = \file_exists($deferredManifestPath);
-        $sawDeferSource = false;
+        // Written by every compile, even with no deferred component in it, and
+        // RosannaDefer refuses a manifest without it.
+        if (!\file_exists(\dirname($manifestPath) . '/' . PsxRenderer::DEFERRED_MANIFEST_FILENAME)) {
+            return true;
+        }
 
         $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($componentsDir));
         foreach ($iterator as $file) {
@@ -102,25 +99,9 @@ final class PsxComponentRegistrar
                 continue;
             }
             $path = $file->getPathname();
-            if (!\str_ends_with($path, '.psx')) {
-                continue;
-            }
-            if (@\filemtime($path) > $manifestMtime) {
+            if (\str_ends_with($path, '.psx') && @\filemtime($path) > $manifestMtime) {
                 return true;
             }
-            if (!$hasDeferredManifest && !$sawDeferSource) {
-                $contents = @\file_get_contents($path);
-                if (false !== $contents && \str_contains($contents, 'Defer')) {
-                    $sawDeferSource = true;
-                }
-            }
-        }
-
-        // We have manifest.php newer than every .psx, but a source declares
-        // a Defer and the sidecar is missing — only possible if the cache
-        // predates use-php 0.4.0's sidecar emission. Force a recompile.
-        if (!$hasDeferredManifest && $sawDeferSource) {
-            return true;
         }
 
         return false;
@@ -134,7 +115,7 @@ final class PsxComponentRegistrar
         \ob_start();
 
         try {
-            $exitCode = (new CompileCommand())->run(
+            $exitCode = (new CompileCommand((new DeferredManifestCompiler())->compile(...)))->run(
                 [$componentsDir, '--cache=' . $cacheDir],
                 $componentsDir,
             );
@@ -145,12 +126,12 @@ final class PsxComponentRegistrar
         if (0 !== $exitCode) {
             throw new RuntimeException(
                 "PSX component compile failed (exit {$exitCode}). "
-                . "Run `vendor/bin/usephp compile {$componentsDir}` to see the underlying error.",
+                . "Run `vendor/bin/rosanna-defer compile {$componentsDir}` to see the underlying error.",
             );
         }
 
         \file_put_contents(
-            self::versionPath(\rtrim($cacheDir, '/') . '/' . CompileCommand::MANIFEST_FILENAME),
+            self::versionPath(\rtrim($cacheDir, '/') . '/' . PsxRenderer::MANIFEST_FILENAME),
             (string) CompileCommand::CACHE_VERSION,
         );
     }
@@ -161,7 +142,7 @@ final class PsxComponentRegistrar
     }
 
     private static function registerContainerAwareComponents(
-        UsePHP $app,
+        RosannaDefer $app,
         string $manifestPath,
         ContainerInterface $container,
     ): void {
@@ -171,6 +152,10 @@ final class PsxComponentRegistrar
         }
 
         foreach ($manifest as $fqcn => $entry) {
+            if (PsxRenderer::BUILD_ID_KEY === $fqcn) {
+                continue;
+            }
+
             if (!\is_string($fqcn)) {
                 throw new RuntimeException("PSX manifest entries must use FQCN string keys: {$manifestPath}");
             }
@@ -180,7 +165,9 @@ final class PsxComponentRegistrar
                 $filePath = $entry;
             } elseif (\is_array($entry) && isset($entry['file']) && \is_string($entry['file'])) {
                 $filePath = $entry['file'];
-                $parameterMetadata = $app->getPsxComponentParameterMetadata($fqcn);
+
+                /** @var null|list<array<string, mixed>> $parameterMetadata */
+                $parameterMetadata = $entry['parameters'] ?? null;
             } else {
                 throw new RuntimeException("PSX manifest entry for {$fqcn} is malformed in {$manifestPath}");
             }
@@ -210,7 +197,7 @@ final class PsxComponentRegistrar
                 if (!\is_file($compiledPath) || !\is_readable($compiledPath)) {
                     throw new RuntimeException(
                         "Compiled PSX file not found: {$compiledPath}. "
-                        . 'Run `vendor/bin/usephp compile` to regenerate.',
+                        . 'Run `vendor/bin/rosanna-defer compile` to regenerate.',
                     );
                 }
 
@@ -219,8 +206,8 @@ final class PsxComponentRegistrar
                     throw new RuntimeException("PSX file did not return a callable: {$compiledPath}");
                 }
 
-                if ($loaded instanceof FunctionComponent) {
-                    $loaded = self::wrapFunctionComponent($loaded, $container, $parameterMetadata);
+                if ($loaded instanceof Deferred) {
+                    $loaded = self::wrapDeferred($loaded, $container, $parameterMetadata);
                 }
 
                 $invoke = self::makeContainerAwareInvoker($loaded, $container, $compiledPath, $parameterMetadata);
@@ -233,23 +220,16 @@ final class PsxComponentRegistrar
     /**
      * @param null|list<array<string, mixed>> $parameterMetadata
      */
-    private static function wrapFunctionComponent(
-        FunctionComponent $component,
+    private static function wrapDeferred(
+        Deferred $component,
         ContainerInterface $container,
         ?array $parameterMetadata,
-    ): FunctionComponent {
-        $inner = $component->inner;
-        $invokeInner = self::makeContainerAwareInvoker($inner, $container, 'FunctionComponent::inner', $parameterMetadata);
+    ): Deferred {
+        $invokeInner = self::makeContainerAwareInvoker($component->inner, $container, 'Deferred::inner', $parameterMetadata);
 
-        /** @param array<string, mixed> $props */
-        $wrappedInner = static function (array $props) use ($invokeInner): Element {
-            return $invokeInner($props);
-        };
-
-        return new FunctionComponent(
-            $wrappedInner,
-            $component->key,
-            $component->storageType,
+        return new Deferred(
+            /** @param array<string, mixed> $props */
+            static fn (array $props): Element => $invokeInner($props),
             $component->defer,
         );
     }

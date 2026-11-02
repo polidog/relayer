@@ -22,7 +22,7 @@ use Polidog\Relayer\Router\Component\PageContext;
  *   $token = Action::register($this->action);  // component has the action
  *
  * Both return a signed token (prefixed base64 JSON + HMAC) that identifies the
- * page and action name; embed it in a hidden `_usephp_action` field so the
+ * page and action name; embed it in a hidden `_rosanna_action` field so the
  * framework can dispatch on POST.
  *
  * Delegates to PageContext::current()->action() — only valid during a

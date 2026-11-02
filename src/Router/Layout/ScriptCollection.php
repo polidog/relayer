@@ -8,7 +8,7 @@ use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Router\Document\Script;
-use Polidog\UsePhp\Component\ComponentInterface;
+use Polidog\Rosanna\Runtime\Renderable;
 
 /**
  * Gathers `<script>` declarations from a page + its layout stack in
@@ -28,7 +28,7 @@ final class ScriptCollection
     /**
      * @return array<int, Script>
      */
-    public static function gather(ComponentInterface|FunctionPage $page, LayoutStack $layouts): array
+    public static function gather(FunctionPage|Renderable $page, LayoutStack $layouts): array
     {
         $scripts = [];
 

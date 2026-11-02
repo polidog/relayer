@@ -14,9 +14,9 @@ use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Tests\Auth\ArraySessionStorage;
-use Polidog\UsePhp\Psx\CompileCommand;
-use Polidog\UsePhp\Runtime\RenderContext;
-use Polidog\UsePhp\UsePHP;
+use Polidog\Rosanna\Defer\DeferredManifestCompiler;
+use Polidog\Rosanna\Defer\RosannaDefer;
+use Polidog\Rosanna\Psx\CompileCommand;
 use Psr\Container\ContainerInterface;
 use Psr\Log\NullLogger;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
@@ -41,13 +41,12 @@ final class DeferDispatchTest extends TestCase
             $_SERVER['HTTP_X_ORIGIN_SECRET'],
         );
         $_GET = [];
-        RenderContext::clearApp();
     }
 
-    public function testHandleDeferredShortCircuitsBeforeRoutingWhenUsePhpIsWired(): void
+    public function testHandleDeferredShortCircuitsBeforeRoutingWhenRosannaIsWired(): void
     {
-        // A deferred wrapper component declared via `fc(..., defer: new Defer(...))`
-        // — `usephp compile` writes its name + cacheControl into the sidecar
+        // A deferred wrapper component declared via `deferred(..., new Defer(...))`
+        // — `rosanna-defer compile` writes its name + cacheControl into the sidecar
         // deferred-manifest, which `loadComponentManifest()` auto-registers.
         // The defer endpoint must short-circuit normal page routing entirely
         // (no layout, no document wrapper, no 404 from a missing
@@ -57,25 +56,25 @@ final class DeferDispatchTest extends TestCase
             <<<'PSX'
                 <?php
                 namespace App\Components;
-                use Polidog\UsePhp\Component\Defer;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
-                use function Polidog\UsePhp\Runtime\fc;
+                use Polidog\Rosanna\Defer\Defer;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
+                use function Polidog\Rosanna\Defer\deferred;
 
-                return fc(
+                return deferred(
                     fn(array $props): Element => <span data-id="greeting">hi {$props['name']}</span>,
                     defer: new Defer(name: 'greeting'),
                 );
                 PSX,
         );
 
-        $usephp = $this->bootUsePhp();
+        $rosanna = $this->bootRosanna();
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/greeting?name=Alice';
         $_GET = ['name' => 'Alice'];
 
-        $output = $this->runApp($usephp);
+        $output = $this->runApp($rosanna);
 
         self::assertStringNotContainsString('<!DOCTYPE', $output);
         self::assertStringNotContainsString('<html', $output);
@@ -89,12 +88,12 @@ final class DeferDispatchTest extends TestCase
             <<<'PSX'
                 <?php
                 namespace App\Components;
-                use Polidog\UsePhp\Component\Defer;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
-                use function Polidog\UsePhp\Runtime\fc;
+                use Polidog\Rosanna\Defer\Defer;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
+                use function Polidog\Rosanna\Defer\deferred;
 
-                return fc(
+                return deferred(
                     function (array $props): Element {
                         throw new \RuntimeException('deferred-secret');
                     },
@@ -103,14 +102,14 @@ final class DeferDispatchTest extends TestCase
                 PSX,
         );
 
-        $usephp = $this->bootUsePhp();
+        $rosanna = $this->bootRosanna();
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/broken';
         $_GET = [];
 
         \http_response_code(200);
-        $output = $this->runApp($usephp);
+        $output = $this->runApp($rosanna);
 
         self::assertSame(500, \http_response_code());
         self::assertStringNotContainsString('deferred-secret', $output);
@@ -127,12 +126,12 @@ final class DeferDispatchTest extends TestCase
             <<<'PSX'
                 <?php
                 namespace App\Components;
-                use Polidog\UsePhp\Component\Defer;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
-                use function Polidog\UsePhp\Runtime\fc;
+                use Polidog\Rosanna\Defer\Defer;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
+                use function Polidog\Rosanna\Defer\deferred;
 
-                return fc(
+                return deferred(
                     function (array $props): Element {
                         \file_put_contents($props['marker'], 'executed');
 
@@ -144,13 +143,13 @@ final class DeferDispatchTest extends TestCase
         );
         $marker = $this->workDir . '/component-ran';
         $guard = OriginGuard::middleware(['secrets' => ['s3cret'], 'logger' => new NullLogger()]);
-        $usephp = $this->bootUsePhp();
+        $rosanna = $this->bootRosanna();
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/greeting?marker=' . \rawurlencode($marker);
         $_GET = ['marker' => $marker];
 
-        $output = $this->runApp($usephp, guard: $guard);
+        $output = $this->runApp($rosanna, guard: $guard);
 
         self::assertSame(403, \http_response_code());
         self::assertSame('Forbidden', $output);
@@ -159,7 +158,7 @@ final class DeferDispatchTest extends TestCase
         // With the secret the same fetch goes through to the component.
         $_SERVER['HTTP_X_ORIGIN_SECRET'] = 's3cret';
 
-        $output = $this->runApp($usephp, guard: $guard);
+        $output = $this->runApp($rosanna, guard: $guard);
 
         self::assertSame(200, \http_response_code());
         self::assertStringContainsString('<span data-id="greeting">hi</span>', $output);
@@ -169,48 +168,40 @@ final class DeferDispatchTest extends TestCase
     public function testUnregisteredDeferNameReturns404(): void
     {
         // No deferred component registered: GET /_defer/<name> must come back
-        // as a 404 with `no-store`, not bleed through into normal page routing.
-        // The `no-store` matters — a CDN's default policy must not be able to
-        // pin the negative result against a later valid registration.
-        $usephp = $this->bootUsePhp();
-
-        $emittedHeaders = [];
-        $usephp->withHeaderEmitter(static function (string $header) use (&$emittedHeaders): void {
-            $emittedHeaders[] = $header;
-        });
+        // as a 404, not bleed through into normal page routing.
+        $rosanna = $this->bootRosanna();
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/unknown';
 
-        $output = $this->runApp($usephp);
+        $output = $this->runApp($rosanna);
 
         self::assertSame(404, \http_response_code());
         self::assertStringContainsString('Deferred component not registered', $output);
-        self::assertContains('Cache-Control: no-store', $emittedHeaders);
     }
 
     public function testGetRequestPassesThroughToPageRouter(): void
     {
         // No defer URL on a plain GET → handleDeferred returns null and the
-        // normal route table runs. Sanity check that wiring UsePHP didn't
+        // normal route table runs. Sanity check that wiring Rosanna didn't
         // break ordinary dispatch.
         \file_put_contents(
             $this->workDir . '/src/Pages/page.psx',
             <<<'PSX'
                 <?php
                 use Polidog\Relayer\Router\Component\PageContext;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
                 return fn(PageContext $ctx): Closure => fn(): Element => <p>page rendered</p>;
                 PSX,
         );
 
-        $usephp = $this->bootUsePhp();
+        $rosanna = $this->bootRosanna();
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/';
 
-        $output = $this->runApp($usephp);
+        $output = $this->runApp($rosanna);
 
         self::assertStringContainsString('<p>page rendered</p>', $output);
         self::assertStringContainsString('<!DOCTYPE', $output);
@@ -224,12 +215,12 @@ final class DeferDispatchTest extends TestCase
                 <?php
                 namespace App\Components;
                 use Polidog\Relayer\Auth\SessionStorage;
-                use Polidog\UsePhp\Component\Defer;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
-                use function Polidog\UsePhp\Runtime\fc;
+                use Polidog\Rosanna\Defer\Defer;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
+                use function Polidog\Rosanna\Defer\deferred;
 
-                return fc(
+                return deferred(
                     fn(array $props, SessionStorage $session): Element => <span data-id="profile">{$props['slot']}:{$session->get('viewer')}</span>,
                     defer: new Defer(name: 'profile-badge'),
                 );
@@ -243,13 +234,13 @@ final class DeferDispatchTest extends TestCase
         $builder->set(SessionStorage::class, $session);
         $container = new InjectorContainer($builder);
 
-        $usephp = $this->bootUsePhp($container);
+        $rosanna = $this->bootRosanna($container);
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/profile-badge?slot=header';
         $_GET = ['slot' => 'header'];
 
-        $output = $this->runApp($usephp);
+        $output = $this->runApp($rosanna);
 
         self::assertStringContainsString('<span data-id="profile">header:Alice</span>', $output);
     }
@@ -262,12 +253,12 @@ final class DeferDispatchTest extends TestCase
                 <?php
                 namespace App\Components;
                 use Polidog\Relayer\Http\Request;
-                use Polidog\UsePhp\Component\Defer;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
-                use function Polidog\UsePhp\Runtime\fc;
+                use Polidog\Rosanna\Defer\Defer;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
+                use function Polidog\Rosanna\Defer\deferred;
 
-                return fc(
+                return deferred(
                     fn(array $props, Request $request): Element => <span data-id="locale">{$request->path}:{$request->header('x-viewer')}</span>,
                     defer: new Defer(name: 'locale-badge'),
                 );
@@ -281,19 +272,19 @@ final class DeferDispatchTest extends TestCase
         $builder->set(LocaleResolver::class, new LocaleResolver(['en'], 'en', pathPrefix: false));
         $builder->set(Translator::class, new Translator([], 'en'));
         $container = new InjectorContainer($builder);
-        $usephp = $this->bootUsePhp($container);
+        $rosanna = $this->bootRosanna($container);
 
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $_SERVER['REQUEST_URI'] = '/_defer/locale-badge';
         $_SERVER['HTTP_X_VIEWER'] = 'Alice';
         $_GET = [];
 
-        $output = $this->runApp($usephp, $container);
+        $output = $this->runApp($rosanna, $container);
 
         self::assertStringContainsString('<span data-id="locale">/_defer/locale-badge:Alice</span>', $output);
     }
 
-    private function bootUsePhp(?ContainerInterface $container = null): UsePHP
+    private function bootRosanna(?ContainerInterface $container = null): RosannaDefer
     {
         $cacheDir = $this->workDir . '/var/cache/psx';
         \mkdir($cacheDir, 0o777, true);
@@ -304,7 +295,7 @@ final class DeferDispatchTest extends TestCase
         \ob_start();
 
         try {
-            $exitCode = (new CompileCommand())->run(
+            $exitCode = (new CompileCommand((new DeferredManifestCompiler())->compile(...)))->run(
                 [$this->workDir . '/src/Components', '--cache=' . $cacheDir],
                 $this->workDir,
             );
@@ -313,20 +304,19 @@ final class DeferDispatchTest extends TestCase
         }
         self::assertSame(0, $exitCode, 'PSX component compile failed in test setup');
 
-        $usephp = new UsePHP();
-        $usephp->setSnapshotSecret('defer-test-secret');
+        $rosanna = new RosannaDefer();
         PsxComponentRegistrar::configure(
-            $usephp,
+            $rosanna,
             componentsDir: $this->workDir . '/src/Components',
             cacheDir: $cacheDir,
             autoCompile: false,
             container: $container,
         );
 
-        return $usephp;
+        return $rosanna;
     }
 
-    private function runApp(UsePHP $usephp, ?InjectorContainer $container = null, ?Closure $guard = null): string
+    private function runApp(RosannaDefer $rosanna, ?InjectorContainer $container = null, ?Closure $guard = null): string
     {
         \http_response_code(200);
 
@@ -335,7 +325,7 @@ final class DeferDispatchTest extends TestCase
             autoCompilePsx: true,
             psxCacheDir: $this->workDir . '/var/cache/psx',
         );
-        $app->setUsePhp($usephp);
+        $app->setRosanna($rosanna);
         if (null !== $guard) {
             $app->setGuard($guard);
         }

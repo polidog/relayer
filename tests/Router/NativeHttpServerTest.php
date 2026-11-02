@@ -44,7 +44,7 @@ final class NativeHttpServerTest extends TestCase
             PHP);
         self::write('src/Pages/about/page.php', <<<'PHP'
             <?php
-            return static fn () => new Polidog\UsePhp\Runtime\Element('h1', [], ['About page']);
+            return static fn () => new Polidog\Rosanna\Runtime\Element('h1', [], ['About page']);
             PHP);
         self::write('src/Pages/middleware.go', <<<'GO'
             package main
@@ -96,8 +96,8 @@ final class NativeHttpServerTest extends TestCase
             }
             GO);
 
-        self::write('src/Pages/gone/page.php', "<?php\nreturn static fn () => new Polidog\\UsePhp\\Runtime\\Element('p', [], ['gone page']);\n");
-        self::write('src/Pages/管理/page.php', "<?php\nreturn static fn () => new Polidog\\UsePhp\\Runtime\\Element('p', [], ['kanri page']);\n");
+        self::write('src/Pages/gone/page.php', "<?php\nreturn static fn () => new Polidog\\Rosanna\\Runtime\\Element('p', [], ['gone page']);\n");
+        self::write('src/Pages/管理/page.php', "<?php\nreturn static fn () => new Polidog\\Rosanna\\Runtime\\Element('p', [], ['kanri page']);\n");
         self::write('src/Pages/記事/[slug]/route.go', <<<'GO'
             package main
 

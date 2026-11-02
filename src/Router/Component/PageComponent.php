@@ -10,13 +10,13 @@ use Polidog\Relayer\Http\SessionStarter;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
-use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\Rosanna\Runtime\Renderable;
 use ReflectionMethod;
 
-abstract class PageComponent extends BaseComponent
+abstract class PageComponent implements Renderable
 {
-    private const FORM_ACTION_FIELD = '_usephp_action';
-    private const FORM_CSRF_FIELD = '_usephp_csrf';
+    private const FORM_ACTION_FIELD = '_rosanna_action';
+    private const FORM_CSRF_FIELD = '_rosanna_csrf';
 
     /** @var array<string, string> */
     private array $params = [];
@@ -146,7 +146,7 @@ abstract class PageComponent extends BaseComponent
 
     /**
      * Declare an external script for this page. Emitted at the end of
-     * `<body>`, after the main usePHP bundle, in call order. src-only by
+     * `<body>`, after the main client script, in call order. src-only by
      * design — for inline JS use the document's `addHeadHtml()`.
      */
     protected function addJs(

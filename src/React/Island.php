@@ -7,7 +7,7 @@ namespace Polidog\Relayer\React;
 use InvalidArgumentException;
 use JsonException;
 use Polidog\Relayer\Http\Response;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use RuntimeException;
 use stdClass;
 
@@ -50,7 +50,7 @@ final class Island
      * Slashes and unicode are left unescaped to match
      * {@see Response} — the framework's other JSON
      * surface — so payloads read the same everywhere. The value lands in a
-     * `data-*` attribute, which usePHP's
+     * `data-*` attribute, which Rosanna's
      * renderer escapes with `htmlspecialchars(ENT_QUOTES)`; the browser
      * reverses that before `JSON.parse`, so the round-trip is exact and
      * the attribute can't break out of its context.
@@ -113,7 +113,7 @@ final class Island
      *
      * It is deliberately React-agnostic (React lives in *your* bundle, not
      * here) and dependency-free. It finds `[data-react-island]` nodes —
-     * including ones swapped in later by usePHP defer/partial, via a
+     * including ones swapped in later by a Rosanna defer, via a
      * MutationObserver — parses their props, and hands each to the mount
      * function your bundle registered for that name. Registration and DOM
      * order are interchangeable: whichever happens second mounts the rest.
@@ -175,7 +175,7 @@ final class Island
                 hydrate(document);
               }
 
-              // usePHP defer/partial swaps server HTML in after load; pick up
+              // A Rosanna defer swaps server HTML in after load; pick up
               // any islands that arrive with it.
               new MutationObserver(function (mutations) {
                 for (var i = 0; i < mutations.length; i++) {

@@ -2,6 +2,6 @@
 /composer.lock
 /var/
 /src/var/
-/public/usephp.js
+/public/rosanna-defer.js
 /.env.local
 /.env.*.local

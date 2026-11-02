@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Components;
 
-use Polidog\UsePhp\Component\Defer;
+use Polidog\Rosanna\Defer\Defer;
 
-use function Polidog\UsePhp\Runtime\fc;
+use function Polidog\Rosanna\Defer\deferred;
 
-// Deferred wrapper around ExpensiveStats, demonstrating use-php 0.5.0's opt-in
+// Deferred wrapper around ExpensiveStats, demonstrating the opt-in
 // client-side localStorage (L2) cache.
 //
 // `localCache: true` is SAFE here only because ExpensiveStats is not
@@ -20,25 +20,24 @@ use function Polidog\UsePhp\Runtime\fc;
 // boundary. Here neither is necessary.
 //
 // No `cacheControl` is set, and that is the point worth seeing: the defer
-// endpoint actually responds with `no-store` (use-php backs component state
-// with a PHP session, and PHP's session cache limiter forces no-store), yet
-// the fragment is STILL persisted in localStorage on reload. usephp.js's L2
+// endpoint responds with `private, max-age=0`, yet the fragment is STILL
+// persisted in localStorage on reload. rosanna-defer.js's L2
 // tier is gated solely by the `localCache` flag (surfaced as a bare
-// `data-usephp-defer-cache` attribute) and never inspects the Cache-Control
+// `data-rosanna-defer-cache` attribute) and never inspects the Cache-Control
 // header — server/CDN caching and the client localStorage tier are
 // deliberately separate decisions. The L2 entry has no time expiry; it lives
-// until usephp.js's DEFER_CACHE_VERSION is bumped or
-// `window.usePHP.clearDeferCache()` is called.
+// until rosanna-defer.js's DEFER_CACHE_VERSION is bumped or
+// `window.Rosanna.clearDeferCache()` is called.
 //
-// `reloadable: true` (use-php 0.6.0) is the orthogonal escape hatch: the
-// wrapper is kept in the DOM and tagged `data-usephp-defer-name`, so the
-// home page's "Refresh" button (`data-usephp-reload-defer="expensive-stats"`)
+// `reloadable: true` is the orthogonal escape hatch: the
+// wrapper is kept in the DOM and tagged `data-rosanna-defer-name`, so the
+// home page's "Refresh" button (`data-rosanna-reload-defer="expensive-stats"`)
 // can bust BOTH cache tiers for this URL and re-fetch in place. Reload is
 // independent of localCache: localCache decides persistence, reloadable
 // decides whether an explicit refresh is even possible. Together they make
 // the timestamp observable both ways — frozen across reloads (L2), bumped
 // on demand (reload).
-return fc(
+return deferred(
     fn (array $props) => <ExpensiveStats />,
-    defer: new Defer(name: 'expensive-stats', localCache: true, reloadable: true),
+    new Defer(name: 'expensive-stats', localCache: true, reloadable: true),
 );

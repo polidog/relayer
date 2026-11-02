@@ -6,8 +6,8 @@ namespace App\Pages\Users;
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Router\Component\PageComponent;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 final class UserDetailPage extends PageComponent
 {

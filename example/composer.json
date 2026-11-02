@@ -25,10 +25,10 @@
     "prefer-stable": true,
     "scripts": {
         "post-install-cmd": [
-            "Polidog\\UsePhp\\Installer\\AssetInstaller::publish"
+            "Polidog\\Rosanna\\Defer\\Installer\\AssetInstaller::publish"
         ],
         "post-update-cmd": [
-            "Polidog\\UsePhp\\Installer\\AssetInstaller::publish"
+            "Polidog\\Rosanna\\Defer\\Installer\\AssetInstaller::publish"
         ]
     }
 }

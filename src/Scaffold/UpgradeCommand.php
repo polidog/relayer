@@ -326,6 +326,7 @@ final class UpgradeCommand
         $relayer['structure_version'] = $target;
         $extra['relayer'] = $relayer;
         $composer['extra'] = $extra;
+        $composer = InitCommand::replaceLegacyPublisher($composer, $write);
 
         try {
             $encoded = \json_encode(
@@ -365,7 +366,7 @@ final class UpgradeCommand
         // `relayer init` is idempotent + additive (it never advances the
         // marker we just stamped), so re-running it backfills exactly
         // those without side effects; `composer install` then applies
-        // the autoload and runs the usePHP asset publisher. A project
+        // the autoload and runs the rosanna-defer asset publisher. A project
         // that already has them sees `init` report nothing to change.
         $write('  relayer init       # backfill composer scripts/autoload if missing (idempotent)');
         $write('  composer install');

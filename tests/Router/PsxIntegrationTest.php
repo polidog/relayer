@@ -10,8 +10,8 @@ use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Tests\Fixtures\PlainService;
 use Polidog\Relayer\Tests\Fixtures\ServiceWithDependency;
-use Polidog\UsePhp\Psx\CompileCommand;
-use Polidog\UsePhp\Psx\Compiler;
+use Polidog\Rosanna\Psx\CompileCommand;
+use Polidog\Rosanna\Psx\Compiler;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use RuntimeException;
@@ -52,8 +52,8 @@ final class PsxIntegrationTest extends TestCase
             $this->workDir . '/page.psx',
             <<<'PSX'
             <?php
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
             use Polidog\Relayer\Router\Component\PageContext;
 
             return function (PageContext $ctx) {
@@ -100,8 +100,8 @@ final class PsxIntegrationTest extends TestCase
             <?php
             declare(strict_types=1);
 
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
             use Polidog\Relayer\Router\Component\PageContext;
 
             return function (PageContext $ctx) {
@@ -137,7 +137,7 @@ final class PsxIntegrationTest extends TestCase
 
     public function testStaleCacheIsTreatedAsAuthoritativeWithoutAutoCompile(): void
     {
-        // Production-mode contract: once `usephp compile` produced a cache
+        // Production-mode contract: once `rosanna-defer compile` produced a cache
         // file, the runtime treats it as the source of truth. Editing the
         // .psx after deploy without re-running compile must NOT silently
         // pick up the new source — it must keep serving the cache.
@@ -145,8 +145,8 @@ final class PsxIntegrationTest extends TestCase
             $this->workDir . '/page.psx',
             <<<'PSX'
             <?php
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
             use Polidog\Relayer\Router\Component\PageContext;
 
             return function (PageContext $ctx) {
@@ -191,8 +191,8 @@ final class PsxIntegrationTest extends TestCase
             $this->workDir . '/page.psx',
             <<<'PSX'
             <?php
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
             use Polidog\Relayer\Router\Component\PageContext;
 
             return function (PageContext $ctx) {
@@ -232,8 +232,8 @@ final class PsxIntegrationTest extends TestCase
                 <?php
                 use Polidog\Relayer\Http\Cache;
                 use Polidog\Relayer\Router\Component\PageContext;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return function (PageContext $ctx): Closure {
                     $ctx->cache(new Cache(maxAge: 3600, public: true, etag: 'feed-v1'));
@@ -269,8 +269,8 @@ final class PsxIntegrationTest extends TestCase
                 use Polidog\Relayer\Router\Component\PageContext;
                 use Polidog\Relayer\Tests\Fixtures\PlainService;
                 use Polidog\Relayer\Tests\Fixtures\ServiceWithDependency;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return function (
                     PageContext $ctx,
@@ -338,8 +338,8 @@ final class PsxIntegrationTest extends TestCase
             <<<'PSX'
                 <?php
                 use Polidog\Relayer\Http\Request;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return function (Request $req): Closure {
                     $email = $req->post('email') ?? 'none';
@@ -397,8 +397,8 @@ final class PsxIntegrationTest extends TestCase
             $this->workDir . '/page.psx',
             <<<'PSX'
                 <?php
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return fn(): Element => <h1>Single-closure works</h1>;
                 PSX,
@@ -419,8 +419,8 @@ final class PsxIntegrationTest extends TestCase
             <<<'PSX'
                 <?php
                 use Polidog\Relayer\Router\Component\PageContext;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return function (PageContext $ctx): Closure {
                     return function (): Element {

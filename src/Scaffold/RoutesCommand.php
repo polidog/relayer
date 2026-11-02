@@ -89,8 +89,8 @@ final class RoutesCommand
                     $methods = \implode(',', $declared);
                 }
             } else {
-                // Pages dispatch GET (render) and POST (server actions /
-                // useState), so both reach a page.
+                // Pages dispatch GET (render) and POST (server actions),
+                // so both reach a page.
                 $methods = 'GET,POST';
             }
 

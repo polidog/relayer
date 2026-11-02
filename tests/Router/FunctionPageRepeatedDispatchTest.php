@@ -41,7 +41,7 @@ final class FunctionPageRepeatedDispatchTest extends TestCase
             <<<'PHP'
 <?php
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx): Closure {
     return fn (): Element => new Element('p', ['data-hit' => 'yes'], ['hello']);

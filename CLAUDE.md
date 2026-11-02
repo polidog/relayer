@@ -5,7 +5,8 @@ Guidance for working in this repository.
 ## What this is
 
 `polidog/relayer` — an opinionated framework **library** on top of
-[`polidog/use-php`](https://github.com/polidog/usePHP): a Next.js App
+[`polidog/rosanna`](https://github.com/polidog/rosanna) and
+[`polidog/rosanna-defer`](https://github.com/polidog/rosanna-defer): a Next.js App
 Router-style file-based router, Symfony DependencyInjection wiring, dotenv,
 HTTP cache, session + bearer-token auth, Zod-style validation, and a dev
 profiler, all behind a single `Relayer::boot()` entrypoint. This repo *is*

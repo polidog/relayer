@@ -198,7 +198,7 @@ final class UncaughtExceptionHttpServerTest extends TestCase
             PHP);
         self::write($root, 'src/Pages/ok/page.php', <<<'PHP'
             <?php
-            return static fn () => static fn () => new Polidog\UsePhp\Runtime\Element('p', [], ['fine']);
+            return static fn () => static fn () => new Polidog\Rosanna\Runtime\Element('p', [], ['fine']);
             PHP);
         self::write($root, 'src/Pages/cached-boom/page.php', <<<PHP
             <?php
@@ -246,7 +246,7 @@ final class UncaughtExceptionHttpServerTest extends TestCase
             <?php
             namespace App\Pages;
             use Polidog\Relayer\Router\Component\ErrorPageComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
             final class ErrorPage extends ErrorPageComponent
             {
                 public function render(): Element

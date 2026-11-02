@@ -8,7 +8,7 @@ use Polidog\Relayer\Http\SessionStarter;
 
 final class CsrfToken
 {
-    private const SESSION_KEY = 'usephp:csrf';
+    private const SESSION_KEY = 'rosanna:csrf';
 
     public static function getToken(): string
     {

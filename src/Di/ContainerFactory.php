@@ -66,7 +66,7 @@ use Throwable;
  * defaults, the dev-only `Traceable*` decorators, the conditional
  * Auth/Database wiring, convention config loading, autowire-by-default)
  * while {@see Relayer::boot()} owns *the boot sequence* (env, router,
- * usePHP). It reads no global boot state — the dev/prod decision is
+ * Rosanna). It reads no global boot state — the dev/prod decision is
  * resolved once by `boot()` and threaded in as `$isDev`.
  *
  * Layering, lowest-precedence first (later wins): framework defaults →

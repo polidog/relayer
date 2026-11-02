@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace App\Components;
 
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 // Pure, side-effect-free placeholder rendered in the initial (cacheable)
 // response while UserHeader is being fetched.

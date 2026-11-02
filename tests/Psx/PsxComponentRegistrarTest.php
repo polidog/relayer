@@ -7,9 +7,11 @@ namespace Polidog\Relayer\Tests\Psx;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Tests\Fixtures\PlainService;
-use Polidog\UsePhp\Psx\CompileCommand;
-use Polidog\UsePhp\Runtime\Element;
-use Polidog\UsePhp\UsePHP;
+use Polidog\Rosanna\Defer\RosannaDefer;
+use Polidog\Rosanna\Psx\CompileCommand;
+use Polidog\Rosanna\Runtime\Element;
+use Polidog\Rosanna\Runtime\PsxRenderer;
+use Polidog\Rosanna\Runtime\RenderContext;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use RuntimeException;
@@ -31,7 +33,7 @@ final class PsxComponentRegistrarTest extends TestCase
 
     public function testConfigureReturnsNullWhenComponentsDirAbsent(): void
     {
-        $app = new UsePHP();
+        $app = new RosannaDefer();
 
         $result = PsxComponentRegistrar::configure(
             $app,
@@ -54,14 +56,13 @@ final class PsxComponentRegistrarTest extends TestCase
             <<<'PSX'
                 <?php
                 namespace App\Components;
-                use Polidog\UsePhp\Html\H;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Html\H;
+                use Polidog\Rosanna\Runtime\Element;
                 return fn(array $props): Element => <span>hi</span>;
                 PSX,
         );
 
-        $app = new UsePHP();
-        $app->setSnapshotSecret('test-secret');
+        $app = new RosannaDefer();
 
         $manifestPath = PsxComponentRegistrar::configure(
             $app,
@@ -72,8 +73,8 @@ final class PsxComponentRegistrarTest extends TestCase
 
         self::assertNotNull($manifestPath);
         self::assertFileExists($manifestPath);
-        // Verify the manifest got loaded into UsePHP by rendering through it.
-        $element = $app->renderPsxComponent('App\Components\Greeting');
+        // Verify the manifest got loaded into Rosanna by rendering through it.
+        $element = self::renderComponent($app, 'App\Components\Greeting');
         self::assertSame('span', $element->type);
     }
 
@@ -124,41 +125,16 @@ final class PsxComponentRegistrarTest extends TestCase
         \touch($componentsDir . '/Greeting.psx', \time() - 60);
 
         \file_put_contents($manifestPath, '<?php return [];');
+        \file_put_contents(\dirname($manifestPath) . '/' . PsxRenderer::DEFERRED_MANIFEST_FILENAME, '<?php return [];');
         \file_put_contents($manifestPath . '.version', (string) CompileCommand::CACHE_VERSION);
 
         self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
     }
 
-    public function testNeedsCompileReturnsTrueWhenDeferSourcePresentButSidecarMissing(): void
+    public function testNeedsCompileReturnsTrueWhenDeferredManifestMissing(): void
     {
-        // Cache produced by use-php < 0.4.0 (manifest.php newer than every
-        // source, but no deferred-manifest.php sidecar). If any .psx
-        // declares a Defer, we must recompile so the sidecar is generated
-        // and `loadComponentManifest()` can auto-register the endpoint.
-        $componentsDir = $this->workDir . '/Components';
-        $manifestPath = $this->workDir . '/manifest.php';
-        \mkdir($componentsDir, 0o777, true);
-
-        \file_put_contents(
-            $componentsDir . '/Deferred.psx',
-            <<<'PSX'
-                <?php
-                use Polidog\UsePhp\Component\Defer;
-                use function Polidog\UsePhp\Runtime\fc;
-                return fc(fn() => null, defer: new Defer(name: 'x'));
-                PSX,
-        );
-        \touch($componentsDir . '/Deferred.psx', \time() - 60);
-        \file_put_contents($manifestPath, '<?php return [];');
-
-        self::assertTrue(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
-    }
-
-    public function testNeedsCompileReturnsFalseWhenSidecarMissingButNoDeferSource(): void
-    {
-        // A project without any deferred components has manifest.php but no
-        // deferred-manifest.php — sidecar absence is the steady state, not a
-        // signal to recompile.
+        // Every compile writes it and RosannaDefer refuses a manifest without
+        // one, so its absence means a cache from another compiler.
         $componentsDir = $this->workDir . '/Components';
         $manifestPath = $this->workDir . '/manifest.php';
         \mkdir($componentsDir, 0o777, true);
@@ -168,7 +144,7 @@ final class PsxComponentRegistrarTest extends TestCase
         \file_put_contents($manifestPath, '<?php return [];');
         \file_put_contents($manifestPath . '.version', (string) CompileCommand::CACHE_VERSION);
 
-        self::assertFalse(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
+        self::assertTrue(PsxComponentRegistrar::needsCompile($componentsDir, $manifestPath));
     }
 
     public function testContainerAwareComponentUsesManifestParameterMetadata(): void
@@ -186,7 +162,7 @@ final class PsxComponentRegistrarTest extends TestCase
                 declare(strict_types=1);
 
                 use Polidog\Relayer\Tests\Fixtures\PlainService;
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return static fn (array $props, PlainService $service): Element => new Element(
                     'span',
@@ -197,8 +173,13 @@ final class PsxComponentRegistrarTest extends TestCase
         );
 
         \file_put_contents(
+            $cacheDir . '/' . PsxRenderer::DEFERRED_MANIFEST_FILENAME,
+            '<?php return ' . \var_export([PsxRenderer::BUILD_ID_KEY => 'test'], true) . ';',
+        );
+        \file_put_contents(
             $cacheDir . '/manifest.php',
             '<?php return ' . \var_export([
+                PsxRenderer::BUILD_ID_KEY => 'test',
                 'App\Components\Greeting' => [
                     'file' => $compiledPath,
                     'parameters' => [
@@ -228,13 +209,24 @@ final class PsxComponentRegistrarTest extends TestCase
             }
         };
 
-        $app = new UsePHP();
+        $app = new RosannaDefer();
         PsxComponentRegistrar::configure($app, $componentsDir, $cacheDir, autoCompile: false, container: $container);
 
-        $element = $app->renderPsxComponent('App\Components\Greeting', ['label' => 'hello']);
+        $element = self::renderComponent($app, 'App\Components\Greeting', ['label' => 'hello']);
 
         self::assertInstanceOf(Element::class, $element);
         self::assertSame(['hello:' . PlainService::class], $element->children);
+    }
+
+    /**
+     * @param array<string, mixed> $props
+     */
+    private static function renderComponent(RosannaDefer $app, string $fqcn, array $props = []): Element
+    {
+        return RenderContext::run(
+            $app->scope(),
+            static fn (): Element => RenderContext::scope()->psx->render($fqcn, $props),
+        );
     }
 
     private function rmrf(string $path): void

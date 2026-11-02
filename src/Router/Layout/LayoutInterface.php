@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Layout;
 
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 interface LayoutInterface
 {

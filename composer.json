@@ -1,6 +1,6 @@
 {
     "name": "polidog/relayer",
-    "description": "Relayer — file-based router + Symfony DependencyInjection + dotenv on top of polidog/use-php.",
+    "description": "Relayer — file-based router + Symfony DependencyInjection + dotenv on top of polidog/rosanna and polidog/rosanna-defer.",
     "type": "library",
     "license": "MIT",
     "bin": [
@@ -30,7 +30,8 @@
         "ext-curl": "*",
         "ext-openssl": "*",
         "firebase/php-jwt": "^7.0",
-        "polidog/use-php": "^0.10.0",
+        "polidog/rosanna": "^0.1",
+        "polidog/rosanna-defer": "^0.1",
         "symfony/dependency-injection": "^7.1",
         "symfony/config": "^7.1",
         "symfony/yaml": "^7.1",

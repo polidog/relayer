@@ -30,7 +30,7 @@ final class AuthFailureErrorPageTest extends TestCase
     private const FUNCTION_PAGE = <<<'PHP'
         <?php
         use Polidog\Relayer\Router\Component\PageContext;
-        use Polidog\UsePhp\Runtime\Element;
+        use Polidog\Rosanna\Runtime\Element;
 
         return function (PageContext $ctx): Closure {
             %s
@@ -45,7 +45,7 @@ final class AuthFailureErrorPageTest extends TestCase
 
         use Polidog\Relayer\Auth\Auth;
         use Polidog\Relayer\Router\Component\PageComponent;
-        use Polidog\UsePhp\Runtime\Element;
+        use Polidog\Rosanna\Runtime\Element;
 
         #[Auth(%s)]
         final class GuardedPage extends PageComponent
@@ -63,7 +63,7 @@ final class AuthFailureErrorPageTest extends TestCase
 
         use Polidog\Relayer\Router\Component\ErrorPageComponent;
         use Polidog\Relayer\Router\Component\PageContext;
-        use Polidog\UsePhp\Runtime\Element;
+        use Polidog\Rosanna\Runtime\Element;
 
         final class ErrorPage extends ErrorPageComponent
         {
@@ -82,7 +82,7 @@ final class AuthFailureErrorPageTest extends TestCase
 
         use Polidog\Relayer\Router\Component\PageContext;
         use Polidog\Relayer\Router\Layout\LayoutComponent;
-        use Polidog\UsePhp\Runtime\Element;
+        use Polidog\Rosanna\Runtime\Element;
 
         final class RootLayout extends LayoutComponent
         {

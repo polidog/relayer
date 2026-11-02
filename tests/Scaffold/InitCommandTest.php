@@ -103,7 +103,7 @@ final class InitCommandTest extends TestCase
         self::assertIsArray($autoload);
         self::assertSame(['App\\' => 'src/'], $autoload['psr-4']);
 
-        $publish = 'Polidog\UsePhp\Installer\AssetInstaller::publish';
+        $publish = 'Polidog\Rosanna\Defer\Installer\AssetInstaller::publish';
         $scripts = $composer['scripts'];
         self::assertIsArray($scripts);
         self::assertSame([$publish], $scripts['post-install-cmd']);
@@ -254,7 +254,7 @@ final class InitCommandTest extends TestCase
         $scripts = $composer['scripts'];
         self::assertIsArray($scripts);
         self::assertSame(
-            ['@php -r "echo 1;"', 'Polidog\UsePhp\Installer\AssetInstaller::publish'],
+            ['@php -r "echo 1;"', 'Polidog\Rosanna\Defer\Installer\AssetInstaller::publish'],
             $scripts['post-install-cmd'],
         );
     }

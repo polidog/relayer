@@ -2,7 +2,8 @@
 
 [English](README.md) · [日本語](README.ja.md)
 
-[polidog/use-php](https://github.com/polidog/usePHP) の上に構築された、バッ
+[polidog/rosanna](https://github.com/polidog/rosanna) と
+[polidog/rosanna-defer](https://github.com/polidog/rosanna-defer) の上に構築された、バッ
 テリー同梱型のオピニオネイテッドなフレームワークです。以下を一式で提供します:
 
 - Next.js App Router 風のファイルベースルーター (`src/Pages/page.psx`,
@@ -53,7 +54,8 @@
 ## 必要環境
 
 - PHP >= 8.5
-- [polidog/use-php](https://github.com/polidog/usePHP) ^0.10.0
+- [polidog/rosanna](https://github.com/polidog/rosanna) ^0.1
+- [polidog/rosanna-defer](https://github.com/polidog/rosanna-defer) ^0.1
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1
@@ -79,13 +81,13 @@ php -S 127.0.0.1:8000 -t public
 
 `dump-autoload` ではなく `composer install` を使うのは、`App\` の autoload と
 `init` が追加した publish スクリプトの両方を効かせるためです（後者が
-`public/usephp.js` を生成し、既定ドキュメントがこれを参照します）。
+`public/rosanna-defer.js` を生成し、既定ドキュメントがこれを参照します）。
 
 冪等かつ非破壊です:
 
 - 既存ファイルは決して上書きしません（skip として報告）。何度でも安全に再実行できます
 - 既存の `composer.json` は**加算的に**パッチします。`App\` の PSR-4 autoload、
-  usePHP のアセット publish スクリプト、`extra.relayer.structure_version` の
+  rosanna-defer のアセット publish スクリプト、`extra.relayer.structure_version` の
   マーカーを追加するだけで、他は一切変更しません
 
 `structure_version` マーカーはプロジェクトがどの雛形バージョンで生成されたかを
@@ -232,7 +234,7 @@ LOCALE_PATH_PREFIX=true
 有効になります。それ以外の値は本番扱いで、実環境にもこれらのファイルにも
 `APP_ENV` が無い場合も本番扱いです。雛形の `.env` には `APP_ENV=dev` が入って
 いるため、実環境の変数を未設定にしただけでは dev モードのままです。本番では
-デプロイ時に `vendor/bin/usephp compile src/Pages` で事前コンパイルします。
+デプロイ時に `vendor/bin/rosanna-defer compile src/Pages` で事前コンパイルします。
 
 ## ルーティングとページ
 
@@ -251,7 +253,7 @@ App Router の規約に倣っています）。
 
 `.psx` は JSX 風ソース。実行時はそれをコンパイルした `*.psx.php` を読みます。
 dev では自動コンパイル（`APP_ENV=dev`）、本番では
-`vendor/bin/usephp compile src/Pages` でデプロイ時に生成します。素の `.php`
+`vendor/bin/rosanna-defer compile src/Pages` でデプロイ時に生成します。素の `.php`
 ページもそのまま動き、その場合はコンパイル不要です。
 
 **ルートのコンパイル（本番）。** 既定ではルーターはリクエストごとに
@@ -287,7 +289,7 @@ vendor/bin/relayer compile                # 3 つを順に実行、最初の失�
 secret」参照）:
 
 ```bash
-vendor/bin/usephp compile src/Pages                  # .psx  -> コンパイル済み PHP（src/Components があれば追加）
+vendor/bin/rosanna-defer compile src/Pages                  # .psx  -> コンパイル済み PHP（src/Components があれば追加）
 vendor/bin/relayer routes:compile                     # ルートマップ -> PHP
 vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 ```
@@ -366,7 +368,7 @@ declare(strict_types=1);
 namespace App\Pages\Users;
 
 use App\Service\UserRepository;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use Polidog\Relayer\Router\Component\PageComponent;
 
 final class UserDetailPage extends PageComponent
@@ -406,7 +408,7 @@ declare(strict_types=1);
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, UserRepository $users): Closure {
     $ctx->metadata(['title' => 'Users']);
@@ -751,7 +753,7 @@ final class Dashboard extends LayoutComponent
 }
 ```
 
-- 出力位置は **`<body>` 末尾、メインの usePHP バンドルの後**、宣言順。
+- 出力位置は **`<body>` 末尾、メインのクライアントスクリプトの後**、宣言順。
   レイアウトのスクリプトがページより先、外側（ルート）レイアウトが
   内側より先。
 - **src 指定のみ。** フラグは `defer` / `async` / `module`
@@ -807,7 +809,7 @@ window.relayerIslands.register('Chart', (el, props) => {
 
 - フレームワークが提供するのは PHP プリミティブとローダ **だけ** で、
   Node 非依存のままです。React・JSX・バンドルはあなたの担当。ローダは
-  アイランド（usePHP の defer/partial で後から差し込まれたものも
+  アイランド（Rosanna の defer で後から差し込まれたものも
   `MutationObserver` で）を発見し、props を解析し、登録済みのマウント関数を
   呼びます。register と DOM の順序はどちらが先でも構いません。
 - props は **一方向**（PHP → 初期 props）。以降サーバから必要なものは
@@ -1128,7 +1130,7 @@ GET,POST   /users/[id]     page    src/Pages/users/[id]/page.psx
 middleware  src/Pages/middleware.php  (php)
 ```
 
-page は `GET,POST` を表示します（POST はサーバアクション / `useState`
+page は `GET,POST` を表示します（POST はサーバアクション
 がページに到達する経路）。`HEAD` と `OPTIONS` は `route.php` と同じく表示
 しません: ページは `HEAD` には本文なしの `GET` と同じ応答を、`OPTIONS` には
 ページのコードを実行せず `204` ＋ `Allow: GET, HEAD, OPTIONS, POST` を返します。
@@ -1157,7 +1159,7 @@ public function render(): Element
 {
     return (
         <form method="post">
-            <input type="hidden" name="_usephp_action" value={$this->action([$this, 'save'])} />
+            <input type="hidden" name="_rosanna_action" value={$this->action([$this, 'save'])} />
             <input name="title" />
         </form>
     );
@@ -1172,21 +1174,6 @@ public function save(array $form): void
 ```
 
 CSRF トークンが無効な場合は `403` が返ります。
-
-`useState` の状態更新（`onClick`、`onChange`、`onInput`、`onSubmit`、
-`useFormAction()`）も同様に、より厳しく保護されます。描画される action には
-`_usephp_action_sig` が付きます。これは action と描画先のページに対する usePHP
-の署名で、セッションに結び付いています。サーバが描画していない action の POST
-は状態を変更せずに拒否するので、クライアントが hook の番号や値を選ぶことは
-できません。有効な署名も `_usephp_csrf` トークンもなければ `403`、トークンは
-有効でも署名が不正な場合や action の形が不正な場合は `400` を返します。ログイン
-するとセッションが再生成されるので、その前に描画したフォームも拒否されます。
-`useFormAction()` がコピーする値はクライアントの入力のままなので、使う前に検証
-してください。
-
-`fc()` コンポーネントと defer 内のコンポーネントは、ページでも layout でも自分の
-状態を持ち、その場で更新されます。action は `UsePHP::handleAction()` が処理し、
-ページを再描画してコンポーネントを見つけます。
 
 アクションにできるのはページクラス自身が宣言したメソッドだけです。継承した
 フレームワークのメソッド（や `[$this, 'method']` 以外）を `action()` に渡すと
@@ -1208,7 +1195,7 @@ declare(strict_types=1);
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, UserRepository $users): Closure {
     $save = $ctx->action('save', function (array $form) use ($users, $ctx): void {
@@ -1230,8 +1217,8 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 };
 ```
 
-ハンドラの第1引数には POST ボディが渡されます (`_usephp_action` /
-`_usephp_csrf` は除外済み)。アクション名はページごとに一意で、同じ名前を
+ハンドラの第1引数には POST ボディが渡されます (`_rosanna_action` /
+`_rosanna_csrf` は除外済み)。アクション名はページごとに一意で、同じ名前を
 2 回登録すると例外になります。
 
 ### 引数のバインド
@@ -1391,7 +1378,7 @@ namespace App\Components;
 
 use Polidog\Relayer\Db\Database;
 use Polidog\Relayer\Relayer;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (array $props): Element {
     $db = Relayer::container()->get(Database::class);
@@ -1435,7 +1422,7 @@ declare(strict_types=1);
 namespace App\Pages\Users;
 
 use App\Service\UserRepository;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use Polidog\Relayer\Router\Component\PageComponent;
 
 final class UsersPage extends PageComponent
@@ -1469,7 +1456,7 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, Request $req): Closure {
     $errors = [];
@@ -1649,7 +1636,7 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, Authenticator $auth): Closure {
     $error = null;
@@ -1745,7 +1732,7 @@ final class ApiEndpoint extends PageComponent { /* ... */ }
 declare(strict_types=1);
 
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx): Closure {
     $user = $ctx->requireAuth(); // 失敗時 AuthorizationException
@@ -1994,7 +1981,7 @@ namespace App\Pages;
 
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Http\Cache;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 #[Cache(
     maxAge: 3600,
@@ -2066,7 +2053,7 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx): Closure {
     // 軽い初期化のみ: キャッシュ宣言・パラメータ参照。ここで DB を叩かない。
@@ -2553,7 +2540,7 @@ public）。ただしロケールの*切り替え*（Cookie / `Accept-Language` 
 
 > **defer フラグメントとパスプレフィックスルーティング。** `<X defer />`
 > のサブリクエストは `/{locale}` を含まないルート絶対の `/_defer/{name}`
-> URL で取得されます（usePHP がルートに固定するため）。よって親ページの
+> URL で取得されます（Rosanna がルートに固定するため）。よって親ページの
 > パスプレフィックスは伝わらず、フラグメントのロケールは URL パスでは
 > なく Cookie / `Accept-Language` / デフォルトから解決されます。
 > `/{locale}/…` プレフィックスだけでロケールを切り替えていて defer
@@ -2807,10 +2794,42 @@ prod では素の alias のままなので、デコレータとプロファイ�
 | `Polidog\Relayer\Profiler\Profiler`            | リクエストトレーシングのファサード（dev: 記録 / prod: no-op）       |
 | `Polidog\Relayer\Profiler\ProfilerWebView`     | `/_profiler` の dev ビュー（一覧＋詳細）                            |
 
-サードパーティのランタイム依存は `polidog/use-php`（JSX 風コンポーネント
-ランタイム）のみ。DI、dotenv、Symfony の YAML config はすべて
+コンポーネントのランタイムは `polidog/rosanna`（JSX 風の描画と PSX コンパイラ）と
+`polidog/rosanna-defer`（遅延描画の断片）です。DI、dotenv、Symfony の YAML config はすべて
 `Relayer::boot()` 内で配線されるので、追加でインストールするものは
 ありません。
+
+## `polidog/use-php` からの移行
+
+Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くようになりました。
+
+**`useState` とその上に成り立つ機能は廃止しました。** `useState`、`useFormAction`、
+`fc()`、`onClick` / `onChange` / `onInput` / `onSubmit`、`wire:*`、Snapshot ストレージ、
+ページの部分更新が対象です。イベント prop を描画すると例外になります。代わりに
+サーバアクション（`$ctx->action()`）か React アイランドを使ってください。
+`USEPHP_SNAPSHOT_SECRET` は読まれなくなり、`AppRouter::setUsePhp()` は
+`setRosanna()` に変わりました。
+
+1. `vendor/bin/relayer upgrade` を実行します。`composer.json` の scripts にある
+   アセット publish の設定を置き換え、編集していないスキャフォールドのファイルを
+   更新します。
+2. `.psx` と PHP の `Polidog\UsePhp\Html\H`、`Polidog\UsePhp\Runtime\Element` などを
+   `Polidog\Rosanna\…` に変更します。
+3. `fc(fn, defer: new Defer(...))` を `deferred(fn, new Defer(...))` に置き換えます。
+   `Defer` は `Polidog\Rosanna\Defer\Defer`、関数は
+   `Polidog\Rosanna\Defer\deferred` です。
+4. 自前の JS とテンプレートの `window.usePHP` を `window.Rosanna` に、
+   `X-UsePHP-Defer` ヘッダーを `X-Rosanna-Defer` に、`data-usephp-*` を
+   `data-rosanna-*` に変更します。フォームのフィールドを直接読んでいる場合は、
+   `_usephp_action` と `_usephp_csrf` も `_rosanna_action` と `_rosanna_csrf` に
+   変更します。
+5. プリコンパイルは `vendor/bin/relayer compile` で行います。
+   `vendor/bin/usephp compile` はなくなり、`vendor/bin/rosanna compile` は
+   Relayer に必要な deferred manifest を書き出しません。
+
+フィールド名とセッションのキーが変わるので、旧バージョンが描画したフォームは
+デプロイの時点で動かなくなります。古い HTML や `usephp.js` が配信されないよう、
+デプロイ時に CDN のキャッシュを消してください。
 
 ## テスト実行
 

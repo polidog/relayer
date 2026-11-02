@@ -7,8 +7,8 @@ namespace Polidog\Relayer\Router\Document;
 final class HtmlDocument implements DocumentInterface
 {
     private string $lang = 'en';
-    private string $title = 'usePHP App';
-    private string $jsPath = '/usephp.js';
+    private string $title = 'Relayer App';
+    private string $jsPath = '/rosanna-defer.js';
 
     /** @var array<int, string> */
     private array $cssPaths = [];
@@ -75,7 +75,7 @@ final class HtmlDocument implements DocumentInterface
 
     /**
      * Queue an external script to emit at the end of `<body>`, after the
-     * main usePHP bundle. Scripts are emitted in the order added; no
+     * main client script. Scripts are emitted in the order added; no
      * deduplication — a layout and a page both adding the same src produce
      * two tags by design (mirrors metadata: declare, don't reconcile).
      */

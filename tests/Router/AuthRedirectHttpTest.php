@@ -66,7 +66,7 @@ final class AuthRedirectHttpTest extends TestCase
         self::write('src/Pages/fn/page.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Router\Component\PageContext;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
 
             return static function (PageContext $ctx): Closure {
                 $ctx->requireAuth();
@@ -80,7 +80,7 @@ final class AuthRedirectHttpTest extends TestCase
 
             use Polidog\Relayer\Auth\Auth;
             use Polidog\Relayer\Router\Component\PageComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
 
             #[Auth]
             final class GuardedPage extends PageComponent
@@ -94,7 +94,7 @@ final class AuthRedirectHttpTest extends TestCase
         self::write('src/Pages/no-login-route/page.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Router\Component\PageContext;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
 
             return static function (PageContext $ctx): Closure {
                 $ctx->requireAuth(redirectTo: '/missing');
@@ -105,7 +105,7 @@ final class AuthRedirectHttpTest extends TestCase
         self::write('src/Pages/external-login/page.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Router\Component\PageContext;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
 
             return static function (PageContext $ctx): Closure {
                 $ctx->requireAuth(redirectTo: 'https://auth.example.com/login');

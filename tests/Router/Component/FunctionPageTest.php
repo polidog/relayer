@@ -8,7 +8,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 final class FunctionPageTest extends TestCase
 {

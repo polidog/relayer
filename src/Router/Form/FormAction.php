@@ -10,7 +10,7 @@ use Polidog\Relayer\Http\SessionStarter;
 /**
  * Encodes / decodes the form-action token a server action is bound to.
  *
- * Token layout: `usephp-action:<base64url(json payload)>.<base64url(hmac)>`.
+ * Token layout: `rosanna-action:<base64url(json payload)>.<base64url(hmac)>`.
  *
  * The payload (target class/method or page/name **and** the bound `$args`)
  * is HMAC-SHA256 signed with a random per-session key that never leaves the
@@ -22,9 +22,9 @@ use Polidog\Relayer\Http\SessionStarter;
  */
 final class FormAction
 {
-    public const PREFIX = 'usephp-action:';
+    public const PREFIX = 'rosanna-action:';
 
-    private const SESSION_KEY = 'usephp:form-action-key';
+    private const SESSION_KEY = 'rosanna:form-action-key';
     private const SIGNATURE_SEPARATOR = '.';
 
     /**

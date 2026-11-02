@@ -3,7 +3,8 @@
 [English](README.md) · [日本語](README.ja.md)
 
 Opinionated, batteries-included framework on top of
-[polidog/use-php](https://github.com/polidog/usePHP). Bundles:
+[polidog/rosanna](https://github.com/polidog/rosanna) and
+[polidog/rosanna-defer](https://github.com/polidog/rosanna-defer). Bundles:
 
 - A Next.js App Router-style file-based router (`src/Pages/page.psx`,
   `layout.psx`, dynamic segments, error pages)
@@ -49,7 +50,8 @@ Exposes a single `Relayer::boot()` entrypoint so app code stays small.
 ## Requirements
 
 - PHP >= 8.5
-- [polidog/use-php](https://github.com/polidog/usePHP) ^0.10.0
+- [polidog/rosanna](https://github.com/polidog/rosanna) ^0.1
+- [polidog/rosanna-defer](https://github.com/polidog/rosanna-defer) ^0.1
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1
@@ -75,14 +77,14 @@ php -S 127.0.0.1:8000 -t public
 
 `composer install` (rather than `dump-autoload`) so the `App\` autoload
 *and* the publish scripts `init` just added both apply — the latter emits
-`public/usephp.js`, which the default document references.
+`public/rosanna-defer.js`, which the default document references.
 
 It is idempotent and non-destructive:
 
 - existing files are never overwritten (they are reported as skipped), so it
   is safe to re-run;
 - your existing `composer.json` is patched **additively** — it adds the `App\`
-  PSR-4 autoload, the usePHP asset-publish scripts, and an
+  PSR-4 autoload, the rosanna-defer asset-publish scripts, and an
   `extra.relayer.structure_version` marker, and leaves everything else
   untouched.
 
@@ -228,7 +230,7 @@ the committed counterparts.
 treats the app as production, as does `APP_ENV` being set nowhere: neither in
 the real environment nor in any of these files. The scaffolded `.env` sets
 `APP_ENV=dev`, so unsetting the real variable is not enough to leave dev mode.
-In production, pre-compile with `vendor/bin/usephp compile src/Pages` during
+In production, pre-compile with `vendor/bin/rosanna-defer compile src/Pages` during
 deploy.
 
 ## Routing & Pages
@@ -248,7 +250,7 @@ the Next.js App Router. The conventions:
 
 `.psx` is the JSX-style source. The runtime executes the compiled
 `*.psx.php` sibling — produced automatically in dev (`APP_ENV=dev`) or by
-`vendor/bin/usephp compile src/Pages` at deploy time. Plain `.php` page files
+`vendor/bin/rosanna-defer compile src/Pages` at deploy time. Plain `.php` page files
 also work and skip the compile step.
 
 **Compiled routes (production).** By default the router scans `src/Pages/`
@@ -283,7 +285,7 @@ can still run individually (e.g. to skip `container:compile` — see
 "Runtime secrets" below):
 
 ```bash
-vendor/bin/usephp compile src/Pages                  # .psx  -> compiled PHP (add src/Components if it exists)
+vendor/bin/rosanna-defer compile src/Pages                  # .psx  -> compiled PHP (add src/Components if it exists)
 vendor/bin/relayer routes:compile                     # route map -> PHP
 vendor/bin/relayer container:compile                  # DI container -> PHP
 ```
@@ -363,7 +365,7 @@ declare(strict_types=1);
 namespace App\Pages\Users;
 
 use App\Service\UserRepository;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use Polidog\Relayer\Router\Component\PageComponent;
 
 final class UserDetailPage extends PageComponent
@@ -403,7 +405,7 @@ declare(strict_types=1);
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, UserRepository $users): Closure {
     $ctx->metadata(['title' => 'Users']);
@@ -746,7 +748,7 @@ final class Dashboard extends LayoutComponent
 }
 ```
 
-- Emitted at the **end of `<body>`, after** the main usePHP bundle, in
+- Emitted at the **end of `<body>`, after** the main client script, in
   declaration order. Layout scripts come before the page's; an outer
   (root) layout before an inner one.
 - **src-only by design.** Flags: `defer`, `async`, `module`
@@ -802,7 +804,7 @@ window.relayerIslands.register('Chart', (el, props) => {
 
 - The framework provides **only** the PHP primitive and the loader — it
   stays Node-free. React, JSX, and bundling are yours. The loader finds
-  islands (including ones swapped in by usePHP defer/partial, via a
+  islands (including ones swapped in by a Rosanna defer, via a
   `MutationObserver`), parses props, and calls your registered mount fn;
   registration and DOM order are interchangeable.
 - Props flow **one way** (PHP → initial props). For anything the island
@@ -1119,7 +1121,7 @@ GET,POST   /users/[id]     page    src/Pages/users/[id]/page.psx
 middleware  src/Pages/middleware.php  (php)
 ```
 
-Pages report `GET,POST` (POST is how server actions / `useState` reach a
+Pages report `GET,POST` (POST is how server actions reach a
 page). `HEAD` and `OPTIONS` are not listed, as for `route.php`: a page answers
 `HEAD` like `GET` without a body, and `OPTIONS` with `204` + `Allow: GET, HEAD,
 OPTIONS, POST` without running page code. Any other method gets `405` + `Allow:
@@ -1150,7 +1152,7 @@ public function render(): Element
 {
     return (
         <form method="post">
-            <input type="hidden" name="_usephp_action" value={$this->action([$this, 'save'])} />
+            <input type="hidden" name="_rosanna_action" value={$this->action([$this, 'save'])} />
             <input name="title" />
         </form>
     );
@@ -1165,21 +1167,6 @@ public function save(array $form): void
 ```
 
 Invalid CSRF tokens return a `403`.
-
-`useState` updates (`onClick`, `onChange`, `onInput`, `onSubmit` and
-`useFormAction()`) are protected the same way, and more strictly: each rendered
-action carries `_usephp_action_sig`, usePHP's signature over the action and the
-page it was rendered for, bound to the session. A POST whose action was not
-rendered by the server is rejected without changing any state, so a client
-cannot pick its own hook index or value. Without a valid signature or
-`_usephp_csrf` token the answer is `403`; with a valid token but a bad signature,
-or a malformed action, it is `400`. Logging in regenerates the session, so forms
-rendered before that are rejected too. The values `useFormAction()` copies are
-still client input: validate them before use.
-
-`fc()` components and components inside a defer keep their own state and update
-in place, on the page and in layouts. Actions are handled by
-`UsePHP::handleAction()`, which re-renders the page to find the component.
 
 Only methods the page class itself declares can be actions: passing an
 inherited framework method (or anything other than `[$this, 'method']`)
@@ -1201,7 +1188,7 @@ declare(strict_types=1);
 
 use App\Service\UserRepository;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, UserRepository $users): Closure {
     $save = $ctx->action('save', function (array $form) use ($users, $ctx): void {
@@ -1224,7 +1211,7 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 ```
 
 The handler receives the POST body as its first argument (with
-`_usephp_action` / `_usephp_csrf` stripped). Action names must be unique
+`_rosanna_action` / `_rosanna_csrf` stripped). Action names must be unique
 per page — registering the same name twice throws.
 
 ### Binding arguments
@@ -1387,7 +1374,7 @@ namespace App\Components;
 
 use Polidog\Relayer\Db\Database;
 use Polidog\Relayer\Relayer;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (array $props): Element {
     $db = Relayer::container()->get(Database::class);
@@ -1432,7 +1419,7 @@ declare(strict_types=1);
 namespace App\Pages\Users;
 
 use App\Service\UserRepository;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use Polidog\Relayer\Router\Component\PageComponent;
 
 final class UsersPage extends PageComponent
@@ -1466,7 +1453,7 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, Request $req): Closure {
     $errors = [];
@@ -1648,7 +1635,7 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, Authenticator $auth): Closure {
     $error = null;
@@ -1743,7 +1730,7 @@ Function-style factories use a declarative guard on `PageContext`:
 declare(strict_types=1);
 
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx): Closure {
     $user = $ctx->requireAuth(); // throws AuthorizationException on failure
@@ -1989,7 +1976,7 @@ namespace App\Pages;
 
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Http\Cache;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 #[Cache(
     maxAge: 3600,
@@ -2063,7 +2050,7 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx): Closure {
     // Lightweight setup: declare cache, read params. NO DB queries here.
@@ -2556,7 +2543,7 @@ locale is also written to `<html lang="…">` and exposed as
 
 > **Deferred fragments and path-prefix routing.** A `<X defer />`
 > sub-request is fetched from a root-absolute `/_defer/{name}` URL with no
-> `/{locale}` segment (usePHP roots it), so it never carries the parent
+> `/{locale}` segment (Rosanna roots it), so it never carries the parent
 > page's path prefix. Its locale therefore resolves from the cookie /
 > `Accept-Language` / default — not from the URL path. If you localize
 > purely via `/{locale}/…` prefixes and want deferred fragments in the same
@@ -2811,9 +2798,40 @@ is always safe.
 | `Polidog\Relayer\Profiler\Profiler`            | Request-tracing facade (dev: recording / prod: no-op).                 |
 | `Polidog\Relayer\Profiler\ProfilerWebView`     | `/_profiler` dev view (index + detail).                                |
 
-The only third-party runtime dependency is `polidog/use-php` (the JSX-style
-component runtime). DI, dotenv, and Symfony YAML config are all wired by
+The component runtime is `polidog/rosanna` (JSX-style rendering and the PSX
+compiler) and `polidog/rosanna-defer` (deferred fragments). DI, dotenv, and Symfony YAML config are all wired by
 `Relayer::boot()` — there is no other package to install.
+
+## Migrating from `polidog/use-php`
+
+Relayer now runs on `polidog/rosanna` and `polidog/rosanna-defer`.
+
+**`useState` and everything built on it are gone**: `useState`,
+`useFormAction`, `fc()`, `onClick` / `onChange` / `onInput` / `onSubmit`,
+`wire:*`, Snapshot storage and partial page updates. Rendering an event prop
+now throws an exception. Use a server action (`$ctx->action()`) or a React
+island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
+`AppRouter::setUsePhp()` is now `setRosanna()`.
+
+1. Run `vendor/bin/relayer upgrade`. It replaces the asset publisher in your
+   `composer.json` scripts, and updates scaffolded files you have not edited.
+2. In your `.psx` and PHP files, change `Polidog\UsePhp\Html\H`,
+   `Polidog\UsePhp\Runtime\Element` and the like to `Polidog\Rosanna\…`.
+3. Replace `fc(fn, defer: new Defer(...))` with
+   `deferred(fn, new Defer(...))`. `Defer` is now
+   `Polidog\Rosanna\Defer\Defer` and the function is
+   `Polidog\Rosanna\Defer\deferred`.
+4. Replace `window.usePHP` with `window.Rosanna`, the `X-UsePHP-Defer` header
+   with `X-Rosanna-Defer`, and `data-usephp-*` with `data-rosanna-*` in your
+   own JS and templates. If you read the form fields directly, `_usephp_action`
+   and `_usephp_csrf` are now `_rosanna_action` and `_rosanna_csrf`.
+5. Precompile with `vendor/bin/relayer compile`. `vendor/bin/usephp compile`
+   no longer exists, and `vendor/bin/rosanna compile` does not write the
+   deferred manifest Relayer needs.
+
+Forms rendered by the previous version stop working when you deploy, because
+the field names and the session keys changed. Purge your CDN at deploy time so
+it does not serve old HTML or the old `usephp.js`.
 
 ## Running Tests
 

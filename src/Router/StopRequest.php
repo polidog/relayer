@@ -10,10 +10,9 @@ use Exception;
  * Internal control-flow signal: "the response for this request is already
  * complete — unwind to {@see AppRouter::run()} and return".
  *
- * Raised on the two short-circuit branches that used to call `exit`: the
- * 304 answer to a conditional GET and the POST-Redirect-Get hop after a
- * `useState` action. Both send their headers and then have nothing left to
- * render, but they sit several frames deep in the dispatch stack.
+ * Raised on the short-circuit branch that used to call `exit`: the 304
+ * answer to a conditional GET. It sends its headers and then has nothing left
+ * to render, but it sits several frames deep in the dispatch stack.
  *
  * Why not `exit`: under FrankenPHP's worker mode `exit` terminates the
  * *worker script*, not just the request, and FrankenPHP restarts it — so
