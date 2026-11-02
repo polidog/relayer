@@ -404,6 +404,15 @@ final class PageLoader
     /**
      * Resolve a class instance using the container or direct instantiation.
      *
+     * A page, layout or error page from the container is cloned. A service is
+     * usually shared, so the object the container holds lives as long as the
+     * worker, while a render writes to the page (params, request, scripts,
+     * metadata, children, whatever a form action sets). The clone keeps the
+     * dependencies the container injected, and the service itself is never
+     * written to, so each request starts from the same state. The clone is
+     * shallow: an object the page built for itself in its constructor is
+     * still shared between requests.
+     *
      * @param class-string $className
      */
     private function resolveInstance(string $className): object
@@ -412,7 +421,9 @@ final class PageLoader
             $instance = $this->container->get($className);
             \assert(\is_object($instance));
 
-            return $instance;
+            return $instance instanceof Renderable || $instance instanceof LayoutInterface
+                ? clone $instance
+                : $instance;
         }
 
         return new $className();
