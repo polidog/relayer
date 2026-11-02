@@ -1240,6 +1240,13 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 `_rosanna_csrf` は除外済み)。アクション名はページごとに一意で、同じ名前を
 2 回登録すると例外になります。
 
+ファクトリの外、たとえば `Renderable` の子の `render()` からも
+`PageContext::current()->action()` で登録できます。アクションを送信した POST
+では、ディスパッチの前に描画関数と木の中の `Renderable` の子 (配列、入れ子の
+要素、defer のフォールバックの中も含む) を一度描画して登録を済ませ、ディスパッチの
+後に応答用にもう一度描画します。GET や、ファクトリで登録したアクションへの POST
+では描画は 1 回です。
+
 ### 引数のバインド
 
 第3引数 `$args` でハンドラに値をバインドできます。フォームボディの **後ろ**

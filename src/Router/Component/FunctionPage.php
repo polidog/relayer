@@ -147,6 +147,22 @@ final class FunctionPage
     }
 
     /**
+     * The render before dispatch, run only so actions registered while
+     * rendering exist when the request is dispatched. Besides the page's own
+     * render closure, it renders the `Renderable` children the Renderer would
+     * otherwise reach only in the final render, after dispatch: a child
+     * calling `PageContext::current()->action()` from its `render()` must
+     * have registered by then. The element tree itself is discarded.
+     *
+     * @internal called by PageRenderer::renderPageElement() in the double-render
+     *           path (pre-render → dispatch → renderAfterDispatch)
+     */
+    public function renderToRegisterActions(): void
+    {
+        self::renderChildren([$this->render()]);
+    }
+
+    /**
      * Re-render after a dispatched action that did not redirect. Resets all
      * render-accumulated PageContext state (actions and scripts) so
      * sub-components can re-register without hitting the duplicate-name guard
@@ -187,5 +203,28 @@ final class FunctionPage
     public function getCache(): ?Cache
     {
         return $this->context->getCache();
+    }
+
+    /**
+     * Walk the tree the way the Renderer does: `resolveRenderables()` expands
+     * arrays and calls `resolve()` or `render()` on each child, and of a
+     * `__defer__` placeholder only the fallback is rendered on the page.
+     *
+     * @param array<mixed> $children
+     */
+    private static function renderChildren(array $children): void
+    {
+        foreach (\Polidog\Rosanna\Html\resolveRenderables($children) as $child) {
+            if (!$child instanceof Element) {
+                continue;
+            }
+
+            self::renderChildren($child->children);
+
+            $fallback = '__defer__' === $child->type ? $child->props['__fallback'] ?? null : null;
+            if ($fallback instanceof Element) {
+                self::renderChildren([$fallback]);
+            }
+        }
     }
 }

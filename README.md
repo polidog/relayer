@@ -1231,6 +1231,14 @@ The handler receives the POST body as its first argument (with
 `_rosanna_action` / `_rosanna_csrf` stripped). Action names must be unique
 per page — registering the same name twice throws.
 
+Actions can also be registered outside the factory, e.g. from a
+`Renderable` child's `render()` via `PageContext::current()->action()`. On
+a POST that submits such an action, the render closure and every
+`Renderable` child in its tree (inside arrays, nested elements and defer
+fallbacks too) render once before dispatch so the action is registered, and
+again after dispatch for the response. A GET, or a POST to an action the
+factory registered, renders once.
+
 ### Binding arguments
 
 A third `$args` argument binds values into the handler. They are passed
