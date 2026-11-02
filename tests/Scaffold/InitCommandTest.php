@@ -400,14 +400,14 @@ final class InitCommandTest extends TestCase
         return $decoded;
     }
 
-    /**
-     * @return Closure(string): void
-     */
     private function assertInitSucceeds(): void
     {
         self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
     }
 
+    /**
+     * @return Closure(string): void
+     */
     private function capture(): Closure
     {
         return function (string $line): void {

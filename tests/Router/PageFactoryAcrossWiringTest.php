@@ -24,8 +24,6 @@ final class PageFactoryAcrossWiringTest extends TestCase
 {
     private string $workDir;
 
-    private bool|int $status = false;
-
     protected function setUp(): void
     {
         $this->workDir = \sys_get_temp_dir() . '/page-wiring-' . \bin2hex(\random_bytes(6));
@@ -54,31 +52,23 @@ final class PageFactoryAcrossWiringTest extends TestCase
         $app = AppRouter::create($this->workDir);
         $app->setContainer($this->container('first'));
 
-        self::assertStringContainsString('served by first', $this->dispatch($app));
-        self::assertSame(200, $this->status);
+        $this->assertServed($app, 'served by first');
 
         $app->setContainer($this->container('second'));
 
-        $output = $this->dispatch($app);
-
-        self::assertSame(200, $this->status);
-        self::assertStringContainsString('served by second', $output);
+        $this->assertServed($app, 'served by second');
     }
 
     public function testThePageSurvivesSetProfilerAndRecordsToTheNewOne(): void
     {
         $app = AppRouter::create($this->workDir);
 
-        self::assertStringContainsString('served by nobody', $this->dispatch($app));
-        self::assertSame(200, $this->status);
+        $this->assertServed($app, 'served by nobody');
 
         $profiler = new RecordingProfiler(new InMemoryProfilerStorage());
         $app->setProfiler($profiler);
 
-        $output = $this->dispatch($app);
-
-        self::assertSame(200, $this->status);
-        self::assertStringContainsString('served by nobody', $output);
+        $this->assertServed($app, 'served by nobody');
 
         $profile = $profiler->currentProfile();
         self::assertNotNull($profile);
@@ -94,12 +84,8 @@ final class PageFactoryAcrossWiringTest extends TestCase
 
     public function testASecondRouterInTheSameProcessServesThePageToo(): void
     {
-        self::assertStringContainsString('served by nobody', $this->dispatch(AppRouter::create($this->workDir)));
-
-        $output = $this->dispatch(AppRouter::create($this->workDir));
-
-        self::assertSame(200, $this->status);
-        self::assertStringContainsString('served by nobody', $output);
+        $this->assertServed(AppRouter::create($this->workDir), 'served by nobody');
+        $this->assertServed(AppRouter::create($this->workDir), 'served by nobody');
     }
 
     private function container(string $name): ContainerInterface
@@ -124,6 +110,14 @@ final class PageFactoryAcrossWiringTest extends TestCase
         };
     }
 
+    private function assertServed(AppRouter $app, string $expected): void
+    {
+        $output = $this->dispatch($app);
+
+        self::assertSame(200, \http_response_code());
+        self::assertStringContainsString($expected, $output);
+    }
+
     private function dispatch(AppRouter $app): string
     {
         $_SERVER['REQUEST_URI'] = '/hello';
@@ -135,8 +129,6 @@ final class PageFactoryAcrossWiringTest extends TestCase
         } finally {
             $output = (string) \ob_get_clean();
         }
-
-        $this->status = \http_response_code();
 
         return $output;
     }
