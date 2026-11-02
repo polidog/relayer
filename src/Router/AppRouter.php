@@ -49,7 +49,7 @@ final class AppRouter
     private string $psxCacheDir;
     private ?RosannaDefer $rosanna = null;
 
-    /** Kept across requests for the factories it has loaded; rebuilt when what it depends on changes. */
+    /** Rebuilt when what it depends on changes. */
     private ?PageLoader $pages = null;
 
     private ?Profiler $profiler = null;

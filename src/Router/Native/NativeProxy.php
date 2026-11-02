@@ -34,7 +34,9 @@ use Psr\Log\LoggerInterface;
  * `Relayer-*` headers never reach the client in either case. A proxy that
  * fails (not built, non-zero exit, timeout, non-CGI output) answers a JSON
  * `500` even for a page request: it dies before the page pipeline could
- * render an error page, and the fixed shape is easier to alarm on.
+ * render an error page, and the fixed shape is easier to alarm on. A path no
+ * route can match ({@see RequestPath}) answers a JSON `404` without starting
+ * the proxy or running anything behind it.
  *
  * Besides the route variables' absence, the environment is the same as a
  * `route.go` gets, plus `RELAYER_MATCHED_PATTERN`: the pattern the
@@ -98,10 +100,11 @@ final class NativeProxy
      */
     public function handle(Request $request, Closure $next): void
     {
-        // Go's CGI host cannot parse some of these and would answer 500. No
-        // route can match them, so there is nothing for the proxy to guard.
+        // Go's CGI host cannot parse some of these and would answer 500, so
+        // the middleware cannot run. Neither may anything behind it: the
+        // error page and root layout may rely on what the middleware checks.
         if (null === RequestPath::forMatching($request->path)) {
-            $next($request);
+            Response::json(['error' => 'Not Found'], 404)->send();
 
             return;
         }

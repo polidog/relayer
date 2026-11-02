@@ -29,8 +29,7 @@ use RuntimeException;
 
 /**
  * Turns the files a route points at into page and layout objects, autowiring
- * their arguments. Lives as long as the router: it holds no request state, only
- * the page factories a process has already loaded.
+ * their arguments. Holds no request state, so it can live as long as the router.
  *
  * @internal
  */
@@ -39,11 +38,14 @@ final class PageLoader
     /**
      * Function-style page factories keyed by the (compiled) file path —
      * see {@see loadPageInternal()} for why `require_once` alone is not
-     * enough once the process outlives a single request.
+     * enough once the process outlives a single request. Static because what
+     * `require_once` remembers is per process: a loader built later (the
+     * router rebuilds it when its container or profiler changes) gets `true`
+     * for a file an earlier one already included.
      *
      * @var array<string, Closure>
      */
-    private array $pageFactories = [];
+    private static array $pageFactories = [];
 
     public function __construct(
         private readonly string $appDirectory,
@@ -295,15 +297,15 @@ final class PageLoader
         // find nothing, and 404. Keep the factory per compiled path — it is
         // invoked afresh for every request, so caching it carries no
         // per-request state.
-        if (isset($this->pageFactories[$pagePath])) {
-            return $this->buildFunctionPage($this->pageFactories[$pagePath], $originalPagePath, $params, $request);
+        if (isset(self::$pageFactories[$pagePath])) {
+            return $this->buildFunctionPage(self::$pageFactories[$pagePath], $originalPagePath, $params, $request);
         }
 
         $result = require_once $pagePath;
 
         // Closure return: function-based page
         if ($result instanceof Closure) {
-            $this->pageFactories[$pagePath] = $result;
+            self::$pageFactories[$pagePath] = $result;
 
             return $this->buildFunctionPage($result, $originalPagePath, $params, $request);
         }

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\I18n;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Auth\SessionStorage;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\RequestPath;
 use Polidog\Relayer\I18n\LocaleResolver;
 
 final class LocaleResolverTest extends TestCase
@@ -47,6 +49,63 @@ final class LocaleResolverTest extends TestCase
         self::assertSame('en', $resolved->locale);
         self::assertSame('/about/ja', $resolved->path);
         self::assertSame('default', $resolved->source);
+    }
+
+    #[DataProvider('provideAnUnroutablePathKeepsItsPrefixCases')]
+    public function testAnUnroutablePathKeepsItsPrefix(string $path): void
+    {
+        $resolved = $this->resolver()->resolve($this->request($path));
+
+        self::assertSame($path, $resolved->path);
+        self::assertSame('en', $resolved->locale);
+        self::assertSame('default', $resolved->source);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnUnroutablePathKeepsItsPrefixCases(): iterable
+    {
+        yield 'leading double slash' => ['//ja/admin'];
+
+        yield 'leading double slash, locale only' => ['//ja'];
+
+        yield 'leading double slash to the defer endpoint' => ['//ja/_defer/name'];
+
+        yield 'leading triple slash' => ['///ja/admin'];
+
+        yield 'malformed escape behind the prefix' => ['/ja/%zz'];
+
+        yield 'dot-dot behind the prefix' => ['/ja/%2e%2e/admin'];
+
+        yield 'NUL behind the prefix' => ['/ja/a%00b'];
+    }
+
+    public function testAnUnroutablePathStillTakesItsLocaleFromTheCookie(): void
+    {
+        $resolved = $this->resolver()->resolve($this->request('//ja/admin', cookies: ['locale' => 'ja']));
+
+        self::assertSame('ja', $resolved->locale);
+        self::assertSame('//ja/admin', $resolved->path);
+        self::assertSame('cookie', $resolved->source);
+    }
+
+    public function testAnUnroutablePathStillTakesItsLocaleFromTheHeader(): void
+    {
+        $resolved = $this->resolver()->resolve($this->request('//ja/admin', ['accept-language' => 'ja']));
+
+        self::assertSame('ja', $resolved->locale);
+        self::assertSame('//ja/admin', $resolved->path);
+        self::assertSame('accept-language', $resolved->source);
+    }
+
+    public function testStrippingThePrefixNeverTurnsADoubleSlashIntoARoutablePath(): void
+    {
+        $resolved = $this->resolver()->resolve($this->request('/ja//admin'));
+
+        self::assertSame('ja', $resolved->locale);
+        self::assertSame('//admin', $resolved->path);
+        self::assertNull(RequestPath::forMatching($resolved->path));
     }
 
     public function testPathPrefixDisabledFallsThrough(): void

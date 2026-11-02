@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router\Native;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Native\CgiRunner;
@@ -213,6 +214,52 @@ final class NativeProxyTest extends TestCase
         self::assertSame('continued', $this->invoke($prod, new Request('GET', '/'), static function (): void {
             echo 'continued';
         }));
+    }
+
+    #[DataProvider('provideAnUnroutablePathIsAFramework404WithNothingElseRunningCases')]
+    public function testAnUnroutablePathIsAFramework404WithNothingElseRunning(string $path): void
+    {
+        $marker = $this->workDir . '/proxy-ran';
+        $proxy = $this->proxy("touch '{$marker}'\nprintf 'Relayer-Next: 1\\r\\n\\r\\n'");
+
+        $nextCalled = false;
+        $out = $this->invoke($proxy, new Request('GET', $path), static function () use (&$nextCalled): void {
+            $nextCalled = true;
+        });
+
+        self::assertFalse($nextCalled, 'no application code may run for an unroutable path');
+        self::assertFileDoesNotExist($marker, 'Go is not started for an unroutable path');
+        self::assertSame(404, \http_response_code());
+        self::assertSame('{"error":"Not Found"}', $out);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnUnroutablePathIsAFramework404WithNothingElseRunningCases(): iterable
+    {
+        yield 'malformed escape' => ['/%zz'];
+
+        yield 'NUL' => ['/a%00b'];
+
+        yield 'dot-dot' => ['/a/%2e%2e/b'];
+
+        yield 'leading double slash' => ['//admin'];
+    }
+
+    public function testAnUnroutablePathIsAFramework404EvenWhenTheMiddlewareIsNotBuilt(): void
+    {
+        $proxy = new NativeProxy(
+            $this->workDir . '/not-built',
+            $this->workDir . '/middleware.go',
+            new CgiRunner(),
+            static fn (): ?string => null,
+        );
+
+        $out = $this->invoke($proxy, new Request('GET', '/%zz'), static function (): void {});
+
+        self::assertSame(404, \http_response_code());
+        self::assertSame('{"error":"Not Found"}', $out);
     }
 
     private function proxy(string $scriptBody, ?string $matchedPattern = null): NativeProxy

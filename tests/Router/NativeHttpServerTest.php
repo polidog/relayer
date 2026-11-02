@@ -46,6 +46,32 @@ final class NativeHttpServerTest extends TestCase
             <?php
             return static fn () => new Polidog\Rosanna\Runtime\Element('h1', [], ['About page']);
             PHP);
+        self::write('src/Pages/layout.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Router\Layout\LayoutComponent;
+            use Polidog\Rosanna\Runtime\Element;
+
+            final class NativeHttpRootLayout extends LayoutComponent
+            {
+                public function render(): Element
+                {
+                    return new Element('div', [], ['root-layout-rendered', $this->getChildren()]);
+                }
+            }
+            PHP);
+        self::write('src/Pages/error.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Router\Component\ErrorPageComponent;
+            use Polidog\Rosanna\Runtime\Element;
+
+            final class NativeHttpErrorPage extends ErrorPageComponent
+            {
+                public function render(): Element
+                {
+                    return new Element('p', [], ['error-page-rendered']);
+                }
+            }
+            PHP);
         self::write('src/Pages/middleware.go', <<<'GO'
             package main
 
@@ -267,10 +293,32 @@ final class NativeHttpServerTest extends TestCase
     public function testAnUnroutablePathIsNotFoundWithoutReachingAGoProxy(): void
     {
         foreach (['/%zz', '/%E8%A8%98%E4%BA%8B/%zz', '/a%00b', '//about'] as $path) {
-            [$status, $headers] = $this->request('GET', $path);
+            [$status, $headers, $body] = $this->request('GET', $path);
 
             self::assertSame(404, $status, $path);
             self::assertArrayNotHasKey('x-proxied-by', $headers, $path);
+            self::assertStringStartsWith('application/json', $headers['content-type'] ?? '', $path);
+            self::assertSame('{"error":"Not Found"}', $body, $path);
+        }
+    }
+
+    public function testAnUnroutablePathRendersNoApplicationCode(): void
+    {
+        // A path the proxy did see still gets the app's error page and root
+        // layout, so their absence below is not down to the fixture.
+        [$status, , $body] = $this->request('GET', '/nope');
+        self::assertSame(404, $status);
+        self::assertStringContainsString('error-page-rendered', $body);
+        self::assertStringContainsString('root-layout-rendered', $body);
+
+        // Layout content may rely on the Go middleware's authorization, and
+        // the middleware did not run for these.
+        foreach (['/%zz', '/a%00b', '//about'] as $path) {
+            [$status, , $body] = $this->request('GET', $path);
+
+            self::assertSame(404, $status, $path);
+            self::assertStringNotContainsString('error-page-rendered', $body, $path);
+            self::assertStringNotContainsString('root-layout-rendered', $body, $path);
         }
     }
 
