@@ -244,9 +244,9 @@ the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
 treats the app as production, as does `APP_ENV` being set nowhere: neither in
-the real environment nor in any of these files. `relayer init` writes
-`APP_ENV=dev` to the gitignored `.env.local`, so a deploy that forgets it runs
-as production; after a fresh clone, run `echo APP_ENV=dev > .env.local`.
+the real environment nor in any of these files. For a new project, `relayer init`
+writes `APP_ENV=dev` to the gitignored `.env.local`, so a deploy that forgets it runs
+as production; after a fresh clone, run `echo APP_ENV=dev >> .env.local`.
 In production, pre-compile with `vendor/bin/rosanna-defer compile src/Pages` during
 deploy.
 
@@ -2857,7 +2857,7 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
    that does set it alone. An edited `.env` stays as it is and no `.env.local` is
    written, whatever it says, so check `APP_ENV` yourself. `relayer init` writes
    `.env.local` only in a new project. Other checkouts need
-   `echo APP_ENV=dev > .env.local`.
+   `echo APP_ENV=dev >> .env.local`.
 7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
    that relies on it.
 

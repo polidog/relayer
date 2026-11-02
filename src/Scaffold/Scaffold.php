@@ -412,7 +412,7 @@ final class Scaffold
 
             `APP_ENV=dev` compiles `.psx`, scans routes, and rebuilds the
             DI container on the fly. It comes from `.env.local`, which is
-            gitignored, so a fresh clone needs `echo APP_ENV=dev > .env.local`.
+            gitignored, so a fresh clone needs `echo APP_ENV=dev >> .env.local`.
             A deploy without it runs as production; precompile all three once:
 
             ```bash

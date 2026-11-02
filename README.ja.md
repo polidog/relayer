@@ -250,9 +250,9 @@ LOCALE_PATH_PREFIX=true
 
 `APP_ENV=dev`（または `development`）で PSX ファイルの auto-compile が
 有効になります。それ以外の値は本番扱いで、実環境にもこれらのファイルにも
-`APP_ENV` が無い場合も本番扱いです。`relayer init` は gitignore 対象の
+`APP_ENV` が無い場合も本番扱いです。新規プロジェクトでは `relayer init` が gitignore 対象の
 `.env.local` に `APP_ENV=dev` を書くので、指定し忘れたデプロイは本番として動きます。
-clone した直後は `echo APP_ENV=dev > .env.local` を実行してください。本番では
+clone した直後は `echo APP_ENV=dev >> .env.local` を実行してください。本番では
 デプロイ時に `vendor/bin/rosanna-defer compile src/Pages` で事前コンパイルします。
 
 ## ルーティングとページ
@@ -2856,7 +2856,7 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
    `APP_ENV` を指定していなければ行を追記し、指定済みなら触りません。手を入れた `.env`
    は内容にかかわらずそのまま残し、`.env.local` も書かないので、`APP_ENV` は自分で
    確かめてください。`relayer init` が `.env.local` を書くのは新規プロジェクトだけです。
-   別の環境では `echo APP_ENV=dev > .env.local` を実行してください。
+   別の環境では `echo APP_ENV=dev >> .env.local` を実行してください。
 7. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
    CSS や JS を直します。
 
