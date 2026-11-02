@@ -9,7 +9,6 @@ use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
-use Polidog\Relayer\Auth\UserProvider;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Psx\PsxCache;
@@ -250,13 +249,13 @@ final class PageLoader
 
     public function resolveAuthenticator(): ?AuthenticatorInterface
     {
-        // UserProvider is an interface — `has()` only returns true when
-        // the app explicitly bound an implementation. Used as the gate
-        // for "auth is configured" so apps without auth pay nothing.
-        if (null === $this->container || !$this->container->has(UserProvider::class)) {
-            return null;
-        }
-        if (!$this->container->has(AuthenticatorInterface::class)) {
+        // The AuthenticatorInterface binding itself is the "auth configured"
+        // gate, as in InjectorContainer: ContainerFactory only aliases it when
+        // a UserProvider (session) or a TokenVerifier (stateless) is bound.
+        // It is an interface, so `has()` is true only for an explicit binding
+        // and apps without auth pay nothing. Gating on UserProvider would
+        // leave a token-only app's bearer principal unseen.
+        if (null === $this->container || !$this->container->has(AuthenticatorInterface::class)) {
             return null;
         }
 
