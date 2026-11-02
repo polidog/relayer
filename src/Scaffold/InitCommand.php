@@ -19,7 +19,9 @@ use JsonException;
  * Idempotent and non-destructive by contract:
  *  - existing skeleton files are never overwritten (reported as skipped),
  *  - `.env.local` (dev mode, which overrides `.env`) is written only into a
- *    new project: no `.env` and no `structure_version` marker yet,
+ *    new project: no `.env`, no `structure_version` marker and none of
+ *    {@see APP_PATHS} yet. It is written first, so an init that dies partway
+ *    leaves either nothing or dev mode already in place for the retry,
  *  - the existing `composer.json` is patched additively — user values win,
  *    only missing keys / array members are added,
  *  - `extra.relayer.structure_version` is stamped only on the initial
@@ -47,6 +49,25 @@ final class InitCommand
         (`composer require polidog/relayer`). Existing files are left
         untouched; composer.json is patched additively.
         TXT;
+
+    /**
+     * Paths that mean an application already exists here, even without a
+     * `.env` or the marker: one configured by hand can run in production on
+     * real environment variables alone. `src/Pages` is the directory
+     * `Relayer::boot()` always routes from, so every Relayer app has it; the
+     * two entrypoints are what a server runs (and also catch a non-Relayer
+     * app adopting the framework); the configurator is the app's own wiring.
+     * The other scaffold files (Dockerfile, config/, …) serve nothing on
+     * their own.
+     *
+     * @var list<string>
+     */
+    private const array APP_PATHS = [
+        'src/Pages',
+        'src/AppConfigurator.php',
+        'public/index.php',
+        'public/worker.php',
+    ];
 
     /**
      * @param list<string>               $args  argv without the script name (e.g. `['init']`)
@@ -170,12 +191,17 @@ final class InitCommand
             return 1;
         }
 
-        // Decided before any file is written, since the first file written is
-        // .env. The marker is what tells a project that merely lost its .env
-        // from one that never had a framework-written one.
+        // Decided before any file is written, since init itself creates every
+        // path looked at here. The marker is what tells a project that merely
+        // lost its .env from one that never had a framework-written one.
         $extra = \is_array($composer['extra'] ?? null) ? $composer['extra'] : [];
         $relayer = \is_array($extra['relayer'] ?? null) ? $extra['relayer'] : [];
         $isNewProject = !\file_exists($root . '/.env') && !\array_key_exists('structure_version', $relayer);
+        foreach (self::APP_PATHS as $relative) {
+            if (\file_exists($root . '/' . $relative)) {
+                $isNewProject = false;
+            }
+        }
 
         if (0 !== ($status = self::writeFiles($root, $isNewProject, $write))) {
             return $status;
@@ -260,7 +286,13 @@ final class InitCommand
         $skipped = [];
         $devModeWithheld = false;
 
-        foreach (Scaffold::files() as $relative => $contents) {
+        // .env.local first: every path the newness check reads is written
+        // after it, so a retry after an interruption still sees a new project,
+        // or finds dev mode already in place.
+        $files = Scaffold::files();
+        $files = ['.env.local' => $files['.env.local']] + $files;
+
+        foreach ($files as $relative => $contents) {
             $path = $root . '/' . $relative;
 
             if (\file_exists($path)) {

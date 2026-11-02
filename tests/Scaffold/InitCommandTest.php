@@ -226,7 +226,8 @@ final class InitCommandTest extends TestCase
 
         self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
         self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
-        self::assertStringContainsString('+ .env.local', $this->captured());
+        // Written first, but the report stays sorted.
+        self::assertStringContainsString("  + .env\n  + .env.local\n", $this->captured());
     }
 
     #[DataProvider('provideAnExistingEnvGetsNoEnvLocalCases')]
@@ -294,6 +295,75 @@ final class InitCommandTest extends TestCase
         self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
         self::assertFileDoesNotExist($this->project . '/.env.local');
         self::assertStringContainsString('Did not create .env.local', $this->captured());
+    }
+
+    #[DataProvider('provideAnExistingAppWithNeitherEnvNorMarkerGetsNoEnvLocalCases')]
+    public function testAnExistingAppWithNeitherEnvNorMarkerGetsNoEnvLocal(string $existing): void
+    {
+        // A hand-configured app can run in production on real environment
+        // variables, with no .env and no marker. Dev mode there would expose
+        // the profiler and stack traces on the next boot.
+        $this->writeComposer(['name' => 'acme/app']);
+        $this->seedExisting($existing);
+
+        $this->assertInitSucceeds();
+
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+        self::assertStringNotContainsString('+ .env.local', $this->captured());
+        self::assertStringContainsString('Did not create .env.local', $this->captured());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnExistingAppWithNeitherEnvNorMarkerGetsNoEnvLocalCases(): iterable
+    {
+        yield 'pages' => ['src/Pages/'];
+
+        yield 'classic entrypoint' => ['public/index.php'];
+
+        yield 'worker entrypoint' => ['public/worker.php'];
+
+        yield 'configurator' => ['src/AppConfigurator.php'];
+    }
+
+    public function testAFailedEnvLocalWriteLeavesNothingThatWouldEndDevMode(): void
+    {
+        // Stands in for init dying before .env.local: a dangling symlink does
+        // not "exist", and writing through it fails.
+        $this->writeComposer(['name' => 'acme/app']);
+        \symlink($this->project . '/missing/target', $this->project . '/.env.local');
+
+        self::assertSame(1, InitCommand::run(['init'], $this->capture(), $this->project));
+
+        self::assertFileDoesNotExist($this->project . '/.env');
+        self::assertFileDoesNotExist($this->project . '/public/index.php');
+
+        \unlink($this->project . '/.env.local');
+        $this->assertInitSucceeds();
+
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+    }
+
+    public function testRetryingAfterAMidwayFailureKeepsDevMode(): void
+    {
+        // A file where the public/ directory belongs stops init partway through.
+        $this->writeComposer(['name' => 'acme/app']);
+        \file_put_contents($this->project . '/public', '');
+
+        self::assertSame(1, InitCommand::run(['init'], $this->capture(), $this->project));
+
+        self::assertFileExists($this->project . '/.env');
+        self::assertFileDoesNotExist($this->project . '/src/Pages/page.psx');
+
+        \unlink($this->project . '/public');
+        $this->lines = [];
+        $this->assertInitSucceeds();
+
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+        self::assertFileExists($this->project . '/public/index.php');
+        self::assertStringContainsString('= .env.local', $this->captured());
+        self::assertStringNotContainsString('Did not create', $this->captured());
     }
 
     public function testRejectsAJsonArrayComposerFile(): void
@@ -398,6 +468,23 @@ final class InitCommandTest extends TestCase
         self::assertIsArray($decoded);
 
         return $decoded;
+    }
+
+    /**
+     * @param string $relative a path to create; a trailing slash makes it a directory
+     */
+    private function seedExisting(string $relative): void
+    {
+        $path = $this->project . '/' . $relative;
+
+        if (\str_ends_with($relative, '/')) {
+            \mkdir($path, 0o755, true);
+
+            return;
+        }
+
+        \mkdir(\dirname($path), 0o755, true);
+        \file_put_contents($path, '<?php // mine');
     }
 
     private function assertInitSucceeds(): void
