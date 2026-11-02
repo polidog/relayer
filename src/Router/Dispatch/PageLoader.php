@@ -403,14 +403,21 @@ final class PageLoader
     /**
      * Resolve a class instance using the container or direct instantiation.
      *
-     * A page, layout or error page from the container is cloned. A service is
-     * usually shared, so the object the container holds lives as long as the
-     * worker, while a render writes to the page (params, request, scripts,
-     * metadata, children, whatever a form action sets). The clone keeps the
-     * dependencies the container injected, and the service itself is never
-     * written to, so each request starts from the same state. The clone is
-     * shallow: an object the page built for itself in its constructor is
-     * still shared between requests.
+     * The container built by ContainerFactory makes every page, layout and
+     * error page a non-shared service (NonSharedPagesPass), so `get()` runs
+     * the constructor again and the objects a page builds for itself (a
+     * form, a DTO) are fresh for each request, while the services injected
+     * into it are still the container's. An unregistered class is autowired
+     * by InjectorContainer, which also builds a new object every time.
+     *
+     * What comes from the container is still cloned, because not every
+     * container is built that way: a container the app hands to the router
+     * itself, or an object put into the container with `set()`, can return
+     * the same object to every request. The clone keeps the render's writes
+     * (params, request, scripts, metadata, children, a form action's state)
+     * off that object. It is shallow, so in that case alone an object the
+     * page built in its constructor is shared between requests. For a fresh
+     * instance the clone costs one copy and changes nothing.
      *
      * @param class-string $className
      */

@@ -1511,6 +1511,17 @@ final class UsersPage extends PageComponent
 You only need to register a Page in `AppConfigurator` if you want non-default
 behavior (e.g. service tags, decorators, factory construction).
 
+A registered page, layout or error page is still built anew for every
+request: the container makes each class that extends `PageComponent` or
+`ErrorPageComponent`, or implements `LayoutInterface`, a non-shared service,
+even if you call `setShared(true)` on it, and the compiled container
+(`relayer container:compile`) does the same. So an object the page creates in
+its constructor (a form, a DTO) never carries one visitor's state to the
+next on a long-running worker, while the services injected into it are still
+the container's shared ones. An object handed to the container with `set()`
+cannot be rebuilt; the router renders a shallow clone of it, so objects it
+holds are shared between requests. Don't register pages that way.
+
 ## Accessing the HTTP Request
 
 Declare a `Polidog\Relayer\Http\Request` parameter on a page (function-style
