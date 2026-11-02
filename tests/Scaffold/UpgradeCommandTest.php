@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Scaffold;
 
 use Closure;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Scaffold\InitCommand;
 use Polidog\Relayer\Scaffold\Scaffold;
 use Polidog\Relayer\Scaffold\UpgradeCommand;
+use Symfony\Component\Dotenv\Dotenv;
 
 final class UpgradeCommandTest extends TestCase
 {
@@ -194,9 +196,13 @@ final class UpgradeCommandTest extends TestCase
     public function testUpgradesOnlyTheVersionsAheadOfTheRecordedOne(): void
     {
         $target = Scaffold::STRUCTURE_VERSION;
-        // A project recorded one shy of current: only the final version's
-        // delta should be written; every earlier delta is already "there".
-        $recorded = $target - 1;
+        $migrations = Scaffold::migrations();
+        // A project recorded one shy of the newest step that adds files (the
+        // latest bumps may only rewrite): only that step's delta should be
+        // written; every earlier delta is already "there".
+        $newestDelta = \array_key_last($migrations);
+        self::assertNotNull($newestDelta);
+        $recorded = $newestDelta - 1;
         self::assertGreaterThanOrEqual(1, $recorded);
 
         $this->writeComposer([
@@ -208,8 +214,7 @@ final class UpgradeCommandTest extends TestCase
 
         self::assertSame(0, $status, $this->captured());
 
-        $migrations = Scaffold::migrations();
-        foreach ($migrations[$target] ?? [] as $relative) {
+        foreach ($migrations[$newestDelta] as $relative) {
             self::assertFileExists($this->project . '/' . $relative, $relative . ' (target delta) should be created');
         }
         for ($v = 2; $v <= $recorded; ++$v) {
@@ -410,6 +415,205 @@ final class UpgradeCommandTest extends TestCase
         );
     }
 
+    #[DataProvider('provideAnEditedEnvIsKeptAndNoEnvLocalAppearsCases')]
+    public function testAnEditedEnvIsKeptAndNoEnvLocalAppears(string $env): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', $env);
+        $before = $this->effectiveAppEnv();
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame($env, \file_get_contents($this->project . '/.env'));
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+        self::assertSame($before, $this->effectiveAppEnv());
+        self::assertStringContainsString('! .env', $this->captured());
+        self::assertStringNotContainsString('.env.local', $this->captured());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnEditedEnvIsKeptAndNoEnvLocalAppearsCases(): iterable
+    {
+        yield 'production' => ["APP_ENV=prod\n"];
+
+        yield 'edited but still dev' => ["APP_ENV=dev\nDATABASE_DSN=sqlite:/srv/app.db\n"];
+
+        yield 'no APP_ENV at all' => ["DATABASE_DSN=sqlite:/srv/app.db\n"];
+    }
+
+    public function testAnEditedEnvLeavesAnExistingEnvLocalAlone(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', "APP_ENV=prod\n");
+        \file_put_contents($this->project . '/.env.local', "SECRET=abc\n");
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame("SECRET=abc\n", \file_get_contents($this->project . '/.env.local'));
+        self::assertSame('prod', $this->effectiveAppEnv());
+    }
+
+    public function testAProjectWithoutAnEnvGetsNoEnvLocal(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        // No .env means APP_ENV was unset, so production. Nothing moved.
+        self::assertFileDoesNotExist($this->project . '/.env');
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+    }
+
+    public function testAnEnvAlreadyWithoutDevModeMovesNothing(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', Scaffold::files()['.env']);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+    }
+
+    #[DataProvider('provideAnUntouchedEnvMovesDevModeIntoANewEnvLocalCases')]
+    public function testAnUntouchedEnvMovesDevModeIntoANewEnvLocal(int $version): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => $version]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', $version));
+        self::assertSame('dev', $this->effectiveAppEnv());
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+        self::assertStringContainsString('~ .env', $this->captured());
+        self::assertStringContainsString('+ .env.local', $this->captured());
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function provideAnUntouchedEnvMovesDevModeIntoANewEnvLocalCases(): iterable
+    {
+        yield 'v9' => [9];
+
+        yield 'v10' => [10];
+    }
+
+    #[DataProvider('provideAnUntouchedEnvAppendsDevModeToAnEnvLocalThatLacksItCases')]
+    public function testAnUntouchedEnvAppendsDevModeToAnEnvLocalThatLacksIt(string $envLocal, string $expected): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        \file_put_contents($this->project . '/.env.local', $envLocal);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertSame($expected, \file_get_contents($this->project . '/.env.local'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+        self::assertStringContainsString('~ .env.local', $this->captured());
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function provideAnUntouchedEnvAppendsDevModeToAnEnvLocalThatLacksItCases(): iterable
+    {
+        yield 'other values' => ["SECRET=abc\nOTHER=1\n", "SECRET=abc\nOTHER=1\nAPP_ENV=dev\n"];
+
+        yield 'no final newline' => ['SECRET=abc', "SECRET=abc\nAPP_ENV=dev\n"];
+
+        yield 'empty' => ['', "APP_ENV=dev\n"];
+
+        yield 'only mentioned in a comment' => ["# APP_ENV=prod\nSECRET=abc\n", "# APP_ENV=prod\nSECRET=abc\nAPP_ENV=dev\n"];
+
+        yield 'a longer name' => ["MY_APP_ENV=prod\n", "MY_APP_ENV=prod\nAPP_ENV=dev\n"];
+    }
+
+    public function testAppendingToEnvLocalKeepsItsPermissions(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        // It holds secrets; a rewrite through a temp file would widen this.
+        \file_put_contents($this->project . '/.env.local', "SECRET=abc\n");
+        \chmod($this->project . '/.env.local', 0o600);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        \clearstatcache();
+        self::assertSame(0o600, \fileperms($this->project . '/.env.local') & 0o777);
+    }
+
+    #[DataProvider('provideAnEnvLocalThatSetsAppEnvIsLeftAloneCases')]
+    public function testAnEnvLocalThatSetsAppEnvIsLeftAlone(string $envLocal, string $effective): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        \file_put_contents($this->project . '/.env.local', $envLocal);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertSame($envLocal, \file_get_contents($this->project . '/.env.local'));
+        self::assertSame($effective, $this->effectiveAppEnv());
+        self::assertStringContainsString('= .env.local', $this->captured());
+    }
+
+    /**
+     * @return iterable<string, array{string, string}>
+     */
+    public static function provideAnEnvLocalThatSetsAppEnvIsLeftAloneCases(): iterable
+    {
+        yield 'production' => ["APP_ENV=prod\nSECRET=abc\n", 'prod'];
+
+        yield 'already dev' => ["SECRET=abc\nAPP_ENV=dev\n", 'dev'];
+
+        yield 'exported' => ["export APP_ENV=staging\n", 'staging'];
+    }
+
+    public function testAnInterruptedUpgradeDoesNotAppendDevModeTwice(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        \file_put_contents($this->project . '/.env.local', "SECRET=abc\n");
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        // Died after .env.local was written but before .env and the marker:
+        // the re-run sees the old .env again and must add nothing more.
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame("SECRET=abc\nAPP_ENV=dev\n", \file_get_contents($this->project . '/.env.local'));
+    }
+
+    public function testDevModeIsSavedBeforeItLeavesTheEnv(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        // Cannot be appended to. If .env were rewritten first, this failure
+        // would lose dev mode for good: the re-run finds a current .env and
+        // has no reason left to write .env.local.
+        \mkdir($this->project . '/.env.local');
+
+        self::assertSame(1, UpgradeCommand::run([], $this->capture(), $this->project));
+
+        self::assertSame(self::priorContent('.env', 10), \file_get_contents($this->project . '/.env'));
+        $extra = $this->readComposer()['extra'];
+        self::assertIsArray($extra);
+        self::assertSame(['structure_version' => 10], $extra['relayer']);
+        self::assertStringContainsString('.env.local', $this->captured());
+
+        \rmdir($this->project . '/.env.local');
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+        self::assertSame('dev', $this->effectiveAppEnv());
+    }
+
     public function testDispatchesThroughInitCommandEntrypoint(): void
     {
         // Routed via the shared dispatcher: no composer.json yields the
@@ -502,6 +706,26 @@ final class UpgradeCommandTest extends TestCase
         self::assertIsArray($decoded);
 
         return $decoded;
+    }
+
+    /**
+     * APP_ENV as the real dotenv parser reads the project's two files, last
+     * one winning, so the assertions state what actually boots rather than
+     * what the scaffolder's own line check thinks is there.
+     */
+    private function effectiveAppEnv(): ?string
+    {
+        $values = [];
+        foreach (['.env', '.env.local'] as $file) {
+            $path = $this->project . '/' . $file;
+            if (\is_file($path)) {
+                $values = (new Dotenv())->parse((string) \file_get_contents($path), $path) + $values;
+            }
+        }
+
+        $appEnv = $values['APP_ENV'] ?? null;
+
+        return \is_string($appEnv) ? $appEnv : null;
     }
 
     /**

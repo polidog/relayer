@@ -218,6 +218,84 @@ final class InitCommandTest extends TestCase
         self::assertStringNotContainsString('structure_version', $this->captured());
     }
 
+    public function testANewProjectStartsInDevMode(): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+        self::assertStringContainsString('+ .env.local', $this->captured());
+    }
+
+    #[DataProvider('provideAnExistingEnvGetsNoEnvLocalCases')]
+    public function testAnExistingEnvGetsNoEnvLocal(string $env): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        \file_put_contents($this->project . '/.env', $env);
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame($env, \file_get_contents($this->project . '/.env'));
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+        self::assertStringNotContainsString('+ .env.local', $this->captured());
+        // Said out loud: the rest of the skeleton did arrive, and a developer
+        // needs to know why this one file did not.
+        self::assertStringContainsString('Did not create .env.local', $this->captured());
+        self::assertFileExists($this->project . '/public/index.php');
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnExistingEnvGetsNoEnvLocalCases(): iterable
+    {
+        yield 'production' => ["APP_ENV=prod\n"];
+
+        yield 'no APP_ENV at all' => ["DATABASE_DSN=sqlite:/srv/app.db\n"];
+
+        yield 'already dev' => ["APP_ENV=dev\n"];
+    }
+
+    public function testAnExistingEnvLocalIsReportedAndLeftAlone(): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        \file_put_contents($this->project . '/.env', "APP_ENV=prod\n");
+        \file_put_contents($this->project . '/.env.local', "SECRET=abc\n");
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame("SECRET=abc\n", \file_get_contents($this->project . '/.env.local'));
+        self::assertStringContainsString('= .env.local', $this->captured());
+        self::assertStringNotContainsString('Did not create', $this->captured());
+    }
+
+    public function testAnEnvLocalDeletedOnPurposeIsNotPushedBack(): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+        \unlink($this->project . '/.env.local');
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+    }
+
+    public function testAProjectThatLostItsEnvIsNotNew(): void
+    {
+        // The marker proves an earlier init. `upgrade` tells people to delete
+        // an edited file and re-run init to take the new template, which on a
+        // server must not turn production into dev.
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => Scaffold::STRUCTURE_VERSION]]]);
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+        self::assertStringContainsString('Did not create .env.local', $this->captured());
+    }
+
     public function testRejectsAJsonArrayComposerFile(): void
     {
         \file_put_contents($this->project . '/composer.json', '["x"]');

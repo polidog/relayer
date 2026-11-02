@@ -351,6 +351,18 @@ final class ScaffoldTest extends TestCase
         );
     }
 
+    public function testDevModeIsNotAnUnconditionalMigrationAndLeftTheCommittedEnv(): void
+    {
+        // A migration writes whenever the file is missing, and .env.local
+        // overrides .env, so listing it would turn production into dev.
+        foreach (Scaffold::migrations() as $paths) {
+            self::assertNotContains('.env.local', $paths);
+        }
+
+        self::assertDoesNotMatchRegularExpression('/^\s*APP_ENV=/m', Scaffold::files()['.env']);
+        self::assertMatchesRegularExpression('/^APP_ENV=dev$/m', Scaffold::files()['.env.local']);
+    }
+
     public function testRewritesMapListsOnlySupersededContentForRealFiles(): void
     {
         $files = Scaffold::files();

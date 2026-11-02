@@ -53,6 +53,9 @@ final class Scaffold
     {
         return [
             '.env' => self::env(),
+            // Conditional, unlike everything else here: it overrides .env, so
+            // `init` writes it only into a new project and `upgrade` only when
+            // a rewrite takes APP_ENV=dev out of an untouched .env.
             '.env.local' => self::envLocal(),
             '.gitignore' => self::gitignore(),
             'README.md' => self::readme(),
@@ -133,7 +136,10 @@ final class Scaffold
      * version that added them). The v1 baseline files ({@see files()}
      * minus every path here — `.env`, the `src/` tree,
      * `public/index.php`, …) need no step: any project carrying the
-     * `structure_version` marker was scaffolded with them.
+     * `structure_version` marker was scaffolded with them. `.env.local` is
+     * the exception: it is absent from this map despite arriving in v11,
+     * because "ensure it exists" would put dev mode into a production project
+     * (see {@see UpgradeCommand::moveDevModeToEnvLocal()}).
      *
      * Changes to the *content* of an already-shipped file live in
      * {@see rewrites()} instead; `upgrade` applies both maps for
@@ -156,8 +162,6 @@ final class Scaffold
             ],
             5 => ['CLAUDE.md'],
             6 => ['static-build.Dockerfile', 'Caddyfile', 'public/worker.php'],
-            // Dev mode moved out of the committed .env (see rewrites()).
-            11 => ['.env.local'],
         ];
     }
 

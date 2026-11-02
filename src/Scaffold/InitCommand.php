@@ -18,6 +18,8 @@ use JsonException;
  *
  * Idempotent and non-destructive by contract:
  *  - existing skeleton files are never overwritten (reported as skipped),
+ *  - `.env.local` (dev mode, which overrides `.env`) is written only into a
+ *    new project: no `.env` and no `structure_version` marker yet,
  *  - the existing `composer.json` is patched additively — user values win,
  *    only missing keys / array members are added,
  *  - `extra.relayer.structure_version` is stamped only on the initial
@@ -168,7 +170,14 @@ final class InitCommand
             return 1;
         }
 
-        if (0 !== ($status = self::writeFiles($root, $write))) {
+        // Decided before any file is written, since the first file written is
+        // .env. The marker is what tells a project that merely lost its .env
+        // from one that never had a framework-written one.
+        $extra = \is_array($composer['extra'] ?? null) ? $composer['extra'] : [];
+        $relayer = \is_array($extra['relayer'] ?? null) ? $extra['relayer'] : [];
+        $isNewProject = !\file_exists($root . '/.env') && !\array_key_exists('structure_version', $relayer);
+
+        if (0 !== ($status = self::writeFiles($root, $isNewProject, $write))) {
             return $status;
         }
 
@@ -245,16 +254,26 @@ final class InitCommand
     /**
      * @param Closure(string): void $write
      */
-    private static function writeFiles(string $root, Closure $write): int
+    private static function writeFiles(string $root, bool $isNewProject, Closure $write): int
     {
         $created = [];
         $skipped = [];
+        $devModeWithheld = false;
 
         foreach (Scaffold::files() as $relative => $contents) {
             $path = $root . '/' . $relative;
 
             if (\file_exists($path)) {
                 $skipped[] = $relative;
+
+                continue;
+            }
+
+            // .env.local overrides .env, so in a project that already runs
+            // somewhere, writing APP_ENV=dev here would turn production into
+            // dev. Only a new project has no environment to change.
+            if ('.env.local' === $relative && !$isNewProject) {
+                $devModeWithheld = true;
 
                 continue;
             }
@@ -290,6 +309,12 @@ final class InitCommand
             foreach ($skipped as $relative) {
                 $write('  = ' . $relative);
             }
+        }
+
+        if ($devModeWithheld) {
+            $write('Did not create .env.local: this is an existing project, and');
+            $write('APP_ENV=dev there would override its environment. To develop on');
+            $write('this machine, run: echo APP_ENV=dev >> .env.local');
         }
 
         return 0;

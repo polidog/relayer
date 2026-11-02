@@ -2851,9 +2851,12 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
    Relayer に必要な deferred manifest を書き出しません。
 
 6. コミットする `.env` に `APP_ENV=dev` を書かなくなり、`APP_ENV` のない `.env` は
-   本番扱いになりました。`relayer upgrade` は gitignore 対象の `.env.local` に
-   `APP_ENV=dev` を書きます。別の環境では `echo APP_ENV=dev > .env.local` を
-   実行してください。
+   本番扱いになりました。`relayer upgrade` は手を入れていない `.env` を書き換えるとき、
+   `APP_ENV=dev` を gitignore 対象の `.env.local` に移します。ファイルがなければ作り、
+   `APP_ENV` を指定していなければ行を追記し、指定済みなら触りません。手を入れた `.env`
+   は内容にかかわらずそのまま残し、`.env.local` も書かないので、`APP_ENV` は自分で
+   確かめてください。`relayer init` が `.env.local` を書くのは新規プロジェクトだけです。
+   別の環境では `echo APP_ENV=dev > .env.local` を実行してください。
 7. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
    CSS や JS を直します。
 

@@ -2851,8 +2851,13 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
    deferred manifest Relayer needs.
 
 6. The committed `.env` no longer sets `APP_ENV=dev`, and a `.env` without
-   `APP_ENV` now means production. `relayer upgrade` writes `APP_ENV=dev` to the
-   gitignored `.env.local`; other checkouts need `echo APP_ENV=dev > .env.local`.
+   `APP_ENV` now means production. When `relayer upgrade` rewrites an untouched
+   `.env`, it moves `APP_ENV=dev` to the gitignored `.env.local`: it creates the
+   file, appends the line if the file does not set `APP_ENV`, and leaves a file
+   that does set it alone. An edited `.env` stays as it is and no `.env.local` is
+   written, whatever it says, so check `APP_ENV` yourself. `relayer init` writes
+   `.env.local` only in a new project. Other checkouts need
+   `echo APP_ENV=dev > .env.local`.
 7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
    that relies on it.
 

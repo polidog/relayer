@@ -31,6 +31,10 @@ use JsonException;
  */
 final class UpgradeCommand
 {
+    private const string ENV_LOCAL_CREATED = 'created';
+    private const string ENV_LOCAL_APPENDED = 'appended';
+    private const string ENV_LOCAL_KEPT = 'kept';
+
     /**
      * @param list<string>               $args  argv after the `upgrade` verb (unused; reserved)
      * @param null|Closure(string): void $write line writer; defaults to STDOUT
@@ -153,6 +157,7 @@ final class UpgradeCommand
         $rewrites = Scaffold::rewrites();
         $refreshed = [];
         $kept = [];
+        $devModeAppended = false;
 
         for ($v = $recorded + 1; $v <= $target; ++$v) {
             foreach ($migrations[$v] ?? [] as $relative) {
@@ -227,6 +232,25 @@ final class UpgradeCommand
                     continue;
                 }
 
+                // Before the rewrite, not after: if .env went first and this
+                // failed, the re-run would find a current .env, see nothing
+                // left to move, and the dev app would stay production.
+                if ('.env' === $relative && 1 === \preg_match('/^APP_ENV=dev$/m', $existing)) {
+                    $moved = self::moveDevModeToEnvLocal($root, $files['.env.local'], $write);
+
+                    if (null === $moved) {
+                        return 1;
+                    }
+
+                    if (self::ENV_LOCAL_CREATED === $moved) {
+                        $created[] = '.env.local';
+                    } elseif (self::ENV_LOCAL_KEPT === $moved) {
+                        $skipped[] = '.env.local';
+                    } else {
+                        $devModeAppended = true;
+                    }
+                }
+
                 if (!self::atomicWrite($path, $files[$relative])) {
                     $write(\sprintf('Could not write "%s".', $relative));
 
@@ -256,6 +280,11 @@ final class UpgradeCommand
             }
         }
 
+        if ($devModeAppended) {
+            $write('Moved APP_ENV=dev out of .env, into your existing file:');
+            $write('  ~ .env.local');
+        }
+
         if ([] !== $skipped) {
             $write(\sprintf('Skipped %d existing files:', \count($skipped)));
             foreach ($skipped as $relative) {
@@ -276,6 +305,54 @@ final class UpgradeCommand
         }
 
         return 0;
+    }
+
+    /**
+     * Keep a project in dev mode while its untouched `.env` loses the
+     * `APP_ENV=dev` line. `.env.local` overrides `.env`, so this runs only
+     * for that rewrite; it is deliberately not a {@see Scaffold::migrations()}
+     * entry, which would write dev mode into any project lacking the file.
+     *
+     * An existing file is appended to rather than replaced: it can hold
+     * secrets, and a temp file + rename would lose its permissions.
+     *
+     * @param Closure(string): void $write
+     *
+     * @return null|self::ENV_LOCAL_* null when `.env.local` could not be read or written
+     */
+    private static function moveDevModeToEnvLocal(string $root, string $template, Closure $write): ?string
+    {
+        $path = $root . '/.env.local';
+
+        if (!\file_exists($path)) {
+            if (!self::atomicWrite($path, $template)) {
+                $write('Could not write ".env.local".');
+
+                return null;
+            }
+
+            return self::ENV_LOCAL_CREATED;
+        }
+
+        $existing = \is_file($path) ? @\file_get_contents($path) : false;
+        if (false === $existing) {
+            $write('Could not read ".env.local".');
+
+            return null;
+        }
+
+        if (1 === \preg_match('/^[ \t]*(?:export[ \t]+)?APP_ENV[ \t]*=/m', $existing)) {
+            return self::ENV_LOCAL_KEPT;
+        }
+
+        $separator = '' === $existing || \str_ends_with($existing, "\n") ? '' : "\n";
+        if (false === @\file_put_contents($path, $separator . "APP_ENV=dev\n", \FILE_APPEND)) {
+            $write('Could not write ".env.local".');
+
+            return null;
+        }
+
+        return self::ENV_LOCAL_APPENDED;
     }
 
     /**
