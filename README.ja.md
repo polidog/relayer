@@ -90,6 +90,10 @@ php -S 127.0.0.1:8000 -t public
 - 既存の `composer.json` は**加算的に**パッチします。`App\` の PSR-4 autoload、
   rosanna-defer のアセット publish スクリプト、`extra.relayer.structure_version` の
   マーカーを追加するだけで、他は一切変更しません
+- `.env.local`（`APP_ENV=dev`）を書くのは新規プロジェクトだけです。`.env` も
+  マーカーもなく、`src/Pages`・`src/AppConfigurator.php`・`public/index.php`・
+  `public/worker.php` のどれもないものを新規とみなします。既存のアプリの環境は
+  変えず、開発モードを自分で足す方法を表示します
 
 `structure_version` マーカーはプロジェクトがどの雛形バージョンで生成されたかを
 記録します。これにより後述の `relayer upgrade` で構造を前進させられます。
@@ -2877,6 +2881,26 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
    別の環境では `echo APP_ENV=dev >> .env.local` を実行してください。
 7. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
    CSS や JS を直します。
+8. 雛形の `Caddyfile` は実際にリクエストを `public/worker.php` に送るようになりました
+   （以前の worker ブロックにはリクエストが届いていませんでした）。手を入れていなければ
+   `relayer upgrade` で worker モードが有効になります。これは本番用で、単一バイナリか
+   `frankenphp run --config Caddyfile` で使います。開発には
+   `php -S 127.0.0.1:8000 -t public` か `docker compose up --build` を使ってください。
+   どちらもリクエストごとに起動し直し、このファイルを読みません。worker ではコンテナの
+   サービスがリクエストをまたいで生き続けるので、自分のサービスのプロパティに
+   リクエストごとの状態を持たせないでください。持たせるものはリクエストの後に
+   `RequestLifecycle::onReset()` で消します（名前ごとに 1 つで、同じ名前なら置き換わります）:
+
+   ```php
+   use Polidog\Rosanna\Runtime\RequestLifecycle;
+
+   RequestLifecycle::onReset(self::class, function (): void {
+       $this->items = [];
+   });
+   ```
+
+   クラシック（リクエストごと）モードのままにするには、`Caddyfile` から `index` と
+   `worker` の行を消してください。
 
 フィールド名とセッションのキーが変わるので、旧バージョンが描画したフォームは
 デプロイの時点で動かなくなります。古い HTML や `usephp.js` が配信されないよう、

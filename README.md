@@ -86,7 +86,11 @@ It is idempotent and non-destructive:
 - your existing `composer.json` is patched **additively** — it adds the `App\`
   PSR-4 autoload, the rosanna-defer asset-publish scripts, and an
   `extra.relayer.structure_version` marker, and leaves everything else
-  untouched.
+  untouched;
+- `.env.local` (`APP_ENV=dev`) is written only into a new project: one with
+  no `.env`, no marker, and none of `src/Pages`, `src/AppConfigurator.php`,
+  `public/index.php` or `public/worker.php`. An existing app keeps its
+  environment, and `init` tells you how to add dev mode yourself.
 
 The `structure_version` marker records which skeleton shape the project was
 generated against, so `relayer upgrade` (below) can migrate it forward.
@@ -2879,6 +2883,27 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
    `echo APP_ENV=dev >> .env.local`.
 7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
    that relies on it.
+8. The scaffolded `Caddyfile` now really sends requests to `public/worker.php`
+   (the old worker block was never reached), so `relayer upgrade` turns worker
+   mode on if you have not edited the file. It is for production: the single
+   binary or `frankenphp run --config Caddyfile`. Develop with
+   `php -S 127.0.0.1:8000 -t public` or `docker compose up --build`, which serve
+   each request from scratch and do not read it. In a worker, container
+   services live across requests, so your own services must not keep
+   per-request state in properties. Clear what they do hold after each request
+   with `RequestLifecycle::onReset()` (one callback per name; the same name
+   replaces it):
+
+   ```php
+   use Polidog\Rosanna\Runtime\RequestLifecycle;
+
+   RequestLifecycle::onReset(self::class, function (): void {
+       $this->items = [];
+   });
+   ```
+
+   To stay in classic (per-request) mode, remove the `index` and `worker` lines
+   from the `Caddyfile`.
 
 Forms rendered by the previous version stop working when you deploy, because
 the field names and the session keys changed. Purge your CDN at deploy time so
