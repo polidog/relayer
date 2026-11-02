@@ -74,14 +74,11 @@ final class LayoutScriptDispatchTest extends TestCase
     {
         $html = $this->runApp('/');
 
-        $rosanna = \strpos($html, '<script src="/rosanna-defer.js">');
         $layout = \strpos($html, '<script src="/from-layout.js">');
         $page = \strpos($html, '<script src="/from-page.js" defer>');
 
         self::assertNotFalse($layout, 'layout addJs() inside render() must be emitted');
         self::assertNotFalse($page);
-        self::assertNotFalse($rosanna);
-        self::assertLessThan($layout, $rosanna);
         self::assertLessThan($page, $layout);
     }
 

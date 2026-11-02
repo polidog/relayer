@@ -13,6 +13,7 @@ use Polidog\Relayer\Router\Document\HtmlDocument;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Layout\ScriptCollection;
+use Polidog\Relayer\Router\Layout\TrackingDeferredRenderer;
 use Polidog\Rosanna\Defer\RosannaDefer;
 use Polidog\Rosanna\Runtime\Element;
 use Polidog\Rosanna\Runtime\Renderable;
@@ -62,14 +63,15 @@ final readonly class PageRenderer
      */
     private function renderPageInternal(FunctionPage|Renderable $page, LayoutStack $layouts, Request $request): void
     {
-        $componentId = $page instanceof FunctionPage
-            ? $page->getComponentId()
-            : 'page:' . $page::class . '#page';
-
-        $renderer = $this->layoutRenderer($request);
+        $deferred = new TrackingDeferredRenderer($this->rosanna->placeholderRenderer());
+        $renderer = new LayoutRenderer($request->uri(), $deferred);
         $html = $renderer->render($this->renderPageElement($page), $layouts);
 
-        echo $this->renderPageDocument($page, $layouts, $componentId, $html);
+        if ($this->document instanceof HtmlDocument) {
+            $this->document->setClientScriptNeeded($deferred->hasRendered());
+        }
+
+        echo $this->renderPageDocument($page, $layouts, $html);
     }
 
     /**
@@ -115,18 +117,9 @@ final readonly class PageRenderer
         return $pageElement;
     }
 
-    private function layoutRenderer(Request $request): LayoutRenderer
-    {
-        return new LayoutRenderer(
-            $request->uri(),
-            $this->rosanna->placeholderRenderer(),
-        );
-    }
-
     private function renderPageDocument(
         FunctionPage|Renderable $page,
         LayoutStack $layouts,
-        string $componentId,
         string $html,
     ): string {
         // Collected here, not right after $page->render(): a layout's
@@ -139,13 +132,7 @@ final readonly class PageRenderer
             }
         }
 
-        $wrappedHtml = \sprintf(
-            '<div data-rosanna="%s">%s</div>',
-            \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
-            $html,
-        );
-
-        return $this->document->render($wrappedHtml);
+        return $this->document->render($html);
     }
 
     /**

@@ -77,7 +77,8 @@ php -S 127.0.0.1:8000 -t public
 
 `composer install` (rather than `dump-autoload`) so the `App\` autoload
 *and* the publish scripts `init` just added both apply — the latter emits
-`public/rosanna-defer.js`, which the default document references.
+`public/rosanna-defer.js`, which the default document references on pages with a
+defer placeholder.
 
 It is idempotent and non-destructive:
 
@@ -2828,6 +2829,14 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
 5. Precompile with `vendor/bin/relayer compile`. `vendor/bin/usephp compile`
    no longer exists, and `vendor/bin/rosanna compile` does not write the
    deferred manifest Relayer needs.
+
+6. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
+   that relies on it.
+7. `rosanna-defer.js` now loads only on pages with a defer placeholder. If a page
+   without one calls `window.Rosanna` (such as `clearDeferCache()` on a logout
+   form), call `HtmlDocument::alwaysIncludeClientScript()`. Otherwise a
+   `localCache` fragment is not cleared, and a shared device can show the
+   previous user's content.
 
 Forms rendered by the previous version stop working when you deploy, because
 the field names and the session keys changed. Purge your CDN at deploy time so

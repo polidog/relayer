@@ -81,7 +81,8 @@ php -S 127.0.0.1:8000 -t public
 
 `dump-autoload` ではなく `composer install` を使うのは、`App\` の autoload と
 `init` が追加した publish スクリプトの両方を効かせるためです（後者が
-`public/rosanna-defer.js` を生成し、既定ドキュメントがこれを参照します）。
+`public/rosanna-defer.js` を生成し、既定ドキュメントが defer のプレースホルダーの
+あるページでこれを参照します）。
 
 冪等かつ非破壊です:
 
@@ -2826,6 +2827,14 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
 5. プリコンパイルは `vendor/bin/relayer compile` で行います。
    `vendor/bin/usephp compile` はなくなり、`vendor/bin/rosanna compile` は
    Relayer に必要な deferred manifest を書き出しません。
+
+6. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
+   CSS や JS を直します。
+7. `rosanna-defer.js` は defer のプレースホルダーがあるページでだけ読み込まれます。
+   プレースホルダーのないページから `window.Rosanna` を呼ぶ場合（ログアウトフォームの
+   `clearDeferCache()` など）は、`HtmlDocument::alwaysIncludeClientScript()` を
+   呼びます。呼ばないと `localCache` の断片が消えず、共有端末で前のユーザーの
+   内容が表示されることがあります。
 
 フィールド名とセッションのキーが変わるので、旧バージョンが描画したフォームは
 デプロイの時点で動かなくなります。古い HTML や `usephp.js` が配信されないよう、

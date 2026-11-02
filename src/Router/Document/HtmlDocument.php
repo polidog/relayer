@@ -9,6 +9,8 @@ final class HtmlDocument implements DocumentInterface
     private string $lang = 'en';
     private string $title = 'Relayer App';
     private string $jsPath = '/rosanna-defer.js';
+    private bool $clientScriptNeeded = true;
+    private bool $alwaysIncludeClientScript = false;
 
     /** @var array<int, string> */
     private array $cssPaths = [];
@@ -66,6 +68,28 @@ final class HtmlDocument implements DocumentInterface
         return $this;
     }
 
+    /**
+     * Load the client script on every page, not only on those with a defer
+     * placeholder. For an app that calls `window.Rosanna` from a page without
+     * one, such as `clearDeferCache()` on a logout form.
+     */
+    public function alwaysIncludeClientScript(): self
+    {
+        $this->alwaysIncludeClientScript = true;
+
+        return $this;
+    }
+
+    /**
+     * @internal the page renderer reports whether this page has a placeholder
+     */
+    public function setClientScriptNeeded(bool $needed): self
+    {
+        $this->clientScriptNeeded = $needed;
+
+        return $this;
+    }
+
     public function addCssPath(string $path): self
     {
         $this->cssPaths[] = $path;
@@ -101,7 +125,7 @@ final class HtmlDocument implements DocumentInterface
         $title = $this->getTitle();
         $escapedTitle = \htmlspecialchars($title, \ENT_QUOTES, 'UTF-8');
         $escapedLang = \htmlspecialchars($this->lang, \ENT_QUOTES, 'UTF-8');
-        $escapedJsPath = \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8');
+        $clientScript = $this->getClientScriptTag();
         $metaTags = $this->getMetaTags();
         $scriptTags = $this->getScriptTags();
 
@@ -119,7 +143,7 @@ final class HtmlDocument implements DocumentInterface
 </head>
 <body>
     {$content}
-    <script src="{$escapedJsPath}"></script>
+    {$clientScript}
     {$scriptTags}
 </body>
 </html>
@@ -172,6 +196,15 @@ HTML;
         }
 
         return \implode("\n    ", $links);
+    }
+
+    private function getClientScriptTag(): string
+    {
+        if (!$this->clientScriptNeeded && !$this->alwaysIncludeClientScript) {
+            return '';
+        }
+
+        return \sprintf('<script src="%s"></script>', \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8'));
     }
 
     private function getScriptTags(): string
