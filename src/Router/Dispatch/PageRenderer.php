@@ -75,13 +75,22 @@ final readonly class PageRenderer
     }
 
     /**
-     * Where a form posts back to: the requested URL, kept on this host. A
-     * browser reads an action of `//evil.example` as another host, and such a
-     * form would send the CSRF token there.
+     * Where a form posts back to: the requested path and query, always
+     * origin-relative so the CSRF token never leaves this host.
+     *
+     * Built from the verbatim {@see Request::uri()}, not {@see Request::$path},
+     * so the locale prefix the browser asked for stays. An absolute-form
+     * target (`http://other.example/p?q=1`) loses its scheme and authority. A
+     * browser reads `//evil.example` or `/\evil.example` as another host, so
+     * the leading slashes collapse to one, and tabs and newlines go first
+     * because a browser drops them before it parses (`/\t/evil.example`).
      */
     private static function formActionUrl(Request $request): string
     {
-        return (string) \preg_replace('#^[/\\\]+#', '/', $request->uri());
+        $uri = \str_replace(["\t", "\n", "\r"], '', $request->uri());
+        $relative = (string) \preg_replace('#^[a-z][a-z0-9+.\-]*:(?:[/\\\]{2}[^/\\\?\#]*)?#i', '', $uri);
+
+        return '/' . \ltrim($relative, '/\\');
     }
 
     /**
