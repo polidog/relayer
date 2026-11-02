@@ -274,10 +274,10 @@ final class InitCommandTest extends TestCase
     public function testAnEnvLocalDeletedOnPurposeIsNotPushedBack(): void
     {
         $this->writeComposer(['name' => 'acme/app']);
-        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+        $this->assertInitSucceeds();
         \unlink($this->project . '/.env.local');
 
-        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+        $this->assertInitSucceeds();
 
         self::assertFileDoesNotExist($this->project . '/.env.local');
     }
@@ -403,6 +403,11 @@ final class InitCommandTest extends TestCase
     /**
      * @return Closure(string): void
      */
+    private function assertInitSucceeds(): void
+    {
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+    }
+
     private function capture(): Closure
     {
         return function (string $line): void {

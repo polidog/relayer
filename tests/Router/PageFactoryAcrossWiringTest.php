@@ -24,6 +24,8 @@ final class PageFactoryAcrossWiringTest extends TestCase
 {
     private string $workDir;
 
+    private bool|int $status = false;
+
     protected function setUp(): void
     {
         $this->workDir = \sys_get_temp_dir() . '/page-wiring-' . \bin2hex(\random_bytes(6));
@@ -53,13 +55,13 @@ final class PageFactoryAcrossWiringTest extends TestCase
         $app->setContainer($this->container('first'));
 
         self::assertStringContainsString('served by first', $this->dispatch($app));
-        self::assertSame(200, \http_response_code());
+        self::assertSame(200, $this->status);
 
         $app->setContainer($this->container('second'));
 
         $output = $this->dispatch($app);
 
-        self::assertSame(200, \http_response_code());
+        self::assertSame(200, $this->status);
         self::assertStringContainsString('served by second', $output);
     }
 
@@ -68,14 +70,14 @@ final class PageFactoryAcrossWiringTest extends TestCase
         $app = AppRouter::create($this->workDir);
 
         self::assertStringContainsString('served by nobody', $this->dispatch($app));
-        self::assertSame(200, \http_response_code());
+        self::assertSame(200, $this->status);
 
         $profiler = new RecordingProfiler(new InMemoryProfilerStorage());
         $app->setProfiler($profiler);
 
         $output = $this->dispatch($app);
 
-        self::assertSame(200, \http_response_code());
+        self::assertSame(200, $this->status);
         self::assertStringContainsString('served by nobody', $output);
 
         $profile = $profiler->currentProfile();
@@ -96,7 +98,7 @@ final class PageFactoryAcrossWiringTest extends TestCase
 
         $output = $this->dispatch(AppRouter::create($this->workDir));
 
-        self::assertSame(200, \http_response_code());
+        self::assertSame(200, $this->status);
         self::assertStringContainsString('served by nobody', $output);
     }
 
@@ -133,6 +135,8 @@ final class PageFactoryAcrossWiringTest extends TestCase
         } finally {
             $output = (string) \ob_get_clean();
         }
+
+        $this->status = \http_response_code();
 
         return $output;
     }

@@ -213,9 +213,9 @@ final class ContainerPsxComponentTest extends TestCase
         self::assertSame('<p>dflt</p>', $this->renderFile($file));
 
         $app = $this->configure();
-        self::assertSame('<p>dflt</p>', $this->renderFqcn($app, 'App\Components\Thing'));
-        self::assertSame('<p>dflt</p>', $this->renderFqcn($app, 'App\Components\Thing'));
+        $renders = [$this->renderFqcn($app, 'App\Components\Thing'), $this->renderFqcn($app, 'App\Components\Thing')];
 
+        self::assertSame(['<p>dflt</p>', '<p>dflt</p>'], $renders);
         self::assertSame('x', \file_get_contents($log));
     }
 
