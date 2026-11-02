@@ -18,6 +18,7 @@ use Polidog\Relayer\Http\Client\HttpResponse;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Profiler\NullProfiler;
+use Polidog\Relayer\Relayer;
 use Polidog\Relayer\Router\AppRouter;
 use Polidog\Relayer\Router\StopRequest;
 use Polidog\Relayer\Tests\Auth\ArraySessionStorage;
@@ -108,6 +109,37 @@ final class RequestScopedServicesTest extends TestCase
             $container->get(CachedPage::class);
         } finally {
             unset($_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_IF_NONE_MATCH']);
+        }
+    }
+
+    public function testAWorkerLoopEndingTheRequestAfterRunResetsOnce(): void
+    {
+        $resets = 0;
+        RequestLifecycle::onReset('test.reset-once', static function () use (&$resets): void {
+            ++$resets;
+        });
+
+        $dir = \sys_get_temp_dir() . '/relayer-reset-once-' . \bin2hex(\random_bytes(6));
+        \mkdir($dir);
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/missing';
+
+        try {
+            // What the scaffolded worker.php does for every request.
+            \ob_start();
+            AppRouter::create($dir)->run();
+            \ob_end_clean();
+            Relayer::endRequest();
+
+            self::assertSame(1, $resets);
+
+            // On its own, endRequest() still resets.
+            Relayer::endRequest();
+            self::assertSame(2, $resets);
+        } finally {
+            RequestLifecycle::onReset('test.reset-once', static function (): void {});
+            \rmdir($dir);
+            unset($_SERVER['REQUEST_METHOD'], $_SERVER['REQUEST_URI']);
         }
     }
 

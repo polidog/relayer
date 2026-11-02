@@ -49,6 +49,13 @@ final class AppRouter
     private string $psxCacheDir;
     private ?RosannaDefer $rosanna = null;
 
+    /**
+     * Whether the last {@see run()} already reset {@see RequestLifecycle}, so a
+     * worker loop calling {@see Relayer::endRequest()} after it (the
+     * scaffolded one does) does not run every reset callback a second time.
+     */
+    private static bool $lifecycleEnded = false;
+
     /** Rebuilt when what it depends on changes. */
     private ?PageLoader $pages = null;
 
@@ -270,6 +277,7 @@ final class AppRouter
 
     public function run(): void
     {
+        self::$lifecycleEnded = false;
         CachePolicy::restoreSessionCacheLimiter();
         SessionStarter::applyCookieDefaults();
 
@@ -310,7 +318,22 @@ final class AppRouter
             // anything about it register here. Not left to the worker loop,
             // whose code belongs to the app.
             RequestLifecycle::reset();
+            self::$lifecycleEnded = true;
         }
+    }
+
+    /**
+     * True once per request whose {@see run()} reset {@see RequestLifecycle};
+     * clears the flag.
+     *
+     * @internal for {@see Relayer::endRequest()}
+     */
+    public static function takeLifecycleEnded(): bool
+    {
+        $ended = self::$lifecycleEnded;
+        self::$lifecycleEnded = false;
+
+        return $ended;
     }
 
     private function environment(): DispatchEnvironment

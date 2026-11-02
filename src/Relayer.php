@@ -125,9 +125,10 @@ final class Relayer
      *
      * Only needed under a worker loop — a classic per-request SAPI throws
      * the whole process away instead. {@see AppRouter::run()} already
-     * clears its own ambient state in a `finally`; this adds Rosanna's
-     * render scope. Idempotent, so calling it after a request
-     * that already cleaned up is free.
+     * clears its own ambient state and resets {@see RequestLifecycle} in a
+     * `finally`; this covers what is left, and resets the lifecycle only when
+     * no `run()` did for this request. Idempotent, so calling it after a
+     * request that already cleaned up is free.
      *
      * The container built by {@see boot()} is deliberately NOT reset: it
      * is boot-scoped, and rebuilding it per request is exactly what worker
@@ -135,7 +136,11 @@ final class Relayer
      */
     public static function endRequest(): void
     {
-        RequestLifecycle::reset();
+        // AppRouter::run() resets it already; app callbacks registered with
+        // onReset() (closing a handle, say) must run once per request.
+        if (!AppRouter::takeLifecycleEnded()) {
+            RequestLifecycle::reset();
+        }
         PageContext::setCurrent(null);
         Translators::reset();
     }
