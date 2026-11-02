@@ -23,6 +23,7 @@ use Polidog\Relayer\Router\Native\NativeDispatcher;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
 use Polidog\Rosanna\Defer\RosannaDefer;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
 use Psr\Container\ContainerInterface;
 use Throwable;
 
@@ -305,6 +306,10 @@ final class AppRouter
             $dispatch->fail($exception, $request, $outputLevel);
         } finally {
             ErrorResponder::closeBuffers($outputLevel, true);
+            // A worker's services outlive the request; those that remember
+            // anything about it register here. Not left to the worker loop,
+            // whose code belongs to the app.
+            RequestLifecycle::reset();
         }
     }
 

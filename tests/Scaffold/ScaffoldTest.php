@@ -9,6 +9,16 @@ use Polidog\Relayer\Scaffold\Scaffold;
 
 final class ScaffoldTest extends TestCase
 {
+    public function testTheCaddyfileRoutesRequestsToTheWorker(): void
+    {
+        $caddyfile = Scaffold::files()['Caddyfile'];
+
+        // A worker block alone is not enough: php_server would still send
+        // requests to public/index.php, and nothing would stay booted.
+        self::assertStringContainsString('index worker.php', $caddyfile);
+        self::assertStringContainsString('file ./public/worker.php', $caddyfile);
+    }
+
     public function testFilesCoversTheMinimalBootableLayoutWithoutComposerJson(): void
     {
         $files = Scaffold::files();

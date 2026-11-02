@@ -12,6 +12,7 @@ use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Router\Component\PageComponent;
+use Polidog\Relayer\Router\StopRequest;
 use Psr\Container\ContainerInterface;
 use Psr\Container\NotFoundExceptionInterface;
 use ReflectionClass;
@@ -76,7 +77,7 @@ final class InjectorContainer implements ContainerInterface
             // page's dependencies.
             $authenticator = $this->resolveAuthenticator();
             if (null !== $authenticator && !AuthGuard::enforce($id, $authenticator, $this->currentRequest, $this->resolveLocaleResolver())) {
-                exit;
+                throw new StopRequest();
             }
 
             // Conditional GET short-circuit: evaluate #[Cache] BEFORE we
@@ -102,7 +103,9 @@ final class InjectorContainer implements ContainerInterface
                     ]);
                     CachePolicy::sendNotModified();
 
-                    exit;
+                    // Not exit: that would restart a worker, and every
+                    // cleanup on the way out would be skipped.
+                    throw new StopRequest();
                 }
             }
         }

@@ -284,7 +284,8 @@ final class Scaffold
                 ],
             ],
             // v11 keeps APP_ENV=dev out of the committed .env, so a deploy that
-            // forgets APP_ENV runs as production.
+            // forgets APP_ENV runs as production, and makes the Caddyfile
+            // actually use its worker.
             11 => [
                 '.env' => [
                     // v10
@@ -297,6 +298,10 @@ final class Scaffold
                 'Dockerfile' => [
                     // v10
                     'df3a7700817d5f981697f820e333b8b63b92f0e6525be496537806c607795339',
+                ],
+                'Caddyfile' => [
+                    // v10, whose global worker block no request ever reached
+                    'ed711b195c0183b204f09e776290bcd18173632d86a640f84c6a1a85a4f40fc7',
                 ],
                 'php.ini' => [
                     // v10
@@ -1194,26 +1199,24 @@ final class Scaffold
             # single binary (`./app run`) and also usable directly:
             # `frankenphp run --config Caddyfile`.
 
-            {
-            	# Worker mode: boot the app once and keep it in memory
-            	# between requests, which is where FrankenPHP's speed comes
-            	# from. Comment this block out for classic (per-request)
-            	# mode — public/index.php serves exactly the same routes.
-            	frankenphp {
-            		worker {
-            			file ./public/worker.php
-            			# num 8        # workers; defaults to 2x CPU cores
-            		}
-            	}
-            }
-
             # SERVER_NAME overrides the bind address/host. With a real
             # hostname (SERVER_NAME=example.com) Caddy also provisions
             # HTTPS automatically.
             {$SERVER_NAME::8000} {
             	root public/
             	encode zstd br gzip
-            	php_server
+            	php_server {
+            		# Worker mode: boot the app once and keep it in memory
+            		# between requests, which is where FrankenPHP's speed
+            		# comes from. Requests only reach the worker through
+            		# `index`. Remove both for classic (per-request) mode —
+            		# public/index.php serves exactly the same routes.
+            		index worker.php
+            		worker {
+            			file ./public/worker.php
+            			# num 8        # workers; defaults to 2x CPU cores
+            		}
+            	}
             }
 
             CADDY;
