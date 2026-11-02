@@ -41,6 +41,7 @@ use Polidog\Relayer\Router\Routing\RouteKind;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
+use Polidog\Rosanna\Defer\DeferRequest;
 use Polidog\Rosanna\Defer\RosannaDefer;
 use Polidog\Rosanna\Psx\CompileCommand;
 use Polidog\Rosanna\Psx\Compiler;
@@ -124,6 +125,13 @@ final class AppRouter
     private ?ContainerInterface $container;
     private RouterInterface $router;
     private DocumentInterface $document;
+
+    /**
+     * This request's copy of {@see $document}, which the dispatch writes its
+     * scripts, metadata and language to. The configured document stays as it
+     * was set up, so a worker's next request starts from it again.
+     */
+    private ?DocumentInterface $requestDocument = null;
     private bool $autoCompilePsx;
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
@@ -360,6 +368,8 @@ final class AppRouter
         // and may hand a substituted one to the dispatch below.
         $request = Request::fromGlobals();
 
+        $this->requestDocument = $this->document instanceof HtmlDocument ? clone $this->document : $this->document;
+
         // Hold the response back until it is complete, so a failure halfway
         // through can still replace what was produced so far with a clean
         // 500. The level also lets the failure path unwind buffers the failed
@@ -388,6 +398,7 @@ final class AppRouter
             $this->endDispatch();
         } finally {
             self::closeBuffers($outputLevel, true);
+            $this->requestDocument = null;
         }
     }
 
@@ -399,6 +410,11 @@ final class AppRouter
             $this->rosanna()->scope(),
             fn () => $this->dispatchInScope($request, $outputLevel),
         );
+    }
+
+    private function document(): DocumentInterface
+    {
+        return $this->requestDocument ?? $this->document;
     }
 
     private function rosanna(): RosannaDefer
@@ -442,8 +458,8 @@ final class AppRouter
             if (!\headers_sent()) {
                 \header('X-Debug-Token: ' . $profile->token);
             }
-            if ($this->document instanceof HtmlDocument) {
-                $this->document->addHeadHtml(self::buildDebugBridgeScript($profile->token));
+            if ($this->document() instanceof HtmlDocument) {
+                $this->document()->addHeadHtml(self::buildDebugBridgeScript($profile->token));
             }
         }
 
@@ -462,14 +478,17 @@ final class AppRouter
             // before route matching: Rosanna owns that URL space, and we
             // never want layout/page rendering on that path.
             //
-            // No `$_SERVER['REQUEST_URI']` rewrite is needed for a stripped
-            // locale prefix here: the defer fetch URL is rooted at
-            // `/_defer/{name}` (PlaceholderRenderer), so a
-            // `/{locale}/_defer/...` request never occurs. The fragment's
-            // locale was already resolved above from cookie / Accept-Language
-            // / default (the rooted defer URL carries no path prefix) — see
-            // the i18n "Deferred fragments" note in README.md.
-            $deferred = $this->rosanna()->handleDeferred();
+            // The defer fetch URL is rooted at `/_defer/{name}`
+            // (PlaceholderRenderer) and carries no locale prefix, so the
+            // fragment's locale was resolved above from cookie /
+            // Accept-Language / default — see the i18n "Deferred fragments"
+            // note in README.md.
+            $deferred = $this->rosanna()->handleDeferred(new DeferRequest(
+                $request->method,
+                $request->path,
+                $request->allQuery(),
+                \explode('?', $request->uri(), 2)[1] ?? '',
+            ));
             if (null !== $deferred) {
                 $deferred->send();
 
@@ -1015,8 +1034,8 @@ final class AppRouter
             Translators::setDefault($translator);
         }
 
-        if ($this->document instanceof HtmlDocument) {
-            $this->document->setLang($resolved->locale);
+        if ($this->document() instanceof HtmlDocument) {
+            $this->document()->setLang($resolved->locale);
         }
 
         return $request;
@@ -1072,7 +1091,7 @@ final class AppRouter
             return;
         }
 
-        echo $this->document->renderError($status, $message);
+        echo $this->document()->renderError($status, $message);
     }
 
     /**
@@ -1121,7 +1140,7 @@ final class AppRouter
             } elseif ($renderErrorPage) {
                 $this->handleErrorResponse(500, $message);
             } else {
-                echo $this->document->renderError(500, $message);
+                echo $this->document()->renderError(500, $message);
             }
         } catch (StopRequest) {
             // The error page's own short-circuit: its response is complete.
@@ -1151,7 +1170,7 @@ final class AppRouter
         }
 
         try {
-            $html = $this->document->renderError(500, self::INTERNAL_ERROR);
+            $html = $this->document()->renderError(500, self::INTERNAL_ERROR);
         } catch (Throwable) {
             $html = '<!DOCTYPE html><title>500</title><h1>' . self::INTERNAL_ERROR . '</h1>';
         }
@@ -1462,12 +1481,12 @@ final class AppRouter
             $pageElement = $page->render();
         }
 
-        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
+        if ($page instanceof FunctionPage && $this->document() instanceof HtmlDocument) {
             /** @var array<string, string> $metadata */
             $metadata = $page->getMetadata();
-            $this->document->setMetadata($metadata);
-        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
-            $this->document->setMetadata($page->getMetadata());
+            $this->document()->setMetadata($metadata);
+        } elseif ($page instanceof PageComponent && $this->document() instanceof HtmlDocument) {
+            $this->document()->setMetadata($page->getMetadata());
         }
 
         return $pageElement;
@@ -1492,9 +1511,9 @@ final class AppRouter
         // declaring scripts via addJs() inside render() would otherwise be
         // missed. Past the partial early-return too — partial responses
         // bypass the document, so they must not mutate its script queue.
-        if ($this->document instanceof HtmlDocument) {
+        if ($this->document() instanceof HtmlDocument) {
             foreach (ScriptCollection::gather($page, $layouts) as $script) {
-                $this->document->addScript($script);
+                $this->document()->addScript($script);
             }
         }
 
@@ -1504,7 +1523,7 @@ final class AppRouter
             $html,
         );
 
-        return $this->document->render($wrappedHtml);
+        return $this->document()->render($wrappedHtml);
     }
 
     /**

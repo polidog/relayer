@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Layout;
 
 use Polidog\Relayer\Http\Request;
-use Polidog\Relayer\Router\Form\FormActionTransformer;
+use Polidog\Relayer\Router\Form\FormActionRenderExtension;
 use Polidog\Rosanna\Runtime\DeferredRenderer;
 use Polidog\Rosanna\Runtime\Element;
 use Polidog\Rosanna\Runtime\Renderer;
@@ -27,7 +27,7 @@ final class LayoutRenderer
     }
 
     /**
-     * The page wrapped in its layouts, with form actions normalized.
+     * The page wrapped in its layouts.
      */
     public function compose(Element $pageContent, LayoutStack $layouts): Element
     {
@@ -38,14 +38,11 @@ final class LayoutRenderer
             $currentContent = $layout->render();
         }
 
-        $currentContent = FormActionTransformer::apply($currentContent, $this->formActionUrl);
-        \assert($currentContent instanceof Element);
-
         return $currentContent;
     }
 
     public function renderElement(Element $element): string
     {
-        return new Renderer(deferred: $this->deferred)->renderElement($element);
+        return new Renderer(new FormActionRenderExtension($this->formActionUrl), $this->deferred)->renderElement($element);
     }
 }
