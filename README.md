@@ -229,8 +229,9 @@ the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
 treats the app as production, as does `APP_ENV` being set nowhere: neither in
-the real environment nor in any of these files. The scaffolded `.env` sets
-`APP_ENV=dev`, so unsetting the real variable is not enough to leave dev mode.
+the real environment nor in any of these files. `relayer init` writes
+`APP_ENV=dev` to the gitignored `.env.local`, so a deploy that forgets it runs
+as production; after a fresh clone, run `echo APP_ENV=dev > .env.local`.
 In production, pre-compile with `vendor/bin/rosanna-defer compile src/Pages` during
 deploy.
 
@@ -293,8 +294,8 @@ vendor/bin/relayer container:compile                  # DI container -> PHP
 
 Then set `APP_ENV=prod`, in `.env.local` or as a real environment variable,
 and run with OPcache `validate_timestamps=0` (the scaffolded `php.ini` carries
-the production block). Leaving `APP_ENV` unset does not select production: the
-scaffolded `.env` sets `APP_ENV=dev`, which exposes `/_profiler`. Each step is
+the production block). Make sure no `.env.local` with `APP_ENV=dev` reaches the
+server: it exposes `/_profiler`. Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
 
@@ -2025,6 +2026,10 @@ short-circuited:
 ETag comparison follows the weak comparison rules of RFC 7232 §2.3.2, so
 `W/"v1"` and `"v1"` match each other and `*` matches any tag.
 
+A request with a session cookie or an `Authorization` header always renders and
+never gets a 304. A validator says nothing about who is asking, so a browser that
+cached the page anonymously would otherwise keep that copy after logging in.
+
 ### Example
 
 ```php
@@ -2830,9 +2835,12 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
    no longer exists, and `vendor/bin/rosanna compile` does not write the
    deferred manifest Relayer needs.
 
-6. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
+6. The committed `.env` no longer sets `APP_ENV=dev`, and a `.env` without
+   `APP_ENV` now means production. `relayer upgrade` writes `APP_ENV=dev` to the
+   gitignored `.env.local`; other checkouts need `echo APP_ENV=dev > .env.local`.
+7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
    that relies on it.
-7. `rosanna-defer.js` now loads only on pages with a defer placeholder. If a page
+8. `rosanna-defer.js` now loads only on pages with a defer placeholder. If a page
    without one calls `window.Rosanna` (such as `clearDeferCache()` on a logout
    form), call `HtmlDocument::alwaysIncludeClientScript()`. Otherwise a
    `localCache` fragment is not cleared, and a shared device can show the

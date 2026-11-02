@@ -233,8 +233,9 @@ LOCALE_PATH_PREFIX=true
 
 `APP_ENV=dev`（または `development`）で PSX ファイルの auto-compile が
 有効になります。それ以外の値は本番扱いで、実環境にもこれらのファイルにも
-`APP_ENV` が無い場合も本番扱いです。雛形の `.env` には `APP_ENV=dev` が入って
-いるため、実環境の変数を未設定にしただけでは dev モードのままです。本番では
+`APP_ENV` が無い場合も本番扱いです。`relayer init` は gitignore 対象の
+`.env.local` に `APP_ENV=dev` を書くので、指定し忘れたデプロイは本番として動きます。
+clone した直後は `echo APP_ENV=dev > .env.local` を実行してください。本番では
 デプロイ時に `vendor/bin/rosanna-defer compile src/Pages` で事前コンパイルします。
 
 ## ルーティングとページ
@@ -297,8 +298,8 @@ vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 
 あとは `.env.local` か実環境の変数で `APP_ENV=prod` を指定し、OPcache の
 `validate_timestamps=0`（雛形の `php.ini` に本番ブロックを同梱）で起動します。
-`APP_ENV` を未設定にしても本番にはなりません。雛形の `.env` の `APP_ENV=dev`
-が使われ、`/_profiler` が公開されます。各ステップは
+`APP_ENV=dev` の入った `.env.local` をサーバに持ち込むと `/_profiler` が公開される
+ので、注意してください。各ステップは
 有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
 だけで壊れません。
 
@@ -2028,6 +2029,10 @@ final class HomePage extends PageComponent
 ETag 比較は RFC 7232 §2.3.2 の弱比較に準拠。`W/"v1"` と `"v1"` は一致と
 みなされ、`*` はあらゆるタグにマッチします。
 
+セッション Cookie か `Authorization` ヘッダーのあるリクエストには 304 を返さず、
+必ず描画します。検証子は誰のリクエストかを含まないので、匿名で表示したブラウザが
+ログイン後も匿名のコピーを使い続けるのを防ぐためです。
+
 ### サンプル
 
 ```php
@@ -2828,9 +2833,13 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
    `vendor/bin/usephp compile` はなくなり、`vendor/bin/rosanna compile` は
    Relayer に必要な deferred manifest を書き出しません。
 
-6. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
+6. コミットする `.env` に `APP_ENV=dev` を書かなくなり、`APP_ENV` のない `.env` は
+   本番扱いになりました。`relayer upgrade` は gitignore 対象の `.env.local` に
+   `APP_ENV=dev` を書きます。別の環境では `echo APP_ENV=dev > .env.local` を
+   実行してください。
+7. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
    CSS や JS を直します。
-7. `rosanna-defer.js` は defer のプレースホルダーがあるページでだけ読み込まれます。
+8. `rosanna-defer.js` は defer のプレースホルダーがあるページでだけ読み込まれます。
    プレースホルダーのないページから `window.Rosanna` を呼ぶ場合（ログアウトフォームの
    `clearDeferCache()` など）は、`HtmlDocument::alwaysIncludeClientScript()` を
    呼びます。呼ばないと `localCache` の断片が消えず、共有端末で前のユーザーの

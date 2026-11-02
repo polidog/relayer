@@ -81,7 +81,7 @@ final class ContainerCompileCommand
         // Mirror Relayer::loadEnv so an AppConfigurator that reads env
         // compiles the same container shape it will boot with in prod.
         if (\file_exists($root . '/.env')) {
-            (new Dotenv())->loadEnv($root . '/.env');
+            (new Dotenv())->loadEnv($root . '/.env', null, 'prod');
         }
 
         try {

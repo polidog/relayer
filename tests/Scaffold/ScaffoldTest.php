@@ -15,6 +15,7 @@ final class ScaffoldTest extends TestCase
 
         self::assertSame([
             '.env',
+            '.env.local',
             '.gitignore',
             'README.md',
             'RELAYER.md',
@@ -204,8 +205,8 @@ final class ScaffoldTest extends TestCase
         // which `rosanna-defer compile` would fail on.
         self::assertStringContainsString('RUN vendor/bin/relayer compile', $dockerfile);
         self::assertStringNotContainsString('rosanna-defer compile', $dockerfile);
-        // ...and prod must actually boot as prod: the committed .env says
-        // APP_ENV=dev, which would live-build past every artifact above.
+        // ...and prod must say so outright, and only the dev target is dev.
+        self::assertSame(1, \substr_count($dockerfile, 'ENV APP_ENV=dev'));
         self::assertStringContainsString("printf 'APP_ENV=prod\\n' > .env.local", $dockerfile);
 
         // Nothing may be left compiling at request time, so timestamps go

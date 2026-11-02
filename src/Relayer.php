@@ -383,6 +383,10 @@ final class Relayer
      * {@see Env::importProcessEnvironment()}), while the `.local` files
      * override their committed counterparts as Symfony convention prescribes.
      *
+     * `APP_ENV` set nowhere means production, so it is the default here too:
+     * Dotenv's own default of `dev` would expose the profiler and stack traces
+     * on any deploy that forgot it.
+     *
      * No `.env` at all → silently skip.
      */
     private static function loadEnv(string $projectRoot): void
@@ -392,7 +396,7 @@ final class Relayer
         }
 
         Env::importProcessEnvironment();
-        (new Dotenv())->loadEnv($projectRoot . '/.env');
+        (new Dotenv())->loadEnv($projectRoot . '/.env', null, 'prod');
     }
 
     private static function isDev(): bool
