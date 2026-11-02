@@ -295,7 +295,7 @@ final class PageContext
             // anonymous and producing a confusing redirect loop.
             throw new RuntimeException(
                 'PageContext::requireAuth() requires an Authenticator. '
-                . 'Register Polidog\Relayer\Auth\UserProvider in your AppConfigurator.',
+                . 'Register a Polidog\Relayer\Auth\UserProvider (session login) or a Polidog\Relayer\Auth\Token\TokenVerifier (bearer tokens) in your AppConfigurator.',
             );
         }
 
