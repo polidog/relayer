@@ -147,17 +147,6 @@ final class SessionHttpServerTest extends TestCase
         self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
     }
 
-    public function testAUsePhpSessionStateHookGetsTheDefaultsToo(): void
-    {
-        [$status, $headers] = $this->get('/use-state');
-
-        self::assertSame(200, $status);
-        $attributes = $this->sessionCookieAttributes($headers);
-        self::assertContains('httponly', $attributes);
-        self::assertContains('samesite=lax', $attributes);
-        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
-    }
-
     public function testAuthenticatedRenderingOfAPublicPageIsNotSharedCacheable(): void
     {
         [$status, $headers, $body] = $this->get('/personal', ['Cookie: ' . $this->login()]);
@@ -401,19 +390,6 @@ final class SessionHttpServerTest extends TestCase
             '',
             "return new Element('p', [], ['no policy']);",
         ));
-        self::write('src/Pages/use-state/page.php', <<<'PHP'
-            <?php
-            use Polidog\Relayer\Http\Cache;
-            use Polidog\Relayer\Router\Component\PageContext;
-            use Polidog\UsePhp\Runtime\Element;
-            return static function (PageContext $ctx) {
-                $ctx->cache(new Cache(maxAge: 60, public: true));
-                return static function () {
-                    [$count] = Polidog\UsePhp\Runtime\useState(0);
-                    return new Element('p', [], [(string) $count]);
-                };
-            };
-            PHP);
     }
 
     private static function page(string $class, string $attributes, string $renderBody): string
@@ -422,7 +398,7 @@ final class SessionHttpServerTest extends TestCase
             <?php
             namespace App\\Pages;
             use Polidog\\Relayer\\Router\\Component\\PageComponent;
-            use Polidog\\UsePhp\\Runtime\\Element;
+            use Polidog\\Rosanna\\Runtime\\Element;
             {$attributes}
             final class {$class} extends PageComponent
             {
@@ -441,7 +417,7 @@ final class SessionHttpServerTest extends TestCase
             namespace App\\Pages;
             use Polidog\\Relayer\\Auth\\Authenticator;
             use Polidog\\Relayer\\Router\\Layout\\LayoutComponent;
-            use Polidog\\UsePhp\\Runtime\\Element;
+            use Polidog\\Rosanna\\Runtime\\Element;
             final class {$class} extends LayoutComponent
             {
                 public function __construct(private readonly ?Authenticator \$auth = null) {}

@@ -17,17 +17,15 @@ use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Native\NativeDispatcher;
 use Polidog\Relayer\Router\Routing\CompiledRoutes;
 use Polidog\Relayer\Router\Routing\PageScanner;
-use Polidog\UsePhp\Runtime\ComponentState;
-use Polidog\UsePhp\Runtime\RenderContext;
-use Polidog\UsePhp\Storage\StorageFactory;
-use Polidog\UsePhp\UsePHP;
+use Polidog\Rosanna\Defer\RosannaDefer;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use RuntimeException;
 use Symfony\Component\Dotenv\Dotenv;
 
 /**
- * One-shot bootstrapper for usePHP applications.
+ * One-shot bootstrapper for Relayer applications.
  *
  * Responsibilities:
  * - Load `.env` (and the Symfony cascade `.env.local`, `.env.{APP_ENV}`,
@@ -36,7 +34,7 @@ use Symfony\Component\Dotenv\Dotenv;
  *   to {@see ContainerFactory::create()} (framework defaults, convention
  *   configs, the caller's AppConfigurator, autowire-by-default, compile).
  * - Wrap the compiled container in a PSR-11 adapter for AppRouter and
- *   build the {@see UsePHP} runtime for PSX components.
+ *   build the {@see RosannaDefer} runtime for PSX components.
  *
  * Returns the configured AppRouter so the caller decides when to `->run()`
  * and can still call setJsPath/addCssPath/etc. before running.
@@ -121,16 +119,14 @@ final class Relayer
     }
 
     /**
-     * Drop every piece of request-scoped state the framework (and usePHP)
+     * Drop every piece of request-scoped state the framework (and Rosanna)
      * keeps in statics, so the next request on a long-running worker
      * starts clean.
      *
      * Only needed under a worker loop — a classic per-request SAPI throws
      * the whole process away instead. {@see AppRouter::run()} already
-     * clears its own ambient state in a `finally`; this adds the usePHP
-     * runtime caches (component instances and their storage backends),
-     * which would otherwise leak one visitor's component state into the
-     * next visitor's render. Idempotent, so calling it after a request
+     * clears its own ambient state in a `finally`; this adds Rosanna's
+     * render scope. Idempotent, so calling it after a request
      * that already cleaned up is free.
      *
      * The container built by {@see boot()} is deliberately NOT reset: it
@@ -139,9 +135,7 @@ final class Relayer
      */
     public static function endRequest(): void
     {
-        ComponentState::clearInstances();
-        StorageFactory::reset();
-        RenderContext::clearApp();
+        RequestLifecycle::reset();
         PageContext::setCurrent(null);
         Translators::reset();
     }
@@ -203,9 +197,9 @@ final class Relayer
         $appDir = $projectRoot . '/src/Pages';
 
         // Pin the page-PSX cache to <projectRoot>/var/cache/psx — the same
-        // base buildUsePhp() passes to PsxComponentRegistrar::configure() for
+        // base buildRosanna() passes to PsxComponentRegistrar::configure() for
         // the component manifest, and the same default
-        // `vendor/bin/usephp compile` writes to. AppRouter's own default
+        // `vendor/bin/rosanna-defer compile` writes to. AppRouter's own default
         // derives this from dirname($appDir), which for the
         // standard `src/Pages` layout resolves one level short
         // (<root>/src/var/cache/psx), splitting the cache and defeating
@@ -234,8 +228,7 @@ final class Relayer
         );
         $router->setContainer($psr);
 
-        $usephp = self::buildUsePhp($projectRoot, $isDev, $warm, $psr);
-        $router->setUsePhp($usephp);
+        $router->setRosanna(self::buildRosanna($projectRoot, $isDev, $warm, $psr));
 
         // Wire dev-time profiling when the container exposes a Profiler.
         // Prod's container binds NullProfiler (a no-op) — we deliberately
@@ -326,42 +319,24 @@ final class Relayer
     }
 
     /**
-     * Construct a {@see UsePHP} instance for PSX components + deferred dispatch.
-     *
-     * The snapshot secret HMAC-signs `StorageType::Snapshot` component state
-     * so it survives a round-trip through the client without tampering. It is
-     * NOT used by the defer endpoint (`/_defer/{name}` is a plain GET since
-     * use-php 0.4.0). Resolution order:
-     *  1. `USEPHP_SNAPSHOT_SECRET` env var (intended for prod — set a long
-     *     random string).
-     *  2. In dev only, fall back to a deterministic per-project secret so
-     *     starters work out of the box without forcing every project to
-     *     configure secrets first. Prod gets no fallback: with no secret the
-     *     serializer is simply not configured, and use-php 0.5.0 fails loudly
-     *     (LogicException) the moment a page actually serializes snapshot
-     *     state — an unsigned client round-trip would be forgeable. Apps that
-     *     never use Snapshot storage (e.g. the defer-only example) boot fine
-     *     without one.
+     * Construct a {@see RosannaDefer} instance for PSX components + deferred
+     * dispatch.
      *
      * Components in `src/Components/` (if present) are compiled into a
      * manifest at `var/cache/psx/manifest.php` (and a sibling
-     * `deferred-manifest.php` for components carrying `#[Defer]` or
-     * `fc(..., defer: ...)`). In dev the manifest is regenerated whenever a
-     * `.psx` source is newer than the manifest; prod expects
-     * `vendor/bin/usephp compile src/Components/` to have run during deploy.
+     * `deferred-manifest.php` for components declared with `deferred()`). In
+     * dev the manifest is regenerated whenever a `.psx` source is newer than
+     * the manifest; prod expects `relayer compile` (or
+     * `vendor/bin/rosanna-defer compile src/Components/`) to have run during
+     * deploy.
      */
-    private static function buildUsePhp(
+    private static function buildRosanna(
         string $projectRoot,
         bool $isDev,
         bool $warm,
         ?ContainerInterface $container = null,
-    ): UsePHP {
-        $app = new UsePHP();
-
-        $secret = self::resolveSnapshotSecret($projectRoot, $isDev);
-        if ('' !== $secret) {
-            $app->setSnapshotSecret($secret);
-        }
+    ): RosannaDefer {
+        $app = new RosannaDefer();
 
         PsxComponentRegistrar::configure(
             $app,
@@ -397,34 +372,6 @@ final class Relayer
         }
 
         CompiledRoutes::write($routes, $appDir, $outFile);
-    }
-
-    private static function resolveSnapshotSecret(string $projectRoot, bool $isDev): string
-    {
-        // Env::read() trims — secrets sourced from files often pick up a
-        // trailing newline. Without normalizing, the HMAC would silently
-        // diverge from the value an operator pasted into a .env file, and
-        // every snapshot signature would fail verification with no obvious
-        // cause.
-        $explicit = Env::read('USEPHP_SNAPSHOT_SECRET');
-        if (null !== $explicit) {
-            return $explicit;
-        }
-
-        if (!$isDev) {
-            // Prod: don't invent a secret. Without one, UsePHP leaves the
-            // snapshot serializer unconfigured; use-php 0.5.0 then throws a
-            // clear LogicException the moment a page serializes snapshot
-            // state. Apps that use `StorageType::Snapshot` MUST set
-            // USEPHP_SNAPSHOT_SECRET in production; this fallback's absence
-            // exists so defer-only / non-snapshot apps still boot without one.
-            return '';
-        }
-
-        // Dev fallback: stable per-project secret so snapshot-based demos
-        // work immediately. The project root path is unique to the checkout,
-        // so two devs on the same machine don't share a key by accident.
-        return 'relayer-dev:' . \hash('sha256', $projectRoot);
     }
 
     /**
@@ -470,7 +417,7 @@ final class Relayer
      *
      * Off by default: without it, prod keeps the presence-gated contract
      * (missing artifact ⇒ live path, missing compiled `.psx` ⇒ a loud
-     * error pointing at `usephp compile`), which is what you want when the
+     * error pointing at `relayer compile`), which is what you want when the
      * deploy *should* have precompiled and silently recompiling would mask
      * a broken build.
      */

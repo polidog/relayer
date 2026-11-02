@@ -201,9 +201,9 @@ final class ScaffoldTest extends TestCase
         // image's build path IS its runtime path, so the two path-keyed
         // artifacts are safe to bake in here.
         // `relayer compile` covers them and skips a missing src/Components,
-        // which `usephp compile` would fail on.
+        // which `rosanna-defer compile` would fail on.
         self::assertStringContainsString('RUN vendor/bin/relayer compile', $dockerfile);
-        self::assertStringNotContainsString('usephp compile', $dockerfile);
+        self::assertStringNotContainsString('rosanna-defer compile', $dockerfile);
         // ...and prod must actually boot as prod: the committed .env says
         // APP_ENV=dev, which would live-build past every artifact above.
         self::assertStringContainsString("printf 'APP_ENV=prod\\n' > .env.local", $dockerfile);
@@ -259,7 +259,7 @@ final class ScaffoldTest extends TestCase
         self::assertStringContainsString('--no-dev', $dockerfile);
         self::assertStringContainsString('relayer routes:compile', $dockerfile);
         self::assertStringNotContainsString('container:compile', $dockerfile);
-        self::assertStringNotContainsString('usephp compile', $dockerfile);
+        self::assertStringNotContainsString('rosanna-defer compile', $dockerfile);
 
         // The Caddyfile is the binary's server config: it must point the
         // document root at public/ and wire worker mode at the worker
@@ -283,7 +283,7 @@ final class ScaffoldTest extends TestCase
 
         self::assertSame(['App\\' => 'src/'], $patch['autoload']['psr-4']);
 
-        $publish = 'Polidog\UsePhp\Installer\AssetInstaller::publish';
+        $publish = 'Polidog\Rosanna\Defer\Installer\AssetInstaller::publish';
         self::assertSame([$publish], $patch['scripts']['post-install-cmd']);
         self::assertSame([$publish], $patch['scripts']['post-update-cmd']);
 

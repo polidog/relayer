@@ -74,8 +74,8 @@ final class UncaughtExceptionDispatchTest extends TestCase
             <?php
             namespace %s;
             use Polidog\Relayer\Router\Component\ErrorPageComponent;
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
             final class ErrorPage extends ErrorPageComponent
             {
                 public function render(): Element
@@ -88,8 +88,8 @@ final class UncaughtExceptionDispatchTest extends TestCase
             <?php
             namespace %s;
             use Polidog\Relayer\Router\Layout\LayoutComponent;
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
             final class RootLayout extends LayoutComponent
             {
                 public function render(): Element
@@ -292,7 +292,7 @@ final class UncaughtExceptionDispatchTest extends TestCase
             namespace %s;
             use Polidog\Relayer\Router\Component\ErrorPageComponent;
             use Polidog\Relayer\Router\HttpException;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
             final class ErrorPage extends ErrorPageComponent
             {
                 public function render(): Element
@@ -632,7 +632,7 @@ final class UncaughtExceptionDispatchTest extends TestCase
         \file_put_contents($this->workDir . '/' . $segment . '/page.php', <<<PHP
             <?php
             use Polidog\\Relayer\\Router\\Component\\PageContext;
-            use Polidog\\UsePhp\\Runtime\\Element;
+            use Polidog\\Rosanna\\Runtime\\Element;
 
             return function (PageContext \$ctx): Closure {
                 {$factoryBody}
@@ -662,7 +662,7 @@ final class UncaughtExceptionDispatchTest extends TestCase
             <?php
             namespace %s;
             use Polidog\Relayer\Router\Component\ErrorPageComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
             final class ErrorPage extends ErrorPageComponent
             {
                 public function render(): Element
@@ -680,7 +680,7 @@ final class UncaughtExceptionDispatchTest extends TestCase
             <?php
             namespace %s;
             use Polidog\Relayer\Router\Layout\LayoutComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
             final class RootLayout extends LayoutComponent
             {
                 public function render(): Element

@@ -13,7 +13,7 @@ use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
 use Polidog\Relayer\Router\RedirectException;
 use Polidog\Relayer\Tests\Fixtures\FormActionTokens;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 /**
  * Dispatch tests exercise CsrfToken which calls session_start(), so each
@@ -47,8 +47,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => CsrfToken::getToken(),
             'name' => 'alice',
         ];
 
@@ -74,8 +74,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         CsrfToken::getToken();
 
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => 'bogus',
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => 'bogus',
         ];
 
         $page->dispatchActionFromRequest();
@@ -95,8 +95,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         try {
@@ -121,8 +121,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => CsrfToken::getToken(),
             'recordId' => '999',
         ];
 
@@ -144,8 +144,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         $page->dispatchActionFromRequest();
@@ -166,12 +166,12 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => FormActionTokens::withPayload($token, [
+            '_rosanna_action' => FormActionTokens::withPayload($token, [
                 'page' => '/users',
                 'name' => 'delete',
                 'args' => ['recordId' => 999],
             ]),
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         $page->dispatchActionFromRequest();
@@ -193,12 +193,12 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => FormActionTokens::unsigned([
+            '_rosanna_action' => FormActionTokens::unsigned([
                 'page' => '/users',
                 'name' => 'delete',
                 'args' => ['recordId' => 999],
             ]),
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         $page->dispatchActionFromRequest();
@@ -214,8 +214,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         FormAction::createForPage('/users', 'other'); // seed the signing key
 
         $_POST = [
-            '_usephp_action' => FormActionTokens::unsigned(['page' => '/users', 'name' => 'save', 'args' => []]),
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => FormActionTokens::unsigned(['page' => '/users', 'name' => 'save', 'args' => []]),
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         self::assertFalse($page->hasPendingAction());
@@ -233,8 +233,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => FormAction::createForPage('/other', 'save'),
-            '_usephp_csrf' => 'irrelevant',
+            '_rosanna_action' => FormAction::createForPage('/other', 'save'),
+            '_rosanna_csrf' => 'irrelevant',
         ];
 
         $page->dispatchActionFromRequest();
@@ -256,8 +256,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         // Tokens produced by PageComponent::action() must not be picked up by
         // the function-page dispatcher.
         $_POST = [
-            '_usephp_action' => FormAction::create('App\SomePage', 'save'),
-            '_usephp_csrf' => 'irrelevant',
+            '_rosanna_action' => FormAction::create('App\SomePage', 'save'),
+            '_rosanna_csrf' => 'irrelevant',
         ];
 
         $page->dispatchActionFromRequest();
@@ -277,7 +277,7 @@ final class FunctionPageActionDispatchTest extends TestCase
 
         $page = $this->makePage($context, '/users');
 
-        $_POST = ['_usephp_action' => $token];
+        $_POST = ['_rosanna_action' => $token];
 
         $page->dispatchActionFromRequest();
 
@@ -294,8 +294,8 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage($context, '/users');
 
         $_POST = [
-            '_usephp_action' => FormAction::createForPage('/users', 'save'),
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => FormAction::createForPage('/users', 'save'),
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         self::assertTrue($page->hasPendingAction());
@@ -309,7 +309,7 @@ final class FunctionPageActionDispatchTest extends TestCase
         $token = $context->action('save', static function (): void {});
         $page = $this->makePage($context, '/users');
 
-        $_POST = ['_usephp_action' => $token];
+        $_POST = ['_rosanna_action' => $token];
 
         self::assertFalse($page->hasPendingAction());
     }
@@ -322,7 +322,7 @@ final class FunctionPageActionDispatchTest extends TestCase
         $token = $context->action('save', static function (): void {});
         $page = $this->makePage($context, '/users');
 
-        $_POST = ['_usephp_action' => $token];
+        $_POST = ['_rosanna_action' => $token];
 
         self::assertFalse($page->hasPendingAction());
     }
@@ -332,7 +332,7 @@ final class FunctionPageActionDispatchTest extends TestCase
         $context = new PageContext([], '/users');
         $page = $this->makePage($context, '/users');
 
-        $_POST = ['_usephp_action' => FormAction::createForPage('/other', 'save')];
+        $_POST = ['_rosanna_action' => FormAction::createForPage('/other', 'save')];
 
         self::assertFalse($page->hasPendingAction());
     }
@@ -350,7 +350,7 @@ final class FunctionPageActionDispatchTest extends TestCase
         $page = $this->makePage(new PageContext([], '/users'), '/users');
 
         // Class-style token has no 'name' field — must not trigger pre-render.
-        $_POST = ['_usephp_action' => FormAction::create('App\SomePage', 'handle')];
+        $_POST = ['_rosanna_action' => FormAction::create('App\SomePage', 'handle')];
 
         self::assertFalse($page->hasPendingAction());
     }

@@ -26,7 +26,7 @@ final class PageComponentActionDispatchTest extends TestCase
         $page = new FormActionPage();
         $token = $page->saveToken(['id' => 123]);
 
-        $this->post($page, ['_usephp_action' => $token, 'title' => 'hello']);
+        $this->post($page, ['_rosanna_action' => $token, 'title' => 'hello']);
 
         self::assertSame(
             [['method' => 'save', 'formData' => ['title' => 'hello'], 'id' => 123]],
@@ -40,7 +40,7 @@ final class PageComponentActionDispatchTest extends TestCase
         $page = new FormActionPage();
         $token = $page->saveToken(['id' => 123]);
 
-        $this->post($page, ['_usephp_action' => $token, 'id' => '999', 'formData' => 'x']);
+        $this->post($page, ['_rosanna_action' => $token, 'id' => '999', 'formData' => 'x']);
 
         self::assertCount(1, $page->calls);
         self::assertSame(123, $page->calls[0]['id']);
@@ -59,7 +59,7 @@ final class PageComponentActionDispatchTest extends TestCase
             'args' => ['id' => 999],
         ]);
 
-        $this->post($page, ['_usephp_action' => $forged]);
+        $this->post($page, ['_rosanna_action' => $forged]);
 
         self::assertSame([], $page->calls);
         self::assertSame(403, \http_response_code());
@@ -77,14 +77,14 @@ final class PageComponentActionDispatchTest extends TestCase
             'method' => 'internalOnly',
             'args' => [],
         ]);
-        $this->post($page, ['_usephp_action' => $unsigned]);
+        $this->post($page, ['_rosanna_action' => $unsigned]);
 
         $resigned = FormActionTokens::withPayload($page->saveToken(), [
             'class' => FormActionPage::class,
             'method' => 'internalOnly',
             'args' => [],
         ]);
-        $this->post($page, ['_usephp_action' => $resigned]);
+        $this->post($page, ['_rosanna_action' => $resigned]);
 
         self::assertSame([], $page->calls);
     }
@@ -101,7 +101,7 @@ final class PageComponentActionDispatchTest extends TestCase
             'args' => [],
         ]);
 
-        $this->post($page, ['_usephp_action' => $forged]);
+        $this->post($page, ['_rosanna_action' => $forged]);
 
         self::assertSame([], $page->calls);
     }
@@ -114,7 +114,7 @@ final class PageComponentActionDispatchTest extends TestCase
         $page = new FormActionPage();
         $token = FormAction::create(FormActionPage::class, 'setParams', [['injected' => 'x']]);
 
-        $this->post($page, ['_usephp_action' => $token]);
+        $this->post($page, ['_rosanna_action' => $token]);
 
         self::assertSame([], $page->calls);
     }
@@ -126,10 +126,10 @@ final class PageComponentActionDispatchTest extends TestCase
         $token = $page->saveToken(['id' => 1]);
 
         // Rotate the signing key, as a different session would have.
-        unset($_SESSION['usephp:form-action-key']);
+        unset($_SESSION['rosanna:form-action-key']);
         $page->saveToken();
 
-        $this->post($page, ['_usephp_action' => $token]);
+        $this->post($page, ['_rosanna_action' => $token]);
 
         self::assertSame([], $page->calls);
     }
@@ -147,7 +147,7 @@ final class PageComponentActionDispatchTest extends TestCase
      */
     private function post(FormActionPage $page, array $post): void
     {
-        $post['_usephp_csrf'] = CsrfToken::getToken();
+        $post['_rosanna_csrf'] = CsrfToken::getToken();
         $page->setRequest(new Request('POST', '/', post: $post));
         $page->dispatchActionFromRequest();
     }

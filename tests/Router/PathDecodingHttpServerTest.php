@@ -48,7 +48,7 @@ final class PathDecodingHttpServerTest extends TestCase
         $page = <<<'PHP'
             <?php
             return static function (Polidog\Relayer\Router\Component\PageContext $ctx) {
-                return new Polidog\UsePhp\Runtime\Element('p', [], ['page:' . json_encode($ctx->params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+                return new Polidog\Rosanna\Runtime\Element('p', [], ['page:' . json_encode($ctx->params, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
             };
             PHP;
         self::write('src/Pages/日本語/page.php', $page);

@@ -7,7 +7,7 @@ namespace Polidog\Relayer\Tests\Fixtures;
 use LogicException;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Router\Component\PageComponent;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 #[Cache(maxAge: 60, public: true, etagKey: 'cached-page-key')]
 final class DynamicEtagPage extends PageComponent

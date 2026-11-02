@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router\Fixtures;
 
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use Polidog\Relayer\Router\Component\PageComponent;
 
 class HomePage extends PageComponent

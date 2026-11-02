@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Fixtures;
 
 use Polidog\Relayer\Router\Component\PageComponent;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 /**
  * Class-style page with one exposed form action (`save`) plus methods that

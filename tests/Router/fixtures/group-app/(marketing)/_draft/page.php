@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router\Fixtures\GroupApp\Marketing\Draft;
 
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 use Polidog\Relayer\Router\Component\PageComponent;
 
 // Lives under a `_private` folder — must never be routed.

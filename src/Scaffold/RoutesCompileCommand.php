@@ -13,7 +13,7 @@ use RuntimeException;
 /**
  * `relayer routes:compile` — write the precompiled route artifact.
  *
- * The production counterpart to `vendor/bin/usephp compile src/Pages`:
+ * The production counterpart to `vendor/bin/rosanna-defer compile src/Pages`:
  * run it once at deploy and the router reads
  * `var/cache/routes/routes.php` instead of walking `src/Pages/` on every
  * request. Reuses {@see PageScanner} (the exact discovery the router

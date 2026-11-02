@@ -106,7 +106,7 @@ final class PageContext
 
     /**
      * Declare an external script for this page. Emitted at the end of
-     * `<body>`, after the main usePHP bundle, in call order. src-only by
+     * `<body>`, after the main client script, in call order. src-only by
      * design — for inline JS use the document's `addHeadHtml()`.
      */
     public function js(

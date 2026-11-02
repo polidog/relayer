@@ -21,7 +21,7 @@ final class HtmlDocumentScriptsTest extends TestCase
     {
         $html = (new HtmlDocument())->render('<p>hi</p>');
 
-        self::assertStringContainsString('<script src="/usephp.js"></script>', $html);
+        self::assertStringContainsString('<script src="/rosanna-defer.js"></script>', $html);
         self::assertSame(1, \substr_count($html, '<script'));
     }
 
@@ -33,14 +33,14 @@ final class HtmlDocumentScriptsTest extends TestCase
             ->render('<p>hi</p>')
         ;
 
-        $usephp = \strpos($html, '<script src="/usephp.js">');
+        $rosanna = \strpos($html, '<script src="/rosanna-defer.js">');
         $first = \strpos($html, '<script src="/first.js">');
         $second = \strpos($html, '<script src="/second.js" defer>');
 
-        self::assertNotFalse($usephp);
+        self::assertNotFalse($rosanna);
         self::assertNotFalse($first);
         self::assertNotFalse($second);
-        self::assertLessThan($first, $usephp);
+        self::assertLessThan($first, $rosanna);
         self::assertLessThan($second, $first);
     }
 

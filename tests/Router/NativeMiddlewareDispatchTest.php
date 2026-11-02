@@ -65,7 +65,7 @@ final class NativeMiddlewareDispatchTest extends TestCase
         );
         \file_put_contents(
             $this->root . '/src/Pages/about/page.php',
-            "<?php\n\nuse Polidog\\UsePhp\\Runtime\\Element;\n\n"
+            "<?php\n\nuse Polidog\\Rosanna\\Runtime\\Element;\n\n"
             . "return static fn (): Element => new Element('p', [], ['about page']);\n",
         );
         \file_put_contents($this->root . '/src/Pages/middleware.go', self::PROXY);

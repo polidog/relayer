@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Pages;
 
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 final class ErrorPage extends ErrorPageComponent
 {

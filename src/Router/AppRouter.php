@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router;
 
 use Closure;
-use LogicException;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
@@ -31,7 +30,6 @@ use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
-use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\Relayer\Router\Layout\LayoutInterface;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
@@ -43,14 +41,12 @@ use Polidog\Relayer\Router\Routing\RouteKind;
 use Polidog\Relayer\Router\Routing\RouteMatch;
 use Polidog\Relayer\Router\Routing\Router;
 use Polidog\Relayer\Router\Routing\RouterInterface;
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Component\ComponentInterface;
-use Polidog\UsePhp\Psx\CompileCommand;
-use Polidog\UsePhp\Psx\Compiler;
-use Polidog\UsePhp\Runtime\ComponentState;
-use Polidog\UsePhp\Runtime\Element;
-use Polidog\UsePhp\Runtime\RenderContext;
-use Polidog\UsePhp\UsePHP;
+use Polidog\Rosanna\Defer\RosannaDefer;
+use Polidog\Rosanna\Psx\CompileCommand;
+use Polidog\Rosanna\Psx\Compiler;
+use Polidog\Rosanna\Runtime\Element;
+use Polidog\Rosanna\Runtime\Renderable;
+use Polidog\Rosanna\Runtime\RenderContext;
 use Psr\Container\ContainerInterface;
 use Psr\Log\LoggerInterface;
 use ReflectionFunction;
@@ -131,12 +127,7 @@ final class AppRouter
     private bool $autoCompilePsx;
     private string $psxCacheDir;
     private ?Request $currentRequest = null;
-    private ?UsePHP $usephp = null;
-
-    /** Signs and handles state actions when no UsePHP was set. */
-    private ?UsePHP $standaloneActionApp = null;
-
-    private ?ActionReplayRouter $actionReplayRouter = null;
+    private ?RosannaDefer $rosanna = null;
 
     /**
      * Function-style page factories keyed by the (compiled) file path —
@@ -182,7 +173,7 @@ final class AppRouter
         $this->document = new HtmlDocument();
         $this->autoCompilePsx = $autoCompilePsx;
         // Default cache dir: <projectRoot>/var/cache/psx where projectRoot
-        // is the parent of the appDirectory. This matches the usePHP CLI's
+        // is the parent of the appDirectory. This matches the Rosanna CLI's
         // default of <cwd>/var/cache/psx for the typical layout where the
         // app dir is `src/Pages` (so cache lands beside src/, not inside it).
         $this->psxCacheDir = $psxCacheDir
@@ -283,32 +274,29 @@ final class AppRouter
     }
 
     /**
-     * Wire a configured {@see UsePHP} instance for deferred component support.
+     * Wire a configured {@see RosannaDefer} instance: its PSX component
+     * manifest and deferred endpoints.
      *
-     * When set:
-     *  - `RenderContext::setApp()` is established before each dispatch so PSX
-     *    components compiled into pages can resolve `renderPsxComponent` calls.
+     *  - Every dispatch runs inside its render scope, so PSX components
+     *    compiled into pages resolve through it.
      *  - `GET` requests under the defer prefix (default `/_defer/{name}`) are
-     *    routed to {@see UsePHP::handleDeferred()} before any layout/page work,
-     *    letting a cacheable shell host user-specific fragments fetched after
-     *    load.
+     *    routed to {@see RosannaDefer::handleDeferred()} before any
+     *    layout/page work, letting a cacheable shell host user-specific
+     *    fragments fetched after load.
      *
-     * Apps that don't use defer-style components can leave this unset; the
-     * router falls back to its prior behavior with no UsePHP coupling.
+     * Apps with no shared components can leave this unset; pages then render
+     * through a bare instance with nothing registered.
      */
-    public function setUsePhp(UsePHP $usephp): self
+    public function setRosanna(RosannaDefer $rosanna): self
     {
-        // Relayer guards state actions itself (see isAuthenticStateAction()).
-        // usePHP's check would add an Origin comparison that fails behind a
-        // TLS-terminating proxy.
-        $this->usephp = $usephp->disableCsrfProtection();
+        $this->rosanna = $rosanna;
 
         return $this;
     }
 
-    public function getUsePhp(): ?UsePHP
+    public function getRosanna(): ?RosannaDefer
     {
-        return $this->usephp;
+        return $this->rosanna;
     }
 
     /**
@@ -405,6 +393,21 @@ final class AppRouter
 
     private function dispatchRequest(Request $request, int $outputLevel): void
     {
+        // Compiled PSX calls components through the active render scope, so
+        // every page, layout and error page has to render inside one.
+        RenderContext::run(
+            $this->rosanna()->scope(),
+            fn () => $this->dispatchInScope($request, $outputLevel),
+        );
+    }
+
+    private function rosanna(): RosannaDefer
+    {
+        return $this->rosanna ??= new RosannaDefer();
+    }
+
+    private function dispatchInScope(Request $request, int $outputLevel): void
+    {
         // The guard may have substituted the Request: route by what it
         // handed us, not by a fresh read of the superglobals.
         $path = $request->path;
@@ -454,32 +457,23 @@ final class AppRouter
         // LocaleResolver is bound.
         $request = $this->currentRequest = $this->resolveLocale($request);
 
-        // Establish the active UsePHP for compiled PSX page bodies that call
-        // RenderContext::getApp()->renderPsxComponent(...). Without this the
-        // deferred-component glue would have no app to dispatch through.
-        if (null !== $this->usephp) {
-            RenderContext::setApp($this->usephp);
-        }
-
         try {
             // Deferred component GETs (under `/_defer/{name}`) are dispatched
-            // before route matching: usePHP owns that URL space, and we never
-            // want layout/page rendering on that path.
+            // before route matching: Rosanna owns that URL space, and we
+            // never want layout/page rendering on that path.
             //
             // No `$_SERVER['REQUEST_URI']` rewrite is needed for a stripped
-            // locale prefix here: usePHP roots the defer fetch URL at
-            // `/_defer/{name}` (Renderer::renderDeferred), so a
+            // locale prefix here: the defer fetch URL is rooted at
+            // `/_defer/{name}` (PlaceholderRenderer), so a
             // `/{locale}/_defer/...` request never occurs. The fragment's
             // locale was already resolved above from cookie / Accept-Language
             // / default (the rooted defer URL carries no path prefix) — see
             // the i18n "Deferred fragments" note in README.md.
-            if (null !== $this->usephp) {
-                $deferred = $this->usephp->handleDeferred();
-                if (null !== $deferred) {
-                    echo $deferred;
+            $deferred = $this->rosanna()->handleDeferred();
+            if (null !== $deferred) {
+                $deferred->send();
 
-                    return;
-                }
+                return;
             }
 
             // The route dispatch — match + page/API handling + the
@@ -558,9 +552,6 @@ final class AppRouter
             $this->container->setCurrentRequest(null);
         }
         $this->currentRequest = null;
-        if (null !== $this->usephp) {
-            RenderContext::clearApp();
-        }
         Component\PageContext::setCurrent(null);
         // Drop the ambient request Translator so a non-default locale
         // cannot bleed into the next request's pre-dispatch code (e.g.
@@ -1310,14 +1301,14 @@ final class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function loadPage(string $pagePath, array $params): ComponentInterface|FunctionPage|null
+    private function loadPage(string $pagePath, array $params): FunctionPage|Renderable|null
     {
         $result = $this->loadPageInternal($pagePath, $params);
 
         if (null !== $this->profiler) {
             $kind = match (true) {
                 $result instanceof FunctionPage => 'function',
-                $result instanceof ComponentInterface => 'class',
+                $result instanceof Renderable => 'class',
                 default => 'null',
             };
             $this->profiler->collect('page', 'load', [
@@ -1337,7 +1328,7 @@ final class AppRouter
      *
      * @param array<string, string> $params
      */
-    private function loadPageInternal(string $pagePath, array $params): ComponentInterface|FunctionPage|null
+    private function loadPageInternal(string $pagePath, array $params): FunctionPage|Renderable|null
     {
         if (!\file_exists($pagePath)) {
             return null;
@@ -1380,7 +1371,7 @@ final class AppRouter
         if (null !== $className && \class_exists($className)) {
             $instance = $this->resolveInstance($className);
 
-            if ($instance instanceof ComponentInterface) {
+            if ($instance instanceof Renderable) {
                 if ($instance instanceof PageComponent) {
                     $instance->setParams($params);
                     $instance->setRequest($this->request());
@@ -1396,18 +1387,17 @@ final class AppRouter
     /**
      * @param array<string, string> $params
      */
-    private function renderPage(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    private function renderPage(FunctionPage|Renderable $page, LayoutStack $layouts, array $params): void
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
             : 'page:' . $page::class . '#page';
 
-        // Surface server-action (form POST hitting `$ctx->action()` or a
-        // class-style `actionXyz` handler) and useState setState as
-        // profiler events. Both detect the dispatch by sniffing the POST body
-        // here (the token shape is the same across page kinds) instead
-        // of duplicating the dispatcher logic. No-op when no profiler
-        // is bound — guarded at the single call site.
+        // Surface server actions (form POST hitting `$ctx->action()` or a
+        // class-style `actionXyz` handler) as profiler events, detected by
+        // sniffing the POST body here (the token shape is the same across
+        // page kinds) instead of duplicating the dispatcher logic. No-op when
+        // no profiler is bound — guarded at the single call site.
         if (null !== $this->profiler) {
             $this->recordProfilerPostDispatches($page, $componentId);
         }
@@ -1426,40 +1416,16 @@ final class AppRouter
      * facade. Split so the profiler's `page.render` span is wrapped by
      * a try/finally on the normal-return path.
      *
-     * The `dispatchStateAction` PRG path abandons the render mid-way by
-     * throwing {@see StopRequest}; that unwinds through both `finally`
-     * blocks here, so the `page.render` span is stopped and the profile is
-     * finalized in {@see run()} exactly like on the normal path.
-     *
      * @param array<string, string> $params
      */
-    private function renderPageInternal(ComponentInterface|FunctionPage $page, LayoutStack $layouts, array $params): void
+    private function renderPageInternal(FunctionPage|Renderable $page, LayoutStack $layouts, array $params): void
     {
         $componentId = $page instanceof FunctionPage
             ? $page->getComponentId()
             : 'page:' . $page::class . '#page';
 
-        if ($this->isStateAction($page)) {
-            if ($this->isAuthenticStateAction()) {
-                $this->dispatchStateAction($page, $layouts, $componentId);
-
-                return;
-            }
-
-            // Same 403 contract as the form-action dispatchers in PageComponent
-            // / FunctionPage: state stays as it was and the page is what the
-            // 403 carries.
-            \http_response_code(403);
-        }
-
-        $renderer = $this->layoutRenderer($componentId);
-        $html = $renderer->render($this->renderPageElement($page, $componentId), $layouts);
-
-        if (null !== $this->request()->header('X-UsePHP-Partial')) {
-            echo $html;
-
-            return;
-        }
+        $renderer = $this->layoutRenderer();
+        $html = $renderer->render($this->renderPageElement($page), $layouts);
 
         echo $this->renderPageDocument($page, $layouts, $componentId, $html);
     }
@@ -1468,19 +1434,8 @@ final class AppRouter
      * Run the page's own render, including any form action on this POST. The
      * layouts render later, in {@see LayoutRenderer}.
      */
-    private function renderPageElement(ComponentInterface|FunctionPage $page, string $componentId): Element
+    private function renderPageElement(FunctionPage|Renderable $page): Element
     {
-        // Auto-generated instance keys ("#0") have to line up with the ones the
-        // action's replay produces, whatever ran earlier in this process.
-        RenderContext::beginRender();
-
-        $state = ComponentState::getInstance($componentId);
-        ComponentState::reset();
-
-        if ($page instanceof BaseComponent) {
-            $page->setComponentState($state);
-        }
-
         if ($page instanceof FunctionPage) {
             if ($page->hasPendingAction()) {
                 // Double-render for function pages with a matching POST action:
@@ -1495,7 +1450,6 @@ final class AppRouter
                 //    any state mutations made by the action handler.
                 $page->render();
                 $page->dispatchActionFromRequest();
-                RenderContext::beginRender();
                 $pageElement = $page->renderAfterDispatch();
             } else {
                 $page->dispatchActionFromRequest(); // no-op on GET
@@ -1519,42 +1473,16 @@ final class AppRouter
         return $pageElement;
     }
 
-    private function layoutRenderer(string $componentId): LayoutRenderer
+    private function layoutRenderer(): LayoutRenderer
     {
-        // Pass the configured SnapshotSerializer so the inner Renderer can
-        // HMAC-sign snapshot-backed component state rendered into the page.
-        // Defer placeholders (`/_defer/{name}` GET endpoint) do NOT use the
-        // serializer — only `StorageType::Snapshot` state does.
-        //
-        // use-php 0.5.0 made getSnapshotSerializer() throw a LogicException
-        // when no secret has been configured, instead of silently returning
-        // an unsigned serializer. Relayer only configures a secret when
-        // USEPHP_SNAPSHOT_SECRET is set (or in dev, via a per-project
-        // fallback), so prod-without-secret legitimately has none. Degrade
-        // to null here: pages with no Snapshot-storage component render
-        // exactly as before; a page that actually serializes a snapshot
-        // without a secret then fails loudly inside the Renderer with
-        // use-php's own actionable message — which is the correct posture,
-        // an unsigned client round-trip is forgeable.
-        $snapshotSerializer = null;
-        if (null !== $this->usephp) {
-            try {
-                $snapshotSerializer = $this->usephp->getSnapshotSerializer();
-            } catch (LogicException) {
-                $snapshotSerializer = null;
-            }
-        }
-
         return new LayoutRenderer(
-            $componentId,
             $this->request()->uri(),
-            $snapshotSerializer,
-            $this->actionApp()->signAction(...),
+            $this->rosanna()->placeholderRenderer(),
         );
     }
 
     private function renderPageDocument(
-        ComponentInterface|FunctionPage $page,
+        FunctionPage|Renderable $page,
         LayoutStack $layouts,
         string $componentId,
         string $html,
@@ -1571,95 +1499,12 @@ final class AppRouter
         }
 
         $wrappedHtml = \sprintf(
-            '<div data-usephp="%s">%s</div>',
+            '<div data-rosanna="%s">%s</div>',
             \htmlspecialchars($componentId, \ENT_QUOTES, 'UTF-8'),
             $html,
         );
 
         return $this->document->render($wrappedHtml);
-    }
-
-    /**
-     * A useState action: a JSON `_usephp_action`, unlike the `usephp-action:`
-     * tokens of form actions. It targets the page or any component on it.
-     */
-    private function isStateAction(ComponentInterface|FunctionPage $page): bool
-    {
-        $request = $this->request();
-        if (!$request->isPost() || $page instanceof ErrorPageComponent) {
-            return false;
-        }
-
-        $action = $request->post('_usephp_action');
-
-        return \is_string($action)
-            && \is_string($request->post('_usephp_component'))
-            && !\str_starts_with($action, 'usephp-action:');
-    }
-
-    /**
-     * The component id is rendered into the page and is not a secret, so it
-     * cannot authenticate the request. Forms rendered with the page carry the
-     * session-bound CSRF token. Those usePHP renders (defer fragments, partial
-     * responses) have only the action signature, which is bound to the session
-     * too. handleAction() verifies the signature either way.
-     */
-    private function isAuthenticStateAction(): bool
-    {
-        $request = $this->request();
-        $csrf = $request->post('_usephp_csrf');
-        if (null !== $csrf) {
-            return CsrfToken::validate($csrf);
-        }
-
-        SessionStarter::resume();
-        $signature = $request->post('_usephp_action_sig');
-
-        return null !== $signature && $this->actionApp()->verifyActionSignature(
-            (string) $request->post('_usephp_component'),
-            (string) $request->post('_usephp_action'),
-            $signature,
-        );
-    }
-
-    /**
-     * Apply a useState action through usePHP, which decides what the browser
-     * gets: a redirect, the acting component's markup for a partial update, or
-     * the page itself when state would not survive a redirect.
-     */
-    private function dispatchStateAction(ComponentInterface|FunctionPage $page, LayoutStack $layouts, string $componentId): void
-    {
-        $partial = null !== $this->request()->header('X-UsePHP-Partial');
-
-        $router = $this->actionReplayRouter ??= new ActionReplayRouter();
-        $router->replayWith(function () use ($page, $layouts, $componentId, $partial): Element|string {
-            $renderer = $this->layoutRenderer($componentId);
-            $pageElement = $this->renderPageElement($page, $componentId);
-
-            return $partial
-                ? new Element('div', ['data-usephp' => $componentId], [$renderer->compose($pageElement, $layouts)])
-                : $this->renderPageDocument($page, $layouts, $componentId, $renderer->render($pageElement, $layouts));
-        });
-
-        $app = $this->actionApp()
-            ->setRouter($router)
-            // The redirect IS the response — abandon the render. See
-            // StopRequest for why this is not `exit`.
-            ->withExitHandler(static function (): never {
-                throw new StopRequest();
-            })
-        ;
-
-        try {
-            echo $app->handleAction();
-        } finally {
-            $router->replayWith(null);
-        }
-    }
-
-    private function actionApp(): UsePHP
-    {
-        return $this->usephp ?? ($this->standaloneActionApp ??= new UsePHP()->disableCsrfProtection());
     }
 
     /**
@@ -1721,18 +1566,18 @@ final class AppRouter
 
     /**
      * Resolve a page.psx path to its cached compiled file. The cache file
-     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the usePHP
+     * sits in `var/cache/psx/<sha1(realpath(source))>.php` per the Rosanna
      * convention (CompileCommand::cachePathFor).
      *
      * Behaviour by mode:
      * - autoCompilePsx=true: when the cache file is missing or older than
-     *   the source, the usePHP Compiler runs in-process and rewrites the
+     *   the source, the Rosanna Compiler runs in-process and rewrites the
      *   cache atomically (temp + rename).
      * - autoCompilePsx=false (default, production): if the cache file is
-     *   missing, throw a clear error pointing at `vendor/bin/usephp compile`.
+     *   missing, throw a clear error pointing at `vendor/bin/rosanna-defer compile`.
      *   If it exists, it's treated as authoritative — staleness is NOT
      *   re-checked at request time. The deployment / build step owns the
-     *   refresh contract via `usephp compile`.
+     *   refresh contract via `vendor/bin/rosanna-defer compile`.
      */
     private function resolveCompiledPsxPath(string $psxPath): string
     {
@@ -1764,7 +1609,7 @@ final class AppRouter
             if (!\file_exists($compiledPath)) {
                 throw new RuntimeException(
                     "Compiled PSX not found for {$psxPath} (expected {$compiledPath}). "
-                    . 'Run `vendor/bin/usephp compile` to populate the cache directory, '
+                    . 'Run `vendor/bin/rosanna-defer compile` to populate the cache directory, '
                     . 'or pass autoCompilePsx: true to AppRouter for dev auto-compile.',
                 );
             }
@@ -1772,14 +1617,7 @@ final class AppRouter
             return $compiledPath;
         }
 
-        if (!\class_exists('Polidog\UsePhp\Psx\Compiler')) {
-            throw new RuntimeException(
-                'autoCompilePsx is enabled but Polidog\UsePhp\Psx\Compiler '
-                . 'is not available. Update polidog/use-php to a version with PSX support.',
-            );
-        }
-
-        // The version sidecar catches a usePHP update that changed the
+        // The version sidecar catches a Rosanna update that changed the
         // compiler's output while the source stayed as it was.
         $versionPath = $compiledPath . '.version';
         $needsCompile = !\file_exists($compiledPath)
@@ -1788,10 +1626,7 @@ final class AppRouter
 
         if ($needsCompile) {
             $this->ensureCacheDir();
-            $compilerClass = 'Polidog\UsePhp\Psx\Compiler';
-
-            /** @var Compiler $compiler */
-            $compiler = new $compilerClass();
+            $compiler = new Compiler();
             $source = \file_get_contents($psxPath);
             if (false === $source) {
                 throw new RuntimeException("Failed to read PSX source: {$psxPath}");
@@ -2029,23 +1864,10 @@ final class AppRouter
 
     private function cachePathFor(string $sourcePath): string
     {
-        // Mirror usePHP's CompileCommand::cachePathFor — same hashing + naming
-        // so a pre-compiled cache produced by `vendor/bin/usephp compile` is
-        // findable here without consulting the manifest.
-        if (\class_exists('Polidog\UsePhp\Psx\CompileCommand')) {
-            return CompileCommand::cachePathFor(
-                $this->psxCacheDir,
-                $sourcePath,
-            );
-        }
-        // Fallback (CompileCommand not loaded for some reason): use the same
-        // algorithm so we never disagree with the upstream tool.
-        $abs = \realpath($sourcePath);
-        if (false === $abs) {
-            $abs = $sourcePath;
-        }
-
-        return \rtrim($this->psxCacheDir, '/') . '/' . \sha1($abs) . '.php';
+        // Same hashing + naming as the compile command, so a pre-compiled
+        // cache produced by `vendor/bin/rosanna-defer compile` is findable
+        // here without consulting the manifest.
+        return CompileCommand::cachePathFor($this->psxCacheDir, $sourcePath);
     }
 
     private function ensureCacheDir(): void
@@ -2055,7 +1877,7 @@ final class AppRouter
         }
     }
 
-    private function loadErrorPage(string $errorPath, int $statusCode, string $message): ?ComponentInterface
+    private function loadErrorPage(string $errorPath, int $statusCode, string $message): ?Renderable
     {
         if (!\file_exists($errorPath)) {
             return null;
@@ -2080,7 +1902,7 @@ final class AppRouter
 
         $instance = $this->resolveInstance($className);
 
-        if (!$instance instanceof ComponentInterface) {
+        if (!$instance instanceof Renderable) {
             return null;
         }
 
@@ -2244,13 +2066,11 @@ final class AppRouter
     }
 
     /**
-     * Sniff the `_usephp_action` form field and emit the matching profiler
-     * event(s). `usephp-action:` prefix is the form-action token shape
-     * (`action.dispatch`); raw JSON is the useState setState dispatch
-     * (`state.action`). The caller has already guarded against a null
+     * Sniff the `_rosanna_action` form field and emit `action.dispatch` for a
+     * form-action token. The caller has already guarded against a null
      * profiler so this method assumes one is bound.
      */
-    private function recordProfilerPostDispatches(ComponentInterface|FunctionPage $page, string $componentId): void
+    private function recordProfilerPostDispatches(FunctionPage|Renderable $page, string $componentId): void
     {
         \assert(null !== $this->profiler);
 
@@ -2259,27 +2079,15 @@ final class AppRouter
             return;
         }
 
-        $token = $request->post('_usephp_action');
-        if (null === $token) {
+        $token = $request->post('_rosanna_action');
+        if (null === $token || !\str_starts_with($token, 'rosanna-action:')) {
             return;
         }
 
-        if (\str_starts_with($token, 'usephp-action:')) {
-            $this->profiler->collect('action', 'dispatch', [
-                'kind' => $page instanceof FunctionPage ? 'function' : 'class',
-                'page' => $componentId,
-            ]);
-
-            return;
-        }
-
-        // Match the dispatchStateAction gating: same-component, JSON shape.
-        $postComponentId = $request->post('_usephp_component');
-        if (\is_string($postComponentId) && $postComponentId === $componentId) {
-            $this->profiler->collect('state', 'action', [
-                'componentId' => $componentId,
-            ]);
-        }
+        $this->profiler->collect('action', 'dispatch', [
+            'kind' => $page instanceof FunctionPage ? 'function' : 'class',
+            'page' => $componentId,
+        ]);
     }
 
     private function isProfilerExcluded(string $path): bool
@@ -2339,8 +2147,8 @@ final class AppRouter
     }
 
     /**
-     * Inline JS that wraps `window.fetch` so any usePHP sub-request
-     * (defer fetch identified by `X-UsePHP-Defer`) forwards the parent
+     * Inline JS that wraps `window.fetch` so any Rosanna sub-request
+     * (defer fetch identified by `X-Rosanna-Defer`) forwards the parent
      * profile's token. The wrapper is idempotent — if a previously
      * recorded profile already patched fetch, the second wrap simply
      * overrides the captured token while still chaining to the original.
@@ -2366,13 +2174,13 @@ final class AppRouter
                     var h = init.headers;
                     var isDefer = false;
                     if (h instanceof Headers) {
-                        isDefer = !!h.get('X-UsePHP-Defer');
+                        isDefer = !!h.get('X-Rosanna-Defer');
                     } else if (Array.isArray(h)) {
                         for (var i = 0; i < h.length; i++) {
-                            if (h[i][0] && h[i][0].toLowerCase() === 'x-usephp-defer') { isDefer = true; break; }
+                            if (h[i][0] && h[i][0].toLowerCase() === 'x-rosanna-defer') { isDefer = true; break; }
                         }
                     } else if (h && typeof h === 'object') {
-                        isDefer = !!(h['X-UsePHP-Defer'] || h['x-usephp-defer']);
+                        isDefer = !!(h['X-Rosanna-Defer'] || h['x-rosanna-defer']);
                     }
                     if (isDefer) {
                         if (h instanceof Headers) {

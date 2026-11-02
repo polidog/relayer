@@ -31,7 +31,16 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 9;
+    public const int STRUCTURE_VERSION = 10;
+
+    /** Composer script publishing `public/rosanna-defer.js`. */
+    public const string ASSET_PUBLISHER = 'Polidog\Rosanna\Defer\Installer\AssetInstaller::publish';
+
+    /**
+     * The script projects before v10 carry. polidog/use-php is gone, so
+     * Composer fails on it unless it is replaced.
+     */
+    public const string LEGACY_ASSET_PUBLISHER = 'Polidog\UsePhp\Installer\AssetInstaller::publish';
 
     /**
      * The skeleton source tree: relative path => file contents. POSIX
@@ -97,7 +106,7 @@ final class Scaffold
      */
     public static function composerPatch(): array
     {
-        $publish = 'Polidog\UsePhp\Installer\AssetInstaller::publish';
+        $publish = self::ASSET_PUBLISHER;
 
         return [
             'autoload' => [
@@ -227,6 +236,50 @@ final class Scaffold
                     '03bd0acb650e2c7e36e87808f78538628398d24f9cdc6ec069ddbffc037bbca0',
                 ],
             ],
+            // v10 moves from polidog/use-php to polidog/rosanna and
+            // polidog/rosanna-defer: new namespaces, new client script.
+            10 => [
+                '.env' => [
+                    // v9
+                    '258a1027a23756369948008cf606b450f5f52691792f82a13786cb4b66792231',
+                ],
+                '.gitignore' => [
+                    // v9
+                    '26b84b7e9d9cd6b491caeea386f656c20c81342232bd39e67a2437bde05748b0',
+                ],
+                'README.md' => [
+                    // v9
+                    'bf97065e913910dac83187c977174fad77eff9b5265b9590d4e2835818c7fdbe',
+                ],
+                'src/Pages/layout.psx' => [
+                    // v9
+                    '83c8c723b93f2e47caa7d42f8e0ac12b25a9d5b44f14d5f15ae3c8114ffbd49b',
+                ],
+                'src/Pages/page.psx' => [
+                    // v9
+                    '8fefcf17e4135603b98af46c81e01c6942ab52d5bcce6cf493bab7178bb200b1',
+                ],
+                'Dockerfile' => [
+                    // v9
+                    '31f68dca68f6cde2030af620dd4eeae01136b8e8e88413ee8d052dec31a622a9',
+                ],
+                'php.ini' => [
+                    // v9
+                    '70a23c5054f58262b142814efdb4d4d81334c9eb6d4078f9791cf759b8964404',
+                ],
+                '.dockerignore' => [
+                    // v9
+                    'e4188f00623fc4615c061900ad19604242be19a3ccbf02618dbf4e3695366697',
+                ],
+                'static-build.Dockerfile' => [
+                    // v9
+                    'e94efb67f3c36f5f4ed903dddb207c97f180fd2282beb3b2a2df5a318481ab41',
+                ],
+                'public/worker.php' => [
+                    // v9
+                    'f82216bb74666c260ab5b9db8f3ba403b7ee5c1caa81967b58eec5c87de78d0b',
+                ],
+            ],
         ];
     }
 
@@ -245,8 +298,6 @@ final class Scaffold
             # DATABASE_PASSWORD=secret
             # SQLite needs an ABSOLUTE path — PDO resolves a relative DSN
             # path against the process cwd: DATABASE_DSN=sqlite:/srv/app/var/app.db
-            # Set USEPHP_SNAPSHOT_SECRET in production if any page serializes
-            # snapshot state (a long random string).
 
             ENV;
     }
@@ -256,7 +307,7 @@ final class Scaffold
         return <<<'GITIGNORE'
             /vendor/
             /var/
-            /public/usephp.js
+            /public/rosanna-defer.js
             /.env.local
             /.env.*.local
 
@@ -323,9 +374,7 @@ final class Scaffold
 
             ```bash
             composer install --no-dev --classmap-authoritative
-            vendor/bin/usephp compile src/Pages      # .psx  -> compiled PHP
-            vendor/bin/relayer routes:compile         # route map -> PHP
-            vendor/bin/relayer container:compile      # DI container -> PHP
+            vendor/bin/relayer compile                # .psx, route map, DI container -> PHP
             ```
 
             Each step is presence-gated: a missing artifact degrades to
@@ -740,8 +789,8 @@ final class Scaffold
             namespace App\Layouts;
 
             use Polidog\Relayer\Router\Layout\LayoutComponent;
-            use Polidog\UsePhp\Html\H;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Html\H;
+            use Polidog\Rosanna\Runtime\Element;
 
             final class RootLayout extends LayoutComponent
             {
@@ -768,7 +817,7 @@ final class Scaffold
 
             declare(strict_types=1);
 
-            use Polidog\UsePhp\Html\H;
+            use Polidog\Rosanna\Html\H;
 
             return fn () => <section>
                 <h1>It works</h1>
@@ -822,7 +871,7 @@ final class Scaffold
 
             # Install dependencies in their own layer so editing app code
             # doesn't reinstall them. --no-scripts because the post-install
-            # hook (usephp asset publisher) needs the app source, which is
+            # hook (rosanna-defer asset publisher) needs the app source, which is
             # copied next; the second install runs it with sources present.
             COPY composer.* ./
             RUN composer install --no-interaction --prefer-dist \
@@ -924,10 +973,8 @@ final class Scaffold
             ; off, a larger cache, sessions and upload temp under
             ; var/cache/), so a production image needs no edit here.
             ;
-            ; Deploying some other way? Run the three steps yourself:
-            ;   vendor/bin/usephp compile src/Pages    ; .psx  -> PHP cache
-            ;   vendor/bin/relayer routes:compile       ; route map -> PHP
-            ;   vendor/bin/relayer container:compile     ; DI container -> PHP
+            ; Deploying some other way? Run the precompile yourself:
+            ;   vendor/bin/relayer compile              ; .psx, route map, DI container -> PHP
             ; and uncomment the production block below.
             opcache.memory_consumption = 128
             opcache.interned_strings_buffer = 16
@@ -1040,7 +1087,7 @@ final class Scaffold
             /var/
             /dist/
             /.git/
-            /public/usephp.js
+            /public/rosanna-defer.js
             /.env.local
             /.env.*.local
 
@@ -1079,7 +1126,7 @@ final class Scaffold
             COPY . .
 
             # --no-dev: the binary ships production dependencies only.
-            # Scripts run (they publish public/usephp.js, which the default
+            # Scripts run (they publish public/rosanna-defer.js, which the default
             # document references).
             RUN composer install --no-interaction --prefer-dist --no-dev \
                     --classmap-authoritative \
@@ -1185,9 +1232,9 @@ final class Scaffold
             for ($n = 0; 0 === $maxRequests || $n < $maxRequests; ++$n) {
                 $keepRunning = frankenphp_handle_request($handler);
 
-                // Drop request-scoped state the framework and usePHP keep in
-                // statics (component instances, their storage, the ambient
-                // translator) so nothing leaks into the next visitor.
+                // Drop request-scoped state the framework and Rosanna keep in
+                // statics (the render scope, the ambient translator) so
+                // nothing leaks into the next visitor.
                 Relayer::endRequest();
                 gc_collect_cycles();
 

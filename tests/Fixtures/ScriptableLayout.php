@@ -6,7 +6,7 @@ namespace Polidog\Relayer\Tests\Fixtures;
 
 use LogicException;
 use Polidog\Relayer\Router\Layout\LayoutComponent;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 final class ScriptableLayout extends LayoutComponent
 {

@@ -7,7 +7,7 @@ namespace Polidog\Relayer;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 
 /**
- * Base Symfony DI configurator for usePHP applications.
+ * Base Symfony DI configurator for Relayer applications.
  *
  * Extend and override `configure()` to register services. The project root is
  * available as `$this->projectRoot` for path-based parameters (config files,

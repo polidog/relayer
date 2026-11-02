@@ -5,8 +5,8 @@ declare(strict_types=1);
 use App\Components\ExpensiveStatsDeferred;
 use App\Service\Clock;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, Clock $clock): Closure {
     $ctx->metadata(['title' => 'Home']);
@@ -30,11 +30,11 @@ return function (PageContext $ctx, Clock $clock): Closure {
                 <div className="flex items-center justify-between">
                     <p className="text-sm text-slate-500">
                         Reload the page → timestamp stays frozen (localStorage L2). Click Refresh →
-                        it bumps (use-php 0.6.0 reload busts both cache tiers).
+                        it bumps (reload busts both cache tiers).
                     </p>
                     <button
                         type="button"
-                        data-usephp-reload-defer="expensive-stats"
+                        data-rosanna-reload-defer="expensive-stats"
                         className="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
                     >
                         Refresh

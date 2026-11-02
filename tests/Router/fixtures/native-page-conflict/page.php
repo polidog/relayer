@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Router\Fixtures\NativePageConflict;
 
 use Polidog\Relayer\Router\Component\PageComponent;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 class HomePage extends PageComponent
 {

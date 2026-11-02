@@ -29,6 +29,24 @@ final class UpgradeCommandTest extends TestCase
         self::removeTree($this->project);
     }
 
+    public function testReplacesTheUsePhpAssetPublisherInComposerScripts(): void
+    {
+        $this->writeComposer([
+            'scripts' => [
+                'post-install-cmd' => ['@php -r "echo 1;"', Scaffold::LEGACY_ASSET_PUBLISHER],
+                'post-update-cmd' => Scaffold::LEGACY_ASSET_PUBLISHER,
+            ],
+            'extra' => ['relayer' => ['structure_version' => 9]],
+        ]);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project));
+
+        $scripts = $this->readComposer()['scripts'] ?? null;
+        self::assertIsArray($scripts);
+        self::assertSame(['@php -r "echo 1;"', Scaffold::ASSET_PUBLISHER], $scripts['post-install-cmd'] ?? null);
+        self::assertSame([Scaffold::ASSET_PUBLISHER], $scripts['post-update-cmd'] ?? null);
+    }
+
     public function testFailsWhenNoComposerJsonPresent(): void
     {
         $status = UpgradeCommand::run([], $this->capture(), $this->project);

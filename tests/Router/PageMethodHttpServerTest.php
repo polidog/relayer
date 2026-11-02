@@ -39,7 +39,7 @@ final class PageMethodHttpServerTest extends TestCase
         self::write('app/error.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Router\Component\ErrorPageComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
 
             final class PageMethodErrorPage extends ErrorPageComponent
             {
@@ -62,7 +62,7 @@ final class PageMethodHttpServerTest extends TestCase
         self::write('app/form/page.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Router\Component\PageContext;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
 
             return static function (PageContext $ctx): Closure {
                 $save = $ctx->action('save', static function (array $form): void {
@@ -74,21 +74,6 @@ final class PageMethodHttpServerTest extends TestCase
                 ]);
             };
             PHP);
-        self::write('app/counter/page.php', <<<'PHP'
-            <?php
-            use Polidog\UsePhp\Runtime\Element;
-            use function Polidog\UsePhp\Runtime\useState;
-
-            return static fn (): Closure => static function (): Element {
-                [$value, $setValue] = useState('initial');
-
-                return new Element('div', [], [
-                    new Element('p', [], ['value=' . $value]),
-                    new Element('button', ['wire:click' => $setValue('next')], ['go']),
-                ]);
-            };
-            PHP);
-
         self::write('cors/middleware.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Http\Cors;
@@ -238,22 +223,6 @@ final class PageMethodHttpServerTest extends TestCase
         self::assertSame('hello', (string) \file_get_contents(self::$root . '/action-ran'));
     }
 
-    public function testAPartialStateUpdateStillAnswersWithAFragment(): void
-    {
-        [, $headers, $html] = $this->request('GET', '/counter');
-        self::assertStringContainsString('value=initial', $html);
-
-        [$status, , $body] = $this->request('POST', '/counter', [
-            'Cookie' => self::sessionCookie($headers),
-            'Content-Type' => 'application/x-www-form-urlencoded',
-            'X-UsePHP-Partial' => '1',
-        ], \http_build_query(self::hiddenFields($html)));
-
-        self::assertSame(200, $status);
-        self::assertStringContainsString('value=next', $body);
-        self::assertStringNotContainsString('<html', $body);
-    }
-
     private static function markingPage(): string
     {
         return <<<'PHP'
@@ -261,7 +230,7 @@ final class PageMethodHttpServerTest extends TestCase
             return static function () {
                 \file_put_contents(\dirname(__DIR__, 2) . '/page-ran', '1');
 
-                return new Polidog\UsePhp\Runtime\Element('h1', [], ['About page']);
+                return new Polidog\Rosanna\Runtime\Element('h1', [], ['About page']);
             };
             PHP;
     }

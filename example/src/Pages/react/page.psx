@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 use Polidog\Relayer\React\Island;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 // Server-rendered page (PSX). One section is handed to a client React
 // component via Island::mount(): the server passes initial props, the

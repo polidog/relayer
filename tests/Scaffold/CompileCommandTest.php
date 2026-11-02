@@ -38,7 +38,7 @@ final class CompileCommandTest extends TestCase
 
                 namespace App\Components;
 
-                use Polidog\UsePhp\Runtime\Element;
+                use Polidog\Rosanna\Runtime\Element;
 
                 return function (array $props): Element {
                     return <p>hello</p>;

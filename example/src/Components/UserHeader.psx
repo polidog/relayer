@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Components;
 
 use Polidog\Relayer\Auth\Authenticator;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 // Reads the relayer Authenticator session entry at render time so its output
 // depends on the current user. Loaded via a deferred wrapper

@@ -156,6 +156,39 @@ final class InitCommand
     }
 
     /**
+     * Swap the pre-v10 asset publisher for the current one, in every Composer
+     * hook that has it. The class no longer exists, so leaving it would make
+     * `composer install` fail. Every other script is left alone.
+     *
+     * @param array<array-key, mixed> $composer the decoded composer.json object
+     * @param Closure(string): void   $report
+     *
+     * @return array<array-key, mixed>
+     */
+    public static function replaceLegacyPublisher(array $composer, Closure $report): array
+    {
+        if (!\is_array($composer['scripts'] ?? null)) {
+            return $composer;
+        }
+
+        foreach ($composer['scripts'] as $hook => $callbacks) {
+            $list = \is_array($callbacks) ? \array_values($callbacks) : [$callbacks];
+            if (!\in_array(Scaffold::LEGACY_ASSET_PUBLISHER, $list, true)) {
+                continue;
+            }
+
+            $replaced = \array_map(
+                static fn (mixed $callback): mixed => Scaffold::LEGACY_ASSET_PUBLISHER === $callback ? Scaffold::ASSET_PUBLISHER : $callback,
+                $list,
+            );
+            $composer['scripts'][$hook] = \array_values(\array_unique($replaced, \SORT_REGULAR));
+            $report(\sprintf('scripts.%s: replaced %s with %s', (string) $hook, Scaffold::LEGACY_ASSET_PUBLISHER, Scaffold::ASSET_PUBLISHER));
+        }
+
+        return $composer;
+    }
+
+    /**
      * If `composer.json` already maps the `App\` PSR-4 prefix somewhere
      * other than `src/`, return a human description of where it points;
      * otherwise null. The scaffold hard-codes `App\` => `src/` (the
@@ -266,9 +299,12 @@ final class InitCommand
             $changes[] = 'autoload.psr-4: added "App\\\" => "src/"';
         }
 
-        // scripts.*: ensure the usePHP asset publisher runs on install/update.
+        // scripts.*: ensure the rosanna-defer asset publisher runs on install/update.
         // Composer allows a script to be a string or a list; normalize to a
         // list and append only if the callback is absent.
+        $composer = self::replaceLegacyPublisher($composer, static function (string $line) use (&$changes): void {
+            $changes[] = $line;
+        });
         $scripts = \is_array($composer['scripts'] ?? null) ? $composer['scripts'] : [];
         foreach ($patch['scripts'] as $hook => $callbacks) {
             $existing = $scripts[$hook] ?? [];
@@ -345,7 +381,7 @@ final class InitCommand
         $write('Next steps:');
         // `composer install` (not dump-autoload) so the App\ autoload AND
         // the just-added post-install-cmd both apply — the latter publishes
-        // public/usephp.js, which the default document references.
+        // public/rosanna-defer.js, which the default document references.
         $write('  composer install');
         $write('  php -S 127.0.0.1:8000 -t public');
 

@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Router\Layout;
 
 use Polidog\Relayer\Router\Document\Script;
-use Polidog\UsePhp\Component\BaseComponent;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
+use Polidog\Rosanna\Runtime\Renderable;
 
-abstract class LayoutComponent extends BaseComponent implements LayoutInterface
+abstract class LayoutComponent implements LayoutInterface, Renderable
 {
     /** @var array<Element|string>|Element|string */
     private array|Element|string $children = [];

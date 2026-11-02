@@ -6,7 +6,8 @@ namespace Polidog\Relayer\Scaffold;
 
 use Closure;
 use Polidog\Relayer\Relayer;
-use Polidog\UsePhp\Psx\CompileCommand as PsxCompileCommand;
+use Polidog\Rosanna\Defer\DeferredManifestCompiler;
+use Polidog\Rosanna\Psx\CompileCommand as PsxCompileCommand;
 use Throwable;
 
 /**
@@ -15,7 +16,7 @@ use Throwable;
  * Runs the three precompile steps the deploy checklist lists, in the
  * order they depend on each other, and stops at the first failure:
  *
- *   1. `.psx` -> PHP (delegates to use-php's `usephp compile`, over
+ *   1. `.psx` -> PHP (same as `vendor/bin/rosanna-defer compile`, over
  *      `src/Pages` and `src/Components`, into `var/cache/psx`),
  *   2. {@see RoutesCompileCommand} (`src/Pages/` -> route map),
  *   3. {@see ContainerCompileCommand} (DI container -> PHP class).
@@ -64,7 +65,7 @@ final class CompileCommand
     }
 
     /**
-     * use-php's compiler prints straight to STDOUT; buffer it and replay
+     * Rosanna's compiler prints straight to STDOUT; buffer it and replay
      * through the injected writer so this command stays testable and its
      * output lands in the same stream as the other two steps.
      *
@@ -88,7 +89,7 @@ final class CompileCommand
         \ob_start();
 
         try {
-            $status = (new PsxCompileCommand())->run(
+            $status = (new PsxCompileCommand((new DeferredManifestCompiler())->compile(...)))->run(
                 ['--cache=' . $root . '/' . self::PSX_CACHE_DIR, ...$paths],
                 $root,
             );

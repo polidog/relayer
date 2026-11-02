@@ -32,7 +32,7 @@ final class LayoutScriptDispatchTest extends TestCase
             declare(strict_types=1);
             namespace %s;
             use Polidog\Relayer\Router\Layout\LayoutComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
             class RootLayout extends LayoutComponent
             {
                 public function render(): Element
@@ -48,7 +48,7 @@ final class LayoutScriptDispatchTest extends TestCase
             declare(strict_types=1);
             namespace %s;
             use Polidog\Relayer\Router\Component\PageComponent;
-            use Polidog\UsePhp\Runtime\Element;
+            use Polidog\Rosanna\Runtime\Element;
             class HomePage extends PageComponent
             {
                 public function render(): Element
@@ -61,7 +61,6 @@ final class LayoutScriptDispatchTest extends TestCase
 
         $_GET = [];
         $_POST = [];
-        unset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
     }
 
     protected function tearDown(): void
@@ -69,32 +68,21 @@ final class LayoutScriptDispatchTest extends TestCase
         @\unlink($this->workDir . '/layout.php');
         @\unlink($this->workDir . '/page.php');
         @\rmdir($this->workDir);
-        unset($_SERVER['HTTP_X_USEPHP_PARTIAL']);
     }
 
     public function testLayoutDeclaredScriptInRenderIsEmittedBeforeThePageScript(): void
     {
         $html = $this->runApp('/');
 
-        $usephp = \strpos($html, '<script src="/usephp.js">');
+        $rosanna = \strpos($html, '<script src="/rosanna-defer.js">');
         $layout = \strpos($html, '<script src="/from-layout.js">');
         $page = \strpos($html, '<script src="/from-page.js" defer>');
 
         self::assertNotFalse($layout, 'layout addJs() inside render() must be emitted');
         self::assertNotFalse($page);
-        self::assertNotFalse($usephp);
-        self::assertLessThan($layout, $usephp);
+        self::assertNotFalse($rosanna);
+        self::assertLessThan($layout, $rosanna);
         self::assertLessThan($page, $layout);
-    }
-
-    public function testPartialResponseDoesNotEmitDocumentScripts(): void
-    {
-        $_SERVER['HTTP_X_USEPHP_PARTIAL'] = '1';
-
-        $html = $this->runApp('/');
-
-        self::assertStringNotContainsString('/from-layout.js', $html);
-        self::assertStringNotContainsString('/usephp.js', $html);
     }
 
     private function runApp(string $path): string

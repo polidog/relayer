@@ -4,7 +4,6 @@ A tiny app that exercises the main Relayer features:
 
 - Function-style page receiving services via DI — `src/Pages/page.psx`
 - Minimal function-style page (no DI) — `src/Pages/about/page.psx`
-- Function-style page using `useState` for stateful UI — `src/Pages/counter/page.psx`
 - Class-style page with `#[Cache]`, backed by the SQLite `Database` layer —
   `src/Pages/users/page.psx` + `src/Service/UserRepository.php`
 - Dynamic route segment with constructor injection, DB lookup by id —
@@ -59,5 +58,5 @@ example/
 unset (or change) `APP_ENV` and pre-compile once:
 
 ```bash
-vendor/bin/usephp compile src/Pages
+vendor/bin/rosanna-defer compile src/Pages
 ```

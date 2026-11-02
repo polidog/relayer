@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Router\Component;
 
-use Polidog\UsePhp\Component\BaseComponent;
+use Polidog\Rosanna\Runtime\Renderable;
 
-abstract class ErrorPageComponent extends BaseComponent
+abstract class ErrorPageComponent implements Renderable
 {
     private int $statusCode = 404;
     private string $message = 'Not Found';

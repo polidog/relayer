@@ -7,8 +7,8 @@ namespace App\Pages\Admin;
 use App\Service\UserRepository;
 use Polidog\Relayer\Auth\Auth;
 use Polidog\Relayer\Router\Component\PageComponent;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 // Role-gated class-style page. The framework redirects anonymous
 // requests to /login and returns 403 for authenticated users who lack

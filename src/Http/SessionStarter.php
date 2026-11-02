@@ -73,7 +73,7 @@ final class SessionStarter
     /**
      * Fill in the unset cookie attributes. Also called at the top of
      * `AppRouter::run()` so that a `session_start()` the framework does not
-     * own (usePHP's `useState` storage, app code) gets them too.
+     * own (app code) gets them too.
      */
     public static function applyCookieDefaults(): void
     {

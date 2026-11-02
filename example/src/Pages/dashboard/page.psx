@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Html\H;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Html\H;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx, Authenticator $auth): Closure {
     // Hard gate — unauthenticated requests get redirected to /login with

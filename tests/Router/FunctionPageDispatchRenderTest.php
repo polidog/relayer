@@ -49,7 +49,7 @@ final class FunctionPageDispatchRenderTest extends TestCase
             <<<'PHP'
 <?php
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (PageContext $ctx): Closure {
     $errors = [];
@@ -68,8 +68,8 @@ PHP,
 
         $token = FormAction::createForPage('/', 'submit');
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => CsrfToken::getToken(),
             'name' => '',
         ];
 
@@ -91,7 +91,7 @@ PHP,
             <<<'PHP'
 <?php
 use Polidog\Relayer\Router\Component\PageContext;
-use Polidog\UsePhp\Runtime\Element;
+use Polidog\Rosanna\Runtime\Element;
 
 return function (): Closure {
     $dispatched = false; // factory scope — survives re-render
@@ -109,8 +109,8 @@ PHP,
 
         $token = FormAction::createForPage('/', 'doSomething');
         $_POST = [
-            '_usephp_action' => $token,
-            '_usephp_csrf' => CsrfToken::getToken(),
+            '_rosanna_action' => $token,
+            '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
         $output = $this->runPost($this->workDir . '/page.php', '/');
