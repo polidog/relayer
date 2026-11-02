@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Router\Native;
 
 use Closure;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\RequestPath;
 use Polidog\Relayer\Http\Response;
 use Psr\Log\LoggerInterface;
 
@@ -97,6 +98,14 @@ final class NativeProxy
      */
     public function handle(Request $request, Closure $next): void
     {
+        // Go's CGI host cannot parse some of these and would answer 500. No
+        // route can match them, so there is nothing for the proxy to guard.
+        if (null === RequestPath::forMatching($request->path)) {
+            $next($request);
+
+            return;
+        }
+
         if (!\is_file($this->binary)) {
             $this->fail(\sprintf(
                 'Native middleware (%s) is not built. Run `%s`.',

@@ -264,6 +264,16 @@ final class NativeHttpServerTest extends TestCase
         self::assertStringNotContainsString('urlPath', $body);
     }
 
+    public function testAnUnroutablePathIsNotFoundWithoutReachingAGoProxy(): void
+    {
+        foreach (['/%zz', '/%E8%A8%98%E4%BA%8B/%zz', '/a%00b', '//about'] as $path) {
+            [$status, $headers] = $this->request('GET', $path);
+
+            self::assertSame(404, $status, $path);
+            self::assertArrayNotHasKey('x-proxied-by', $headers, $path);
+        }
+    }
+
     public function testAGoProxySeesEverySpellingOfAProtectedPath(): void
     {
         self::assertSame(403, $this->request('GET', '/gone')[0]);
