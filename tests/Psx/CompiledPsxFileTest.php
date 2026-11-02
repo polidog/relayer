@@ -82,6 +82,68 @@ final class CompiledPsxFileTest extends TestCase
         yield 'trait' => ['trait Helper { public const string V = "%s"; }', 'Fixture\Fn\Helper'];
 
         yield 'enum' => ['enum Helper: string { case V = "%s"; }', 'Fixture\Fn\Helper'];
+
+        yield 'function in an unguarded if' => ['if (true) { function helper(): string { return "%s"; } }', 'Fixture\Fn\helper'];
+
+        yield 'class in a bare block' => ['{ final class Helper { public const string V = "%s"; } }', 'Fixture\Fn\Helper'];
+
+        yield 'function in an else' => ['if (false) {} else { function helper(): string { return "%s"; } }', 'Fixture\Fn\helper'];
+
+        yield 'function in a try' => ['try { function helper(): string { return "%s"; } } finally {}', 'Fixture\Fn\helper'];
+
+        yield 'function in a nested block' => ['if (true) { while (true) { { function helper(): string { return "%s"; } } break; } }', 'Fixture\Fn\helper'];
+
+        yield 'function in a switch' => ['switch (1) { case 1: function helper(): string { return "%s"; } }', 'Fixture\Fn\helper'];
+
+        yield 'function in an alternative if' => ['if (true): function helper(): string { return "%s"; } endif;', 'Fixture\Fn\helper'];
+
+        yield 'function after a block holding a closure' => ['if (true) { $c = function () { return 1; }; } function helper(): string { return "%s"; }', 'Fixture\Fn\helper'];
+
+        yield 'class after an anonymous class taking a closure' => ['$o = new class (function () {}) { public function __construct(public \Closure $c) {} }; final class Helper { public const string V = "%s"; }', 'Fixture\Fn\Helper'];
+
+        yield 'function guarded for another name' => ['if (!\function_exists("Fixture\\\Fn\\\other")) { function helper(): string { return "%s"; } }', 'Fixture\Fn\helper'];
+
+        yield 'interface guarded by class_exists' => ['if (!\class_exists("Fixture\\\Fn\\\Helper")) { interface Helper { public const string V = "%s"; } }', 'Fixture\Fn\Helper'];
+
+        yield 'function guarded with a positive check' => ['if (\function_exists("Fixture\\\Fn\\\helper") || true) { function helper(): string { return "%s"; } }', 'Fixture\Fn\helper'];
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testGuardedDeclarationsDoNotBlockAReload(): void
+    {
+        $body = <<<'PHP'
+            namespace Fixture\Guarded;
+
+            if (!function_exists('Fixture\Guarded\plain')) {
+                function plain(): string { return 'p'; }
+            }
+            if ( ! \function_exists( "\\Fixture\\Guarded\\Qualified" ) ) {
+                function qualified(): string { return 'q'; }
+            }
+            if (!\class_exists('Fixture\Guarded\Helper', false)) {
+                final class Helper { public static function v(): string { return 'c'; } }
+            }
+            if (!\interface_exists('Fixture\Guarded\Contract')) {
+                interface Contract {}
+            }
+            if (!\trait_exists('Fixture\Guarded\Mixin')) {
+                trait Mixin {}
+            }
+            if (!\enum_exists('Fixture\Guarded\Suit')) {
+                enum Suit { case Hearts; }
+            }
+
+            return static fn (): string => '%s' . plain() . qualified() . Helper::v();
+            PHP;
+
+        $file = $this->write('guarded.php', \sprintf($body, 'v1'));
+        self::assertSame('v1pqc', self::call(CompiledPsxFile::load($file)));
+
+        $this->write('guarded.php', \sprintf($body, 'v2'));
+
+        self::assertSame('v2pqc', self::call(CompiledPsxFile::load($file)));
+        self::assertSame('', $this->log());
     }
 
     #[RunInSeparateProcess]
@@ -133,6 +195,13 @@ final class CompiledPsxFileTest extends TestCase
             $anonymous = new class { public function method(): string { return 'm'; } };
             $closure = function () use ($name): string { return $name; };
             $ref = function &(): array { static $a = []; return $a; };
+            if (true) {
+                $inBlock = static fn (): object => new class { public function inBlock(): void {} };
+                $later = function (): void { function declaredWhenCalled(): void {} };
+            }
+            $keywords = static fn (int $class, int $function): int => $class + $function;
+            $named = $keywords(class: 1, function: 2);
+            $static = Defer::class . \stdClass::class;
             // function commented() {}
             $text = 'class InAString {}';
 
@@ -179,6 +248,41 @@ final class CompiledPsxFileTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Fixture\Throws\helper');
+
+        CompiledPsxFile::load($file);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testAChangedFileWithUnbalancedBracesReportsTheParseError(): void
+    {
+        $file = $this->write('broken.php', "namespace Fixture\\Broken;\nif (true) { function helper(): string { return 'v1'; } }\nreturn static fn (): string => helper();");
+        self::assertSame('v1', self::call(CompiledPsxFile::load($file)));
+
+        // PHP rejects it before declaring anything, so there is nothing to protect.
+        $this->write('broken.php', "namespace Fixture\\Broken;\nif (true) { function helper(): string { return 'v2'; }\nreturn static fn (): string => helper();");
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('invalid PHP');
+
+        CompiledPsxFile::load($file);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testAFileThatThrewAfterDeclaringInABlockIsNotRunAgain(): void
+    {
+        $file = $this->write('throws-block.php', "namespace Fixture\\ThrowsBlock;\nif (true) { function helper(): void {} }\nthrow new \\LogicException('boom');");
+
+        try {
+            CompiledPsxFile::load($file);
+            self::fail('The first load should throw.');
+        } catch (LogicException $e) {
+            self::assertSame('boom', $e->getMessage());
+        }
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Fixture\ThrowsBlock\helper');
 
         CompiledPsxFile::load($file);
     }
