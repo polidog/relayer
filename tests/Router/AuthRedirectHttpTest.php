@@ -161,10 +161,12 @@ final class AuthRedirectHttpTest extends TestCase
     #[DataProvider('guardedPages')]
     public function testCraftedRequestLineDoesNotReachNext(string $page): void
     {
-        self::assertSame(
-            '/login?next=' . \rawurlencode($page),
-            $this->location('//evil.com' . $page . '?x=1'),
-        );
+        // The path is not the guarded page's: it stops at 404, before a
+        // redirect could carry any of it in `next`.
+        [$status, $headers] = $this->request('//evil.com' . $page . '?x=1');
+
+        self::assertSame(404, $status);
+        self::assertArrayNotHasKey('location', $headers);
     }
 
     /**

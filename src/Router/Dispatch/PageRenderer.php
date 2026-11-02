@@ -64,7 +64,7 @@ final readonly class PageRenderer
     private function renderPageInternal(FunctionPage|Renderable $page, LayoutStack $layouts, Request $request): void
     {
         $deferred = new TrackingDeferredRenderer($this->rosanna->placeholderRenderer());
-        $renderer = new LayoutRenderer($request->uri(), $deferred);
+        $renderer = new LayoutRenderer(self::formActionUrl($request), $deferred);
         $html = $renderer->render($this->renderPageElement($page), $layouts);
 
         if ($this->document instanceof HtmlDocument) {
@@ -72,6 +72,16 @@ final readonly class PageRenderer
         }
 
         echo $this->renderPageDocument($page, $layouts, $html);
+    }
+
+    /**
+     * Where a form posts back to: the requested URL, kept on this host. A
+     * browser reads an action of `//evil.example` as another host, and such a
+     * form would send the CSRF token there.
+     */
+    private static function formActionUrl(Request $request): string
+    {
+        return (string) \preg_replace('#^[/\\\]+#', '/', $request->uri());
     }
 
     /**

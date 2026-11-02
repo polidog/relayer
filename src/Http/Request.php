@@ -58,8 +58,7 @@ final readonly class Request
         $method = \strtoupper(\is_string($_SERVER['REQUEST_METHOD'] ?? null) ? $_SERVER['REQUEST_METHOD'] : 'GET');
 
         $uri = \is_string($_SERVER['REQUEST_URI'] ?? null) ? $_SERVER['REQUEST_URI'] : '/';
-        $parsed = \parse_url($uri, \PHP_URL_PATH);
-        $path = RequestPath::canonicalize(\is_string($parsed) && '' !== $parsed ? $parsed : '/');
+        $path = RequestPath::canonicalize(self::pathOf($uri));
 
         $headers = [];
         foreach ($_SERVER as $key => $value) {
@@ -435,6 +434,22 @@ final readonly class Request
         $host = $this->host();
 
         return null === $host ? null : $this->scheme() . '://' . $host . $this->uri();
+    }
+
+    /**
+     * `parse_url()` would read `/a:80` as a port and `//admin` as a host, so
+     * only a URI that is not a path already (the absolute form a proxy may
+     * send) goes through it.
+     */
+    private static function pathOf(string $uri): string
+    {
+        if (\str_starts_with($uri, '/')) {
+            return \explode('?', \explode('#', $uri, 2)[0], 2)[0];
+        }
+
+        $parsed = \parse_url($uri, \PHP_URL_PATH);
+
+        return \is_string($parsed) && '' !== $parsed ? $parsed : '/';
     }
 
     /**

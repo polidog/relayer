@@ -25,6 +25,27 @@ final class RequestTest extends TestCase
         self::assertTrue($req->isMethod('post'));
     }
 
+    public function testAColonInThePathIsNotReadAsAPort(): void
+    {
+        $_SERVER['REQUEST_URI'] = '/x/a:80';
+
+        self::assertSame('/x/a%3A80', Request::fromGlobals()->path);
+    }
+
+    public function testALeadingDoubleSlashIsNotReadAsAHost(): void
+    {
+        $_SERVER['REQUEST_URI'] = '//admin/x?y=1';
+
+        self::assertSame('//admin/x', Request::fromGlobals()->path);
+    }
+
+    public function testTheAbsoluteFormStillGivesItsPath(): void
+    {
+        $_SERVER['REQUEST_URI'] = 'http://example.test/p?q=1';
+
+        self::assertSame('/p', Request::fromGlobals()->path);
+    }
+
     public function testFromGlobalsCollectsHttpHeaders(): void
     {
         $_SERVER = [
