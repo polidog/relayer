@@ -1236,12 +1236,55 @@ The handler receives the POST body as its first argument (with
 per page — registering the same name twice throws.
 
 Actions can also be registered outside the factory, e.g. from a
-`Renderable` child's `render()` via `PageContext::current()->action()`. On
-a POST that submits such an action, the render closure and every
-`Renderable` child in its tree (inside arrays, nested elements and defer
-fallbacks too) render once before dispatch so the action is registered, and
-again after dispatch for the response. A GET, or a POST to an action the
-factory registered, renders once.
+`Renderable` child's `render()` via `PageContext::current()->action()` —
+a child of the page or of a layout. On a POST that submits such an action,
+the render closure, the layouts around it and every `Renderable` child in
+the tree (inside arrays, nested elements and defer fallbacks too) render
+once before dispatch so the action is registered, and again after dispatch
+for the response. A GET, or a POST to an action the factory registered,
+renders once. Metadata and scripts the factory declared are kept for the
+response; ones declared while rendering are declared again by the second
+render, not twice.
+
+The response render runs the render closure again, so its children are new
+objects built with the props of that render (a list the action added to
+shows the new item). State the action kept on the child's `$this` is
+carried over: every property the action **changed** on a child of the
+first render is copied onto the child of the same class at the same place
+in the new tree before it renders. Readonly properties count as props and
+are never copied, and a property the action did not change keeps the new
+child's value. So a form child can hold its own validation errors:
+
+```php
+final class ContactForm implements Renderable
+{
+    private array $errors = [];
+
+    public function __construct(private readonly string $title) {}
+
+    public function render(): Element
+    {
+        $send = PageContext::current()->action('send', function (array $form): void {
+            $result = Validator::object([/* ... */])->safeParse($form);
+            if (!$result->success) {
+                $this->errors = $result->errors; // shown in the response
+            }
+        });
+
+        return <form action={$send}>{/* $this->title, $this->errors ... */}</form>;
+    }
+}
+```
+
+"The same place" is the position in the tree, as React keeps state by type
+and position: if the action changes which children come before the form
+(say, a new list item rendered as its own child ahead of it), the state
+lands on whichever child of that class is now there. Assign the property
+(`$this->errors = ...`, `$this->errors[] = ...`) rather than mutating an
+object it holds — a change inside such an object is not detected. State the
+page itself needs, or state that must survive such a reshuffle, belongs in
+the factory, captured by reference (see
+[Re-rendering after a failed submit](#re-rendering-after-a-failed-submit)).
 
 ### Binding arguments
 

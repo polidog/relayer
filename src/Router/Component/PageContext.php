@@ -35,6 +35,9 @@ final class PageContext
 
     private ?AuthenticatorInterface $authenticator = null;
 
+    /** @var array{array<string, Closure>, array<int, Script>, array<string, string>} */
+    private array $renderStart = [[], [], []];
+
     /**
      * @param array<string, string> $params
      * @param string                $pageId route-derived page id used to scope
@@ -180,21 +183,34 @@ final class PageContext
     }
 
     /**
+     * Remember the actions, scripts and metadata registered so far — by the
+     * factory, before the first render — as the state
+     * {@see clearRenderState()} goes back to.
+     *
+     * @internal called by FunctionPage::renderToRegisterActions() before the
+     *           render that registers the actions of a pending POST
+     */
+    public function markRenderStart(): void
+    {
+        $this->renderStart = [$this->actions, $this->scripts, $this->metadata];
+    }
+
+    /**
      * Reset all render-accumulated state so a second render pass starts clean:
-     * clears the action registry (so sub-components can re-register without
-     * hitting the duplicate-name guard), the script list (so scripts added
-     * via js() during the pre-render are not emitted twice in the response),
-     * and metadata (so conditional metadata set during the pre-render does
-     * not leak into the final response if the re-render omits it).
+     * the action registry (so sub-components can re-register without hitting
+     * the duplicate-name guard), the script list (so scripts added via js()
+     * during the pre-render are not emitted twice in the response), and
+     * metadata (so conditional metadata set during the pre-render does not
+     * leak into the final response if the re-render omits it). What the
+     * factory registered before {@see markRenderStart()} stays; without a
+     * mark everything is cleared.
      *
      * @internal called by FunctionPage::renderAfterDispatch() before the
      *           re-render that follows a dispatched (non-redirecting) action
      */
     public function clearRenderState(): void
     {
-        $this->actions = [];
-        $this->scripts = [];
-        $this->metadata = [];
+        [$this->actions, $this->scripts, $this->metadata] = $this->renderStart;
     }
 
     /**

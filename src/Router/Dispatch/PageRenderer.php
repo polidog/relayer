@@ -8,8 +8,10 @@ use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
+use Polidog\Relayer\Router\Component\RenderableChildren;
 use Polidog\Relayer\Router\Document\DocumentInterface;
 use Polidog\Relayer\Router\Document\HtmlDocument;
+use Polidog\Relayer\Router\Layout\LayoutComponent;
 use Polidog\Relayer\Router\Layout\LayoutRenderer;
 use Polidog\Relayer\Router\Layout\LayoutStack;
 use Polidog\Relayer\Router\Layout\ScriptCollection;
@@ -65,7 +67,11 @@ final readonly class PageRenderer
     {
         $deferred = new TrackingDeferredRenderer($this->rosanna->placeholderRenderer());
         $renderer = new LayoutRenderer(self::formActionUrl($request), $deferred);
-        $html = $renderer->render($this->renderPageElement($page), $layouts);
+        $tree = $page instanceof FunctionPage && $page->hasPendingAction()
+            ? $this->renderAroundAction($page, $layouts, $renderer)
+            : $renderer->compose($this->renderPageElement($page), $layouts);
+        $this->setDocumentMetadata($page);
+        $html = $renderer->renderElement($tree);
 
         if ($this->document instanceof HtmlDocument) {
             $this->document->setClientScriptNeeded($deferred->hasRendered());
@@ -100,41 +106,59 @@ final readonly class PageRenderer
     private function renderPageElement(FunctionPage|Renderable $page): Element
     {
         if ($page instanceof FunctionPage) {
-            if ($page->hasPendingAction()) {
-                // Double-render for function pages with a matching POST action:
-                // 1. Pre-render: executes the render closure, and the render() of
-                //    any Renderable child in the tree it returns, so sub-components
-                //    can self-register their server actions via
-                //    PageContext::current()->action(). The elements are discarded.
-                // 2. Dispatch: invokes the matched action handler (may redirect/abort,
-                //    or mutate factory-scoped shared state such as $errors references).
-                // 3. Re-render: FunctionPage::renderAfterDispatch() clears the action
-                //    registry and re-runs the render closure so (a) sub-component actions
-                //    are re-registered for the response form and (b) the element reflects
-                //    any state mutations made by the action handler.
-                $page->renderToRegisterActions();
-                $page->dispatchActionFromRequest();
-                $pageElement = $page->renderAfterDispatch();
-            } else {
-                $page->dispatchActionFromRequest(); // no-op on GET
-                $pageElement = $page->render();
-            }
-        } else {
-            if ($page instanceof PageComponent) {
-                $page->dispatchActionFromRequest();
-            }
-            $pageElement = $page->render();
+            $page->dispatchActionFromRequest(); // no-op on GET
+        } elseif ($page instanceof PageComponent) {
+            $page->dispatchActionFromRequest();
         }
 
-        if ($page instanceof FunctionPage && $this->document instanceof HtmlDocument) {
-            /** @var array<string, string> $metadata */
-            $metadata = $page->getMetadata();
-            $this->document->setMetadata($metadata);
-        } elseif ($page instanceof PageComponent && $this->document instanceof HtmlDocument) {
+        return $page->render();
+    }
+
+    /**
+     * The double render of a function page on a POST that submits an action
+     * registered while rendering — by the render closure, or by a
+     * `Renderable` child of the page or of a layout:
+     *
+     * 1. Render the page inside its layouts and every `Renderable` child in
+     *    the tree, so the action is registered.
+     * 2. Dispatch it (it may redirect or abort, or change state captured by
+     *    reference in the factory or kept on a child's `$this`).
+     * 3. Render the page and its layouts again for the response, carrying
+     *    over what the action changed on the children of step 1
+     *    ({@see RenderableChildren}).
+     */
+    private function renderAroundAction(FunctionPage $page, LayoutStack $layouts, LayoutRenderer $renderer): Element
+    {
+        $scripts = [];
+        foreach ($layouts->all() as $index => $layout) {
+            if ($layout instanceof LayoutComponent) {
+                $scripts[$index] = $layout->getScripts();
+            }
+        }
+
+        $children = RenderableChildren::render($renderer->compose($page->renderToRegisterActions(), $layouts));
+        $page->dispatchActionFromRequest();
+
+        foreach ($layouts->all() as $index => $layout) {
+            if ($layout instanceof LayoutComponent) {
+                $layout->restoreScripts($scripts[$index] ?? []);
+            }
+        }
+
+        return $children->resolve($renderer->compose($page->renderAfterDispatch(), $layouts));
+    }
+
+    private function setDocumentMetadata(FunctionPage|Renderable $page): void
+    {
+        if (!$this->document instanceof HtmlDocument) {
+            return;
+        }
+
+        if ($page instanceof FunctionPage) {
+            $this->document->setMetadata($page->getMetadata());
+        } elseif ($page instanceof PageComponent) {
             $this->document->setMetadata($page->getMetadata());
         }
-
-        return $pageElement;
     }
 
     private function renderPageDocument(

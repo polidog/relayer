@@ -28,12 +28,31 @@ final class RenderableChildActionDispatchTest extends TestCase
         use Polidog\Relayer\Router\Component\PageContext;
         use Polidog\Relayer\Tests\Fixtures\ActionChild;
         use Polidog\Relayer\Tests\Fixtures\ResolvingActionChild;
+        use Polidog\Relayer\Tests\Fixtures\StatefulActionChild;
         use Polidog\Rosanna\Html\H;
         use Polidog\Rosanna\Runtime\Element;
         return function (PageContext $ctx): Closure {
             %s
             return static fn (): Element => %s;
         };
+        PHP;
+
+    private const LAYOUT = <<<'PHP'
+        <?php
+        declare(strict_types=1);
+        namespace Polidog\Relayer\Tests\Tmp\ActionLayout;
+        use Polidog\Relayer\Router\Layout\LayoutComponent;
+        use Polidog\Relayer\Tests\Fixtures\ActionChild;
+        use Polidog\Relayer\Tests\Fixtures\StatefulActionChild;
+        use Polidog\Rosanna\Runtime\Element;
+        final class RootLayout extends LayoutComponent
+        {
+            public function render(): Element
+            {
+                $this->addJs('/from-layout.js');
+                return new Element('div', ['class' => 'layout'], [%s, $this->getChildren()]);
+            }
+        }
         PHP;
 
     private string $workDir;
@@ -133,6 +152,105 @@ final class RenderableChildActionDispatchTest extends TestCase
 
         self::assertSame([], ActionChild::$dispatched);
         self::assertSame(1, ActionChild::$renders);
+    }
+
+    #[RunInSeparateProcess]
+    public function testAChildInTheLayoutRunsItsActionOnSubmit(): void
+    {
+        $this->writeLayout("new ActionChild('save')");
+        $this->writePage("new Element('main', [], ['page'])");
+
+        $html = $this->request('GET');
+        self::assertSame(1, ActionChild::$renders, 'a GET renders the layout child once');
+
+        ActionChild::$renders = 0;
+        $html = $this->request('POST', $this->submission($html, 'save') + ['title' => 'hello']);
+
+        self::assertSame([['save', ['title' => 'hello']]], ActionChild::$dispatched);
+        self::assertSame(2, ActionChild::$renders);
+        self::assertSame(200, \http_response_code());
+        self::assertStringContainsString('dispatched:1', $html);
+        self::assertStringContainsString('<main>page</main>', $html);
+        self::assertSame(1, \substr_count($html, '<script src="/from-layout.js">'), 'the layout renders twice but declares its script once');
+    }
+
+    #[RunInSeparateProcess]
+    public function testAChildInsideAChildOfTheLayoutRunsItsActionOnSubmit(): void
+    {
+        $this->writeLayout("new Element('nav', [], [new ActionChild('outer', [new ActionChild('save')])])");
+        $this->writePage("new Element('main', [], ['page'])");
+
+        $html = $this->request('GET');
+        $this->request('POST', $this->submission($html, 'save'));
+
+        self::assertSame([['save', []]], ActionChild::$dispatched);
+    }
+
+    #[RunInSeparateProcess]
+    public function testTheResponseShowsStateTheActionKeptOnTheChild(): void
+    {
+        $this->writePage("new Element('main', [], [new StatefulActionChild('save', label: 'dispatched:' . \\count(ActionChild::\$dispatched))])");
+
+        $html = $this->request('GET');
+        self::assertStringNotContainsString('title is required', $html);
+
+        $html = $this->request('POST', $this->submission($html, 'save') + ['title' => '']);
+
+        self::assertSame([['save', ['title' => '']]], ActionChild::$dispatched);
+        self::assertStringContainsString('<p class="error">title is required</p>', $html);
+        // Readonly props still come from the render after dispatch.
+        self::assertStringContainsString('<p class="label">dispatched:1</p>', $html);
+        // The response form posts back to the same action.
+        $html = $this->request('POST', $this->submission($html, 'save') + ['title' => '']);
+        self::assertSame(1, \substr_count($html, 'title is required'), 'a new request starts from a new child');
+    }
+
+    #[RunInSeparateProcess]
+    public function testOnlyTheChildAtTheSamePlaceKeepsTheState(): void
+    {
+        $this->writePage(
+            "new Element('main', [], [new StatefulActionChild('first'), new StatefulActionChild('second')])",
+        );
+
+        $html = $this->request('GET');
+        $html = $this->request('POST', $this->submission($html, 'second') + ['title' => '']);
+
+        self::assertSame(1, \substr_count($html, 'title is required'));
+        self::assertMatchesRegularExpression('#data-child="second"[^<]*>(?:(?!</form>).)*title is required#s', $html);
+    }
+
+    #[RunInSeparateProcess]
+    public function testAChildInTheLayoutKeepsItsState(): void
+    {
+        $this->writeLayout("new StatefulActionChild('save')");
+        $this->writePage("new Element('main', [], ['page'])");
+
+        $html = $this->request('GET');
+        $html = $this->request('POST', $this->submission($html, 'save') + ['title' => '']);
+
+        self::assertStringContainsString('<p class="error">title is required</p>', $html);
+    }
+
+    #[RunInSeparateProcess]
+    public function testTheResponseKeepsTheMetadataTheFactorySet(): void
+    {
+        $this->writePage(
+            "new Element('main', [], [new ActionChild('save')])",
+            "\$ctx->metadata(['title' => 'From the factory']);",
+        );
+
+        $html = $this->request('GET');
+        self::assertStringContainsString('<title>From the factory</title>', $html);
+
+        $html = $this->request('POST', $this->submission($html, 'save'));
+
+        self::assertSame([['save', []]], ActionChild::$dispatched);
+        self::assertStringContainsString('<title>From the factory</title>', $html);
+    }
+
+    private function writeLayout(string $child): void
+    {
+        \file_put_contents($this->workDir . '/layout.php', \sprintf(self::LAYOUT, $child));
     }
 
     private function writePage(string $element, string $factory = ''): void

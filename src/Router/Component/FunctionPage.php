@@ -147,30 +147,32 @@ final class FunctionPage
     }
 
     /**
-     * The render before dispatch, run only so actions registered while
-     * rendering exist when the request is dispatched. Besides the page's own
-     * render closure, it renders the `Renderable` children the Renderer would
-     * otherwise reach only in the final render, after dispatch: a child
-     * calling `PageContext::current()->action()` from its `render()` must
-     * have registered by then. The element tree itself is discarded.
+     * The render before dispatch, run so actions registered while rendering
+     * exist when the request is dispatched. Marks what the factory left in
+     * the context first, so {@see renderAfterDispatch()} can go back to it.
+     * The caller renders the `Renderable` children of the tree it returns
+     * ({@see RenderableChildren}), with the layouts around it.
      *
-     * @internal called by PageRenderer::renderPageElement() in the double-render
-     *           path (pre-render → dispatch → renderAfterDispatch)
+     * @internal called by PageRenderer in the double-render path
+     *           (pre-render → dispatch → renderAfterDispatch)
      */
-    public function renderToRegisterActions(): void
+    public function renderToRegisterActions(): Element
     {
-        self::renderChildren([$this->render()]);
+        $this->context->markRenderStart();
+
+        return $this->render();
     }
 
     /**
-     * Re-render after a dispatched action that did not redirect. Resets all
-     * render-accumulated PageContext state (actions and scripts) so
-     * sub-components can re-register without hitting the duplicate-name guard
-     * and script tags are not emitted twice. Returns a fresh Element that
-     * reflects any state mutated by the action handler.
+     * Re-render after a dispatched action that did not redirect. Resets the
+     * PageContext to what the factory left in it (actions, scripts and
+     * metadata) so sub-components can re-register without hitting the
+     * duplicate-name guard, script tags are not emitted twice, and the
+     * factory's metadata stays. Returns a fresh Element that reflects any
+     * state mutated by the action handler.
      *
-     * @internal called by PageRenderer::renderPageElement() in the double-render
-     *           path (pre-render → dispatch → renderAfterDispatch)
+     * @internal called by PageRenderer in the double-render path
+     *           (pre-render → dispatch → renderAfterDispatch)
      */
     public function renderAfterDispatch(): Element
     {
@@ -203,28 +205,5 @@ final class FunctionPage
     public function getCache(): ?Cache
     {
         return $this->context->getCache();
-    }
-
-    /**
-     * Walk the tree the way the Renderer does: `resolveRenderables()` expands
-     * arrays and calls `resolve()` or `render()` on each child, and of a
-     * `__defer__` placeholder only the fallback is rendered on the page.
-     *
-     * @param array<mixed> $children
-     */
-    private static function renderChildren(array $children): void
-    {
-        foreach (\Polidog\Rosanna\Html\resolveRenderables($children) as $child) {
-            if (!$child instanceof Element) {
-                continue;
-            }
-
-            self::renderChildren($child->children);
-
-            $fallback = '__defer__' === $child->type ? $child->props['__fallback'] ?? null : null;
-            if ($fallback instanceof Element) {
-                self::renderChildren([$fallback]);
-            }
-        }
     }
 }

@@ -1245,11 +1245,49 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 2 回登録すると例外になります。
 
 ファクトリの外、たとえば `Renderable` の子の `render()` からも
-`PageContext::current()->action()` で登録できます。アクションを送信した POST
-では、ディスパッチの前に描画関数と木の中の `Renderable` の子 (配列、入れ子の
-要素、defer のフォールバックの中も含む) を一度描画して登録を済ませ、ディスパッチの
-後に応答用にもう一度描画します。GET や、ファクトリで登録したアクションへの POST
-では描画は 1 回です。
+`PageContext::current()->action()` で登録できます。ページの子でもレイアウトの
+子でもかまいません。アクションを送信した POST では、ディスパッチの前に描画関数と
+それを囲むレイアウト、木の中の `Renderable` の子 (配列、入れ子の要素、defer の
+フォールバックの中も含む) を一度描画して登録を済ませ、ディスパッチの後に応答用に
+もう一度描画します。GET や、ファクトリで登録したアクションへの POST では描画は
+1 回です。ファクトリで宣言したメタデータとスクリプトは応答にも残り、描画中に
+宣言したものは 2 回目の描画で宣言し直されます (2 重にはなりません)。
+
+応答の描画では描画関数をもう一度呼ぶので、子はその描画の props で作られた新しい
+オブジェクトです (アクションが足したリストの項目は応答に出ます)。アクションが子の
+`$this` に持たせた状態は引き継がれます。1 回目の描画の子でアクションが **変えた**
+プロパティを、新しい木の同じ位置にある同じクラスの子へ、描画の前に写します。
+readonly のプロパティは props とみなして写さず、アクションが変えなかったプロパティは
+新しい子の値のままです。なので、フォームの子が自分の入力エラーを持てます。
+
+```php
+final class ContactForm implements Renderable
+{
+    private array $errors = [];
+
+    public function __construct(private readonly string $title) {}
+
+    public function render(): Element
+    {
+        $send = PageContext::current()->action('send', function (array $form): void {
+            $result = Validator::object([/* ... */])->safeParse($form);
+            if (!$result->success) {
+                $this->errors = $result->errors; // 応答に出る
+            }
+        });
+
+        return <form action={$send}>{/* $this->title, $this->errors ... */}</form>;
+    }
+}
+```
+
+「同じ位置」は木の中の位置で、React が型と位置で状態を保つのと同じです。アクションで
+フォームより前に来る子が変わると (たとえば前に新しいリストの項目を子として描く)、
+状態はそのとき同じ位置にある同じクラスの子に渡ります。プロパティには代入してください
+(`$this->errors = ...`、`$this->errors[] = ...`)。プロパティが持つオブジェクトの中を
+書き換えても検出されません。ページ自体が使う状態や、そうした並びの変化をまたいで
+残したい状態は、ファクトリに置いて参照で取り込みます
+([送信失敗時の再レンダリング](#送信失敗時の再レンダリング) を参照)。
 
 ### 引数のバインド
 
