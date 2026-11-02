@@ -230,6 +230,54 @@ final class InitCommandTest extends TestCase
         self::assertStringContainsString("  + .env\n  + .env.local\n", $this->captured());
     }
 
+    public function testANewProjectWithItsOwnGitignoreKeepsTheDevOverrideOutOfGit(): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        \file_put_contents($this->project . '/.gitignore', "/vendor/\n");
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertFileExists($this->project . '/.env.local');
+        self::assertSame("/vendor/\n/.env.local\n", \file_get_contents($this->project . '/.gitignore'));
+        self::assertStringContainsString('~ .gitignore', $this->captured());
+    }
+
+    #[DataProvider('provideAGitignoreThatAlreadyCoversEnvLocalIsLeftAloneCases')]
+    public function testAGitignoreThatAlreadyCoversEnvLocalIsLeftAlone(string $gitignore): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        \file_put_contents($this->project . '/.gitignore', $gitignore);
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame($gitignore, \file_get_contents($this->project . '/.gitignore'));
+        self::assertStringNotContainsString('.gitignore (added', $this->captured());
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAGitignoreThatAlreadyCoversEnvLocalIsLeftAloneCases(): iterable
+    {
+        yield 'exact' => ["/.env.local\n"];
+
+        yield 'unanchored' => [".env.local\n"];
+
+        yield 'every local env' => ["/.env.*\n"];
+
+        yield 'everything local' => ["*.local\n"];
+    }
+
+    public function testAGitignoreThatReincludesEnvLocalIsFixed(): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        \file_put_contents($this->project . '/.gitignore', ".env*\n!.env.local\n");
+
+        self::assertSame(0, InitCommand::run(['init'], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(".env*\n!.env.local\n/.env.local\n", \file_get_contents($this->project . '/.gitignore'));
+    }
+
     #[DataProvider('provideAnExistingEnvGetsNoEnvLocalCases')]
     public function testAnExistingEnvGetsNoEnvLocal(string $env): void
     {

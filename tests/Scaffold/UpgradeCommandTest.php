@@ -476,6 +476,29 @@ final class UpgradeCommandTest extends TestCase
         self::assertFileDoesNotExist($this->project . '/.env.local');
     }
 
+    public function testMovingDevModeAlsoKeepsItOutOfGit(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        \file_put_contents($this->project . '/.gitignore', '/vendor/');
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame('dev', $this->effectiveAppEnv());
+        self::assertSame("/vendor/\n/.env.local\n", \file_get_contents($this->project . '/.gitignore'));
+        self::assertStringContainsString('~ .gitignore', $this->captured());
+    }
+
+    public function testMovingDevModeWithoutAGitignoreCreatesOne(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertStringContainsString('/.env.local', (string) \file_get_contents($this->project . '/.gitignore'));
+    }
+
     #[DataProvider('provideAnUntouchedEnvMovesDevModeIntoANewEnvLocalCases')]
     public function testAnUntouchedEnvMovesDevModeIntoANewEnvLocal(int $version): void
     {

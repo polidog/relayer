@@ -326,6 +326,18 @@ final class InitCommand
             $created[] = $relative;
         }
 
+        // After the skeleton's own .gitignore (which lists it) was written or
+        // skipped: a project that brought its own may not.
+        $ignore = null;
+        if (\in_array('.env.local', $created, true)) {
+            $ignore = GitignoreEnvLocal::ensure($root);
+            if (null === $ignore) {
+                $write('Could not make sure .gitignore excludes .env.local; add /.env.local to it before committing.');
+
+                return 1;
+            }
+        }
+
         \sort($created);
         \sort($skipped);
 
@@ -334,6 +346,11 @@ final class InitCommand
             foreach ($created as $relative) {
                 $write('  + ' . $relative);
             }
+        }
+
+        $ignoreReport = null === $ignore ? null : GitignoreEnvLocal::report($ignore);
+        if (null !== $ignoreReport) {
+            $write($ignoreReport);
         }
 
         if ([] !== $skipped) {

@@ -156,6 +156,7 @@ final class UpgradeCommand
 
         $rewrites = Scaffold::rewrites();
         $refreshed = [];
+        $ignoreReport = null;
         $kept = [];
         $devModeAppended = false;
 
@@ -242,6 +243,16 @@ final class UpgradeCommand
                         return 1;
                     }
 
+                    if (self::ENV_LOCAL_KEPT !== $moved) {
+                        $ignore = GitignoreEnvLocal::ensure($root);
+                        if (null === $ignore) {
+                            $write('Could not make sure .gitignore excludes .env.local; add /.env.local to it before committing.');
+
+                            return 1;
+                        }
+                        $ignoreReport = GitignoreEnvLocal::report($ignore);
+                    }
+
                     if (self::ENV_LOCAL_CREATED === $moved) {
                         $created[] = '.env.local';
                     } elseif (self::ENV_LOCAL_KEPT === $moved) {
@@ -283,6 +294,10 @@ final class UpgradeCommand
         if ($devModeAppended) {
             $write('Moved APP_ENV=dev out of .env, into your existing file:');
             $write('  ~ .env.local');
+        }
+
+        if (null !== $ignoreReport) {
+            $write($ignoreReport);
         }
 
         if ([] !== $skipped) {
