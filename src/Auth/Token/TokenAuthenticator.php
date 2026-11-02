@@ -8,6 +8,7 @@ use LogicException;
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\RequestScopedInstances;
 use Polidog\Rosanna\Runtime\RequestLifecycle;
 
 /**
@@ -39,9 +40,9 @@ final class TokenAuthenticator implements AuthenticatorInterface
         private readonly TokenVerifier $verifier,
         private readonly AuthorizationHeader $header,
     ) {
-        RequestLifecycle::onReset(self::class, function (): void {
-            $this->cached = null;
-            $this->resolved = false;
+        RequestScopedInstances::track($this, static function (self $auth): void {
+            $auth->cached = null;
+            $auth->resolved = false;
         });
     }
 

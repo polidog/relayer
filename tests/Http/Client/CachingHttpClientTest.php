@@ -8,7 +8,9 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Client\CachingHttpClient;
 use Polidog\Relayer\Http\Client\HttpResponse;
 use Polidog\Relayer\Profiler\RecordingProfiler;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
 use RuntimeException;
+use WeakReference;
 
 final class CachingHttpClientTest extends TestCase
 {
@@ -110,5 +112,35 @@ final class CachingHttpClientTest extends TestCase
         $b = $http->get('https://api.test/x');
 
         self::assertSame($a, $b);
+    }
+
+    public function testRequestResetClearsEveryInstance(): void
+    {
+        $firstInner = new FakeHttpClient();
+        $first = new CachingHttpClient($firstInner, new RecordingProfiler());
+        $secondInner = new FakeHttpClient();
+        $second = new CachingHttpClient($secondInner, new RecordingProfiler());
+
+        $first->get('https://api.test/me');
+        $second->get('https://api.test/me');
+
+        RequestLifecycle::reset();
+
+        $first->get('https://api.test/me');
+        $second->get('https://api.test/me');
+
+        self::assertSame(2, $firstInner->requestCalls, "the first instance served the previous request's response");
+        self::assertSame(2, $secondInner->requestCalls);
+    }
+
+    public function testADiscardedInstanceIsNotKeptAliveByTheReset(): void
+    {
+        $http = new CachingHttpClient(new FakeHttpClient(), new RecordingProfiler());
+        $reference = WeakReference::create($http);
+
+        unset($http);
+        RequestLifecycle::reset();
+
+        self::assertNull($reference->get());
     }
 }

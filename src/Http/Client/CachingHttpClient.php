@@ -6,7 +6,7 @@ namespace Polidog\Relayer\Http\Client;
 
 use Polidog\Relayer\Db\CachingDatabase;
 use Polidog\Relayer\Profiler\Profiler;
-use Polidog\Rosanna\Runtime\RequestLifecycle;
+use Polidog\Relayer\RequestScopedInstances;
 
 /**
  * Request-scoped memoization for {@see HttpClient}.
@@ -45,8 +45,8 @@ final class CachingHttpClient implements HttpClient
         private readonly HttpClient $inner,
         private readonly Profiler $profiler,
     ) {
-        RequestLifecycle::onReset(self::class, function (): void {
-            $this->cache = [];
+        RequestScopedInstances::track($this, static function (self $client): void {
+            $client->cache = [];
         });
     }
 

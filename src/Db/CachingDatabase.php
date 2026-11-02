@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Db;
 
 use Polidog\Relayer\Profiler\Profiler;
-use Polidog\Rosanna\Runtime\RequestLifecycle;
+use Polidog\Relayer\RequestScopedInstances;
 
 /**
  * Request-scoped read memoization for {@see Database}.
@@ -44,7 +44,9 @@ final class CachingDatabase implements Database
         private readonly Database $inner,
         private readonly Profiler $profiler,
     ) {
-        RequestLifecycle::onReset(self::class, $this->flush(...));
+        RequestScopedInstances::track($this, static function (self $db): void {
+            $db->flush();
+        });
     }
 
     public function fetchAll(string $sql, array $params = []): array

@@ -11,6 +11,8 @@ use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\Identity;
 use Polidog\Relayer\Auth\Token\AuthorizationHeader;
 use Polidog\Relayer\Auth\Token\TokenAuthenticator;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
+use WeakReference;
 
 final class TokenAuthenticatorTest extends TestCase
 {
@@ -121,6 +123,42 @@ final class TokenAuthenticatorTest extends TestCase
             AuthGuard::DECISION_REDIRECT,
             AuthGuard::decide(new Auth(redirectTo: '/login'), $anon),
         );
+    }
+
+    public function testRequestResetForgetsThePrincipalOfEveryInstance(): void
+    {
+        // Two live instances (two containers, a non-shared service, ...):
+        // the reset has to reach both, not only the newest one.
+        $firstVerifier = new FakeTokenVerifier(new Identity('alice', 'Alice'));
+        $first = new TokenAuthenticator($firstVerifier, $this->header('Bearer a'));
+        $secondVerifier = new FakeTokenVerifier(new Identity('bob', 'Bob'));
+        $second = new TokenAuthenticator($secondVerifier, $this->header('Bearer b'));
+
+        $first->user();
+        $second->user();
+
+        RequestLifecycle::reset();
+
+        // The next visitor's token does not verify: neither instance may
+        // still answer with the previous request's principal.
+        $firstVerifier->result = null;
+        $secondVerifier->result = null;
+
+        self::assertNull($first->user(), 'the first instance kept the previous user');
+        self::assertNull($second->user());
+        self::assertSame(2, $firstVerifier->calls);
+        self::assertSame(2, $secondVerifier->calls);
+    }
+
+    public function testADiscardedInstanceIsNotKeptAliveByTheReset(): void
+    {
+        $auth = new TokenAuthenticator(new FakeTokenVerifier(), $this->header(null));
+        $reference = WeakReference::create($auth);
+
+        unset($auth);
+        RequestLifecycle::reset();
+
+        self::assertNull($reference->get());
     }
 
     private function header(?string $value): AuthorizationHeader
