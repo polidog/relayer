@@ -153,7 +153,7 @@ final class FunctionPage
      * and script tags are not emitted twice. Returns a fresh Element that
      * reflects any state mutated by the action handler.
      *
-     * @internal called by AppRouter::renderPageInternal() in the double-render
+     * @internal called by PageRenderer::renderPageElement() in the double-render
      *           path (pre-render → dispatch → renderAfterDispatch)
      */
     public function renderAfterDispatch(): Element
