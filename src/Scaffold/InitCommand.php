@@ -67,6 +67,26 @@ final class InitCommand
             return null === $command ? 2 : 0;
         }
 
+        // Every command below acts on the project and takes no options, so a
+        // flag it does not know must stop it before it writes anything.
+        foreach (\array_slice($args, 1) as $argument) {
+            if (\in_array($argument, ['-h', '--help'], true)) {
+                $write(self::USAGE);
+
+                return 0;
+            }
+        }
+
+        foreach (\array_slice($args, 1) as $argument) {
+            if (\str_starts_with($argument, '-')) {
+                $write(\sprintf('Unknown option "%s".', $argument));
+                $write('');
+                $write(self::USAGE);
+
+                return 2;
+            }
+        }
+
         if ('upgrade' === $command) {
             return UpgradeCommand::run(\array_slice($args, 1), $write, $cwd);
         }

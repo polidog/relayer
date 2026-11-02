@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Tests\Scaffold;
 
 use Closure;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Scaffold\InitCommand;
 use Polidog\Relayer\Scaffold\Scaffold;
@@ -34,6 +35,41 @@ final class InitCommandTest extends TestCase
 
         self::assertSame(0, $status);
         self::assertStringContainsString('Usage:', $this->captured());
+    }
+
+    #[DataProvider('commands')]
+    public function testHelpAfterACommandPrintsUsageAndDoesNothing(string $command): void
+    {
+        \file_put_contents($this->project . '/composer.json', '{}');
+
+        foreach (['--help', '-h'] as $flag) {
+            self::assertSame(0, InitCommand::run([$command, $flag], $this->capture(), $this->project));
+        }
+
+        self::assertStringContainsString('Usage:', $this->captured());
+        self::assertSame(['.', '..', 'composer.json'], \scandir($this->project));
+        self::assertSame('{}', \file_get_contents($this->project . '/composer.json'));
+    }
+
+    #[DataProvider('commands')]
+    public function testAnUnknownOptionIsMisuseAndDoesNothing(string $command): void
+    {
+        \file_put_contents($this->project . '/composer.json', '{}');
+
+        self::assertSame(2, InitCommand::run([$command, '--force'], $this->capture(), $this->project));
+
+        self::assertStringContainsString('Unknown option "--force"', $this->captured());
+        self::assertSame(['.', '..', 'composer.json'], \scandir($this->project));
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function commands(): iterable
+    {
+        foreach (['init', 'upgrade', 'routes', 'compile', 'routes:compile', 'container:compile', 'native:build', 'profiler:clear'] as $command) {
+            yield $command => [$command];
+        }
     }
 
     public function testNoArgsIsMisuse(): void
