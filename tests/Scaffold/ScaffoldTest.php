@@ -9,6 +9,29 @@ use Polidog\Relayer\Scaffold\Scaffold;
 
 final class ScaffoldTest extends TestCase
 {
+    public function testTheCaddyfileSaysItIsForProductionAndHowToDevelop(): void
+    {
+        // Workers retain page factories and components, so edits stay stale.
+        $caddyfile = Scaffold::files()['Caddyfile'];
+
+        self::assertStringContainsString('production', $caddyfile);
+        self::assertStringContainsString('php -S 127.0.0.1:8000 -t public', $caddyfile);
+        self::assertStringContainsString('docker compose up --build', $caddyfile);
+    }
+
+    public function testDevelopmentDoesNotRunTheCaddyfile(): void
+    {
+        // The note above is only true while these hold. The image's own CMD
+        // names its bundled Caddyfile, so /app/Caddyfile is not read unless the
+        // Dockerfile or compose.yaml points at it.
+        $files = Scaffold::files();
+
+        self::assertStringNotContainsString('Caddyfile', $files['Dockerfile']);
+        self::assertStringNotContainsString('Caddyfile', $files['compose.yaml']);
+        self::assertStringNotContainsString('command:', $files['compose.yaml']);
+        self::assertStringContainsString('target: dev', $files['compose.yaml']);
+    }
+
     public function testTheCaddyfileRoutesRequestsToTheWorker(): void
     {
         $caddyfile = Scaffold::files()['Caddyfile'];

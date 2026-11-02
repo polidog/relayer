@@ -474,6 +474,10 @@ final class Scaffold
             would point at paths that no longer exist. Only the first
             request pays for it.
 
+            The `Caddyfile` is for production: its worker keeps pages in
+            memory, so edits do not show until a restart. Develop with the
+            commands under Run.
+
             README;
     }
 
@@ -1199,9 +1203,15 @@ final class Scaffold
     private static function caddyfile(): string
     {
         return <<<'CADDY'
-            # Relayer app — FrankenPHP/Caddy config. It is embedded in the
-            # single binary (`./app run`) and also usable directly:
-            # `frankenphp run --config Caddyfile`.
+            # Relayer app — FrankenPHP/Caddy config for production. It is
+            # embedded in the single binary (`./app run`) and also usable
+            # directly: `frankenphp run --config Caddyfile`.
+            #
+            # Not for development: a worker keeps loaded pages and
+            # components in memory, so an edit does not show until it
+            # restarts. Develop with `php -S 127.0.0.1:8000 -t public` or
+            # `docker compose up --build`; both serve public/index.php per
+            # request and never read this file.
 
             # SERVER_NAME overrides the bind address/host. With a real
             # hostname (SERVER_NAME=example.com) Caddy also provisions
@@ -1213,8 +1223,9 @@ final class Scaffold
             		# Worker mode: boot the app once and keep it in memory
             		# between requests, which is where FrankenPHP's speed
             		# comes from. Requests only reach the worker through
-            		# `index`. Remove both for classic (per-request) mode —
-            		# public/index.php serves exactly the same routes.
+            		# `index`. Remove the `index` and `worker` lines for
+            		# classic (per-request) mode — public/index.php serves
+            		# exactly the same routes.
             		index worker.php
             		worker {
             			file ./public/worker.php
