@@ -1466,6 +1466,15 @@ It throws `\LogicException` if called before `boot()`. For regular services
 `AppConfigurator` — this accessor is an escape hatch specifically for the
 PSX component context where closures make injection impractical.
 
+A deferred component that throws still answers its `/_defer/{name}` fetch with
+a bare `500`, but the failure now also goes to the container's
+`LoggerInterface` (and the dev profiler), not only to PHP's error log.
+
+Components get their arguments from the container, so
+`RosannaDefer::setArgumentResolver()` does not apply to them. Code that calls
+`PsxComponentRegistrar::configure()` without a container can pass its own
+resolver as `argumentResolver:`.
+
 ### Autowire defaults
 
 The framework iterates every `Definition` you register and:

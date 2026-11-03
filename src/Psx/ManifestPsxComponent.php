@@ -6,7 +6,7 @@ namespace Polidog\Relayer\Psx;
 
 use Closure;
 use Polidog\Rosanna\Runtime\AcceptsArgumentResolver;
-use Polidog\Rosanna\Runtime\DefaultPsxArgumentResolver;
+use Polidog\Rosanna\Runtime\PsxArgumentResolver;
 use RuntimeException;
 
 /**
@@ -16,8 +16,8 @@ use RuntimeException;
  * Rosanna's loader requires the file itself, which runs it a second time when
  * compiling in the same process has executed it to read its Defer
  * declaration, and again on every boot of a worker. The arguments are still
- * those of Rosanna's default resolver, from the manifest's parameters: `$props`
- * then defaults and nulls, and its error for anything else.
+ * those of the resolver given (Rosanna's default one unless the app passed its
+ * own), from the manifest's parameters, as Rosanna's loader would do.
  *
  * @internal
  */
@@ -32,6 +32,7 @@ final class ManifestPsxComponent
         private readonly string $fqcn,
         private readonly string $file,
         private readonly array $parameters,
+        private readonly PsxArgumentResolver $resolver,
     ) {}
 
     /**
@@ -70,6 +71,6 @@ final class ManifestPsxComponent
      */
     private function resolve(array $props): array
     {
-        return new DefaultPsxArgumentResolver()->resolve($this->fqcn, $this->parameters, $props);
+        return $this->resolver->resolve($this->fqcn, $this->parameters, $props);
     }
 }

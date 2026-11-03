@@ -8,6 +8,8 @@ use Polidog\Rosanna\Defer\DeclaresDefer;
 use Polidog\Rosanna\Defer\DeferredManifestCompiler;
 use Polidog\Rosanna\Defer\RosannaDefer;
 use Polidog\Rosanna\Psx\CompileCommand;
+use Polidog\Rosanna\Runtime\DefaultPsxArgumentResolver;
+use Polidog\Rosanna\Runtime\PsxArgumentResolver;
 use Polidog\Rosanna\Runtime\PsxRenderer;
 use Psr\Container\ContainerInterface;
 use RecursiveDirectoryIterator;
@@ -32,6 +34,11 @@ final class PsxComponentRegistrar
      * into `$app`. Returns the manifest path that was loaded, or null when
      * the components directory is absent — that's a valid configuration
      * for apps that don't use defer / shared PSX components yet.
+     *
+     * The components registered here resolve their own arguments, so
+     * {@see RosannaDefer::setArgumentResolver()} called afterwards does not
+     * reach them. With a container, arguments come from it; without one, pass
+     * `$argumentResolver` (Rosanna's default resolver otherwise).
      */
     public static function configure(
         RosannaDefer $app,
@@ -39,6 +46,7 @@ final class PsxComponentRegistrar
         string $cacheDir,
         bool $autoCompile,
         ?ContainerInterface $container = null,
+        ?PsxArgumentResolver $argumentResolver = null,
     ): ?string {
         if (!\is_dir($componentsDir)) {
             return null;
@@ -72,7 +80,7 @@ final class PsxComponentRegistrar
             $parameters = $entry['parameters'] ?? [];
             $app->registerComponent($fqcn, null !== $container
                 ? new ContainerPsxComponent($fqcn, $file, $container)
-                : new ManifestPsxComponent($fqcn, $file, \is_array($parameters) ? $parameters : []));
+                : new ManifestPsxComponent($fqcn, $file, \is_array($parameters) ? $parameters : [], $argumentResolver ?? new DefaultPsxArgumentResolver()));
         }
 
         return $manifestPath;

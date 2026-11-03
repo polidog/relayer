@@ -1466,6 +1466,14 @@ return function (array $props): Element {
 インジェクションするのが正道です。このメソッドはクロージャゆえに
 インジェクションが難しい PSX コンポーネント専用の逃げ道です。
 
+deferred コンポーネントが例外を投げると、`/_defer/{name}` の応答はこれまでどおり
+本文のない `500` ですが、失敗はコンテナの `LoggerInterface`（と dev のプロファイラ）
+にも記録されます。PHP のエラーログだけではありません。
+
+コンポーネントの引数はコンテナから解決するので、`RosannaDefer::setArgumentResolver()`
+は効きません。コンテナなしで `PsxComponentRegistrar::configure()` を呼ぶコードは、
+`argumentResolver:` で独自のリゾルバーを渡せます。
+
 ### autowire のデフォルト挙動
 
 フレームワークは登録済みの `Definition` を一通り見て:
