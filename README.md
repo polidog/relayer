@@ -458,16 +458,49 @@ src/Pages/
 
 ### Error pages
 
-A root `error.psx` (extending `ErrorPageComponent`) renders error responses
-inside the root layout — an unmatched route (404), an unsupported method on a
-page (405), every `$ctx->abort()` status, the `401` / `403` from `#[Auth]` /
+A root `error.psx` renders error responses inside the root layout — an
+unmatched route (404), an unsupported method on a page (405), every
+`$ctx->abort()` status, the `401` / `403` from `#[Auth]` /
 `$ctx->requireAuth()`, and an uncaught exception (500). If the root layout itself
 fails an auth guard or aborts while rendering the error, `error.psx` renders
 without it; if `error.psx` fails the same way, the default document is used. The
-status is unchanged either way. It receives the status and message via
-`ErrorPageComponent`, so one `error.psx` can branch on `getStatusCode()` for a
-404 vs. 403 vs. 500 page — don't hard-code "not found" wording in it.
-Without one, the framework emits a minimal default document.
+status is unchanged either way. It receives the status and message, so one
+`error.psx` can branch on the status for a 404 vs. 403 vs. 500 page — don't
+hard-code "not found" wording in it. Without one, the framework emits a
+minimal default document.
+
+Write it function-style, like a page, or as a class extending
+`ErrorPageComponent`:
+
+```php
+// src/Pages/error.psx — function-style
+return fn (array $props): Element => <section>
+    <h1>{(string) $props['status']}</h1>
+    <p>{$props['message']}</p>
+</section>;
+```
+
+```php
+// src/Pages/error.psx — class-style
+final class ErrorPage extends ErrorPageComponent
+{
+    public function render(): Element
+    {
+        return <h1>{(string) $this->getStatusCode()}: {$this->getMessage()}</h1>;
+    }
+}
+```
+
+The function's parameters are filled by type: `array` gets the props
+`['status' => int, 'message' => string]`, `int` the status, `string` the
+message, `Request` the request, and any other class a container service. It
+may return the `Element` or, like a page factory, a render closure.
+
+An `error.psx` that is neither (it returns no closure and declares no
+`Renderable` class, or its closure can't be wired) is a configuration error:
+in dev it is thrown, so the debug page says what is wrong; otherwise it is
+logged as a `warning` (and recorded on the profiler) and the default document
+answers with the same status.
 
 ### Uncaught exceptions
 

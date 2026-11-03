@@ -463,17 +463,47 @@ src/Pages/
 
 ### エラーページ
 
-ルート直下に `error.psx`（`ErrorPageComponent` を継承）を置くと、ルートレイ
-アウト内にエラーレスポンスがレンダリングされます。未マッチルート（404）、
-ページへの未対応メソッド（405）、すべての `$ctx->abort()` ステータス、
-`#[Auth]` / `$ctx->requireAuth()` の `401` / `403`、未捕捉例外（500）が対象です。
+ルート直下に `error.psx` を置くと、ルートレイアウト内にエラーレスポンスが
+レンダリングされます。未マッチルート（404）、ページへの未対応メソッド（405）、
+すべての `$ctx->abort()` ステータス、`#[Auth]` / `$ctx->requireAuth()` の
+`401` / `403`、未捕捉例外（500）が対象です。
 エラーの描画中にルートレイアウト自身が認証ガードで失敗したり abort した場合は
 レイアウトなしで `error.psx` を描画し、`error.psx` も同様に失敗した場合はデフォルト
-表示になります。どの場合もステータスは変わりません。ステータスとメッセージは
-`ErrorPageComponent` 経由で渡されるので、1 つの `error.psx` で
-`getStatusCode()` を見て 404 / 403 / 500 を出し分けられます（「見つかりません」
-のような文言を決め打ちしないでください）。無ければ最小限のデフォルト表示に
-なります。
+表示になります。どの場合もステータスは変わりません。ステータスとメッセージが
+渡されるので、1 つの `error.psx` でステータスを見て 404 / 403 / 500 を出し分け
+られます（「見つかりません」のような文言を決め打ちしないでください）。無ければ
+最小限のデフォルト表示になります。
+
+ページと同じ関数型でも、`ErrorPageComponent` を継承するクラスでも書けます。
+
+```php
+// src/Pages/error.psx — 関数型
+return fn (array $props): Element => <section>
+    <h1>{(string) $props['status']}</h1>
+    <p>{$props['message']}</p>
+</section>;
+```
+
+```php
+// src/Pages/error.psx — クラス型
+final class ErrorPage extends ErrorPageComponent
+{
+    public function render(): Element
+    {
+        return <h1>{(string) $this->getStatusCode()}: {$this->getMessage()}</h1>;
+    }
+}
+```
+
+関数の引数は型で埋まります。`array` には props
+`['status' => int, 'message' => string]`、`int` にはステータス、`string` には
+メッセージ、`Request` にはリクエスト、それ以外のクラスにはコンテナのサービスが
+入ります。戻り値は `Element` か、ページのファクトリと同じく描画用のクロージャです。
+
+どちらでもない `error.psx`（クロージャを返さず `Renderable` のクラスも宣言しない、
+あるいはクロージャの引数を埋められない）は設定の誤りとして扱います。dev では
+例外にするので、デバッグページに何が悪いかが出ます。それ以外では `warning` で
+ログに残し（プロファイラにも記録します）、同じステータスのデフォルト表示で応答します。
 
 ### 未捕捉例外
 
