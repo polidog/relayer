@@ -637,6 +637,104 @@ final class UpgradeCommandTest extends TestCase
         self::assertSame('dev', $this->effectiveAppEnv());
     }
 
+    public function testAnEnvLocalTrackedByGitIsNotGivenDevMode(): void
+    {
+        Git::initOrSkip($this->project);
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        \file_put_contents($this->project . '/.env.local', "FEATURE_FLAG=1\n");
+        self::assertSame(0, Git::run($this->project, ['add', '.env.local']));
+
+        // .gitignore cannot untrack it: APP_ENV=dev here would be committed
+        // with the next change and deployed.
+        self::assertSame(1, UpgradeCommand::run([], $this->capture(), $this->project));
+
+        self::assertSame("FEATURE_FLAG=1\n", \file_get_contents($this->project . '/.env.local'));
+        // Left as it was, so the dev app stays dev until the re-run.
+        self::assertSame(self::priorContent('.env', 10), \file_get_contents($this->project . '/.env'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+        $extra = $this->readComposer()['extra'];
+        self::assertIsArray($extra);
+        self::assertSame(['structure_version' => 10], $extra['relayer']);
+        self::assertStringContainsString('tracked by Git', $this->captured());
+        self::assertStringContainsString('git rm --cached .env.local', $this->captured());
+
+        self::assertSame(0, Git::run($this->project, ['rm', '--cached', '--quiet', '.env.local']));
+        $this->lines = [];
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame("FEATURE_FLAG=1\nAPP_ENV=dev\n", \file_get_contents($this->project . '/.env.local'));
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+    }
+
+    public function testAnUntrackedEnvLocalInAGitWorkTreeIsGivenDevMode(): void
+    {
+        Git::initOrSkip($this->project);
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+    }
+
+    #[DataProvider('provideAFailedGitignoreCheckLeavesNoDevModeBehindCases')]
+    public function testAFailedGitignoreCheckLeavesNoDevModeBehind(?string $envLocal, string $expected): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        if (null !== $envLocal) {
+            \file_put_contents($this->project . '/.env.local', $envLocal);
+        }
+        // Cannot be read or written as a file.
+        \mkdir($this->project . '/.gitignore');
+
+        self::assertSame(1, UpgradeCommand::run([], $this->capture(), $this->project));
+
+        if (null === $envLocal) {
+            self::assertFileDoesNotExist($this->project . '/.env.local');
+        } else {
+            self::assertSame($envLocal, \file_get_contents($this->project . '/.env.local'));
+        }
+        self::assertSame(self::priorContent('.env', 10), \file_get_contents($this->project . '/.env'));
+        self::assertStringContainsString('.gitignore', $this->captured());
+
+        // Fixed, the re-run must check again rather than find dev mode in
+        // place and trust it.
+        \rmdir($this->project . '/.gitignore');
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame($expected, \file_get_contents($this->project . '/.env.local'));
+        self::assertSame("/.env.local\n", \file_get_contents($this->project . '/.gitignore'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+    }
+
+    /**
+     * @return iterable<string, array{null|string, string}>
+     */
+    public static function provideAFailedGitignoreCheckLeavesNoDevModeBehindCases(): iterable
+    {
+        yield 'new file' => [null, Scaffold::files()['.env.local']];
+
+        yield 'appended' => ["FEATURE_FLAG=1\n", "FEATURE_FLAG=1\nAPP_ENV=dev\n"];
+    }
+
+    public function testDevModeLeftInEnvLocalByAFailedRunIsStillKeptOutOfGit(): void
+    {
+        // What an earlier run that failed at the .gitignore check left behind.
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 10]]]);
+        \file_put_contents($this->project . '/.env', self::priorContent('.env', 10));
+        \file_put_contents($this->project . '/.env.local', "FEATURE_FLAG=1\nAPP_ENV=dev\n");
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame(Scaffold::files()['.env'], \file_get_contents($this->project . '/.env'));
+        self::assertSame("/.env.local\n", \file_get_contents($this->project . '/.gitignore'));
+        self::assertSame('dev', $this->effectiveAppEnv());
+    }
+
     public function testDispatchesThroughInitCommandEntrypoint(): void
     {
         // Routed via the shared dispatcher: no composer.json yields the

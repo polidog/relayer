@@ -2937,7 +2937,12 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
    `APP_ENV` を指定していなければ行を追記し、指定済みなら触りません。手を入れた `.env`
    は内容にかかわらずそのまま残し、`.env.local` も書かないので、`APP_ENV` は自分で
    確かめてください。`relayer init` が `.env.local` を書くのは新規プロジェクトだけです。
-   別の環境では `echo APP_ENV=dev >> .env.local` を実行してください。
+   別の環境では `echo APP_ENV=dev >> .env.local` を実行してください。どちらのコマンドも
+   先に `.gitignore` が `.env.local` を除外していることを確かめ、確かめられなければ何も
+   書きません。`.env.local` が Git で追跡されていると `.gitignore` は効かないため、
+   `upgrade` は `.env` と `.env.local` をそのままにして失敗します（`init` はこのファイルを
+   作りません）。`git rm --cached .env.local` を実行してコミットし、`relayer upgrade` を
+   もう一度実行してください。
 7. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
    CSS や JS を直します。
 8. 雛形の `Caddyfile` は実際にリクエストを `public/worker.php` に送るようになりました

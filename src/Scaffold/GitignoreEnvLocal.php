@@ -11,6 +11,10 @@ namespace Polidog\Relayer\Scaffold;
  * `.gitignore` that does not list it. Committed and deployed, it would turn
  * production into dev and expose the profiler and stack traces.
  *
+ * Both commands check before they write, never after: a write followed by a
+ * failed check would leave dev mode behind, and the retry would find it in
+ * place and have no reason to check again.
+ *
  * @internal
  */
 final class GitignoreEnvLocal
@@ -45,6 +49,57 @@ final class GitignoreEnvLocal
 
         // Appended rather than rewritten, so the file keeps its permissions.
         return false === @\file_put_contents($path, $separator . self::RULE . "\n", \FILE_APPEND) ? null : self::ADDED;
+    }
+
+    /**
+     * Whether Git tracks `.env.local` in `$root`'s work tree, including one
+     * deleted from the checkout but still in the index. `.gitignore` does
+     * not apply to a tracked file, so dev mode written there would be
+     * committed with the next change.
+     *
+     * False when git is missing or `$root` is not in a work tree: then
+     * there is nothing to commit it to.
+     */
+    public static function isTracked(string $root): bool
+    {
+        if (!\function_exists('proc_open')) {
+            return false;
+        }
+
+        $process = @\proc_open(
+            ['git', 'ls-files', '--error-unmatch', '--', '.env.local'],
+            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            $root,
+        );
+        if (!\is_resource($process)) {
+            return false;
+        }
+
+        foreach ($pipes as $index => $pipe) {
+            if (0 !== $index) {
+                \stream_get_contents($pipe);
+            }
+            \fclose($pipe);
+        }
+
+        return 0 === \proc_close($process);
+    }
+
+    /**
+     * The lines `init` and `upgrade` print when {@see isTracked()} stops them.
+     *
+     * @return list<string>
+     */
+    public static function trackedWarning(string $then): array
+    {
+        return [
+            'Did not write APP_ENV=dev to .env.local: the file is tracked by Git,',
+            'and .gitignore does not apply to tracked files. It would be committed',
+            'and deployed, turning production into dev (profiler, stack traces).',
+            'Untrack it, keeping your copy: git rm --cached .env.local',
+            'Then commit that, and ' . $then,
+        ];
     }
 
     /**

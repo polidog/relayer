@@ -278,6 +278,54 @@ final class InitCommandTest extends TestCase
         self::assertSame(".env*\n!.env.local\n/.env.local\n", \file_get_contents($this->project . '/.gitignore'));
     }
 
+    public function testAFailedGitignoreCheckLeavesNoDevModeBehind(): void
+    {
+        $this->writeComposer(['name' => 'acme/app']);
+        // Cannot be read or written as a file.
+        \mkdir($this->project . '/.gitignore');
+
+        self::assertSame(1, InitCommand::run(['init'], $this->capture(), $this->project));
+
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+        self::assertStringContainsString('.gitignore', $this->captured());
+
+        // Fixed, the re-run is still a new project and checks again.
+        \rmdir($this->project . '/.gitignore');
+        $this->lines = [];
+        $this->assertInitSucceeds();
+
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+        self::assertStringContainsString('/.env.local', (string) \file_get_contents($this->project . '/.gitignore'));
+    }
+
+    public function testAnEnvLocalTrackedByGitIsNotCreated(): void
+    {
+        Git::initOrSkip($this->project);
+        $this->writeComposer(['name' => 'acme/app']);
+        // Committed by someone, deleted from this checkout: writing it again
+        // would show up as a change to commit.
+        \file_put_contents($this->project . '/.env.local', "FEATURE_FLAG=1\n");
+        self::assertSame(0, Git::run($this->project, ['add', '.env.local']));
+        \unlink($this->project . '/.env.local');
+
+        $this->assertInitSucceeds();
+
+        self::assertFileDoesNotExist($this->project . '/.env.local');
+        self::assertStringContainsString('tracked by Git', $this->captured());
+        self::assertStringContainsString('git rm --cached .env.local', $this->captured());
+        self::assertFileExists($this->project . '/public/index.php');
+    }
+
+    public function testANewProjectInAGitWorkTreeStartsInDevMode(): void
+    {
+        Git::initOrSkip($this->project);
+        $this->writeComposer(['name' => 'acme/app']);
+
+        $this->assertInitSucceeds();
+
+        self::assertSame(Scaffold::files()['.env.local'], \file_get_contents($this->project . '/.env.local'));
+    }
+
     #[DataProvider('provideAnExistingEnvGetsNoEnvLocalCases')]
     public function testAnExistingEnvGetsNoEnvLocal(string $env): void
     {

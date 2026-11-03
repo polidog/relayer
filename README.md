@@ -2946,7 +2946,11 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
    that does set it alone. An edited `.env` stays as it is and no `.env.local` is
    written, whatever it says, so check `APP_ENV` yourself. `relayer init` writes
    `.env.local` only in a new project. Other checkouts need
-   `echo APP_ENV=dev >> .env.local`.
+   `echo APP_ENV=dev >> .env.local`. Both commands first make sure `.gitignore`
+   excludes `.env.local`, and write nothing if they cannot. If Git tracks
+   `.env.local`, `.gitignore` does not help: `upgrade` then leaves `.env` and
+   `.env.local` as they are and fails (`init` skips the file). Run
+   `git rm --cached .env.local`, commit, and re-run `relayer upgrade`.
 7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
    that relies on it.
 8. The scaffolded `Caddyfile` now really sends requests to `public/worker.php`

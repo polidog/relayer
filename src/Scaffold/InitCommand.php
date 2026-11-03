@@ -21,7 +21,8 @@ use JsonException;
  *  - `.env.local` (dev mode, which overrides `.env`) is written only into a
  *    new project: no `.env`, no `structure_version` marker and none of
  *    {@see APP_PATHS} yet. It is written first, so an init that dies partway
- *    leaves either nothing or dev mode already in place for the retry,
+ *    leaves either nothing or dev mode already in place for the retry, and
+ *    only once `.gitignore` excludes it and Git does not track it,
  *  - the existing `composer.json` is patched additively — user values win,
  *    only missing keys / array members are added,
  *  - `extra.relayer.structure_version` is stamped only on the initial
@@ -285,12 +286,15 @@ final class InitCommand
         $created = [];
         $skipped = [];
         $devModeWithheld = false;
+        $devModeTracked = false;
+        $ignore = null;
 
-        // .env.local first: every path the newness check reads is written
-        // after it, so a retry after an interruption still sees a new project,
-        // or finds dev mode already in place.
+        // .env.local before every path the newness check reads, so a retry
+        // after an interruption or a failed check still sees a new project,
+        // or finds dev mode already in place. The skeleton's .gitignore (which
+        // lists it) goes first, so the check below finds it, not nothing.
         $files = Scaffold::files();
-        $files = ['.env.local' => $files['.env.local']] + $files;
+        $files = ['.gitignore' => $files['.gitignore'], '.env.local' => $files['.env.local']] + $files;
 
         foreach ($files as $relative => $contents) {
             $path = $root . '/' . $relative;
@@ -301,13 +305,34 @@ final class InitCommand
                 continue;
             }
 
-            // .env.local overrides .env, so in a project that already runs
-            // somewhere, writing APP_ENV=dev here would turn production into
-            // dev. Only a new project has no environment to change.
-            if ('.env.local' === $relative && !$isNewProject) {
-                $devModeWithheld = true;
+            if ('.env.local' === $relative) {
+                // .env.local overrides .env, so in a project that already runs
+                // somewhere, writing APP_ENV=dev here would turn production into
+                // dev. Only a new project has no environment to change.
+                if (!$isNewProject) {
+                    $devModeWithheld = true;
 
-                continue;
+                    continue;
+                }
+
+                // Before the write, not after: dev mode left behind by a failed
+                // check would be taken as done by the retry. A project that
+                // brought its own .gitignore may not list it.
+                $ignore = GitignoreEnvLocal::ensure($root);
+                if (null === $ignore) {
+                    $write('Could not make sure .gitignore excludes .env.local, so it was not created.');
+                    $write('Fix .gitignore, then re-run `relayer init`.');
+
+                    return 1;
+                }
+
+                // Committed, then deleted from this checkout: .gitignore does
+                // not apply, so writing it would put dev mode in the next commit.
+                if (GitignoreEnvLocal::isTracked($root)) {
+                    $devModeTracked = true;
+
+                    continue;
+                }
             }
 
             $dir = \dirname($path);
@@ -324,18 +349,6 @@ final class InitCommand
             }
 
             $created[] = $relative;
-        }
-
-        // After the skeleton's own .gitignore (which lists it) was written or
-        // skipped: a project that brought its own may not.
-        $ignore = null;
-        if (\in_array('.env.local', $created, true)) {
-            $ignore = GitignoreEnvLocal::ensure($root);
-            if (null === $ignore) {
-                $write('Could not make sure .gitignore excludes .env.local; add /.env.local to it before committing.');
-
-                return 1;
-            }
         }
 
         \sort($created);
@@ -364,6 +377,14 @@ final class InitCommand
             $write('Did not create .env.local: this is an existing project, and');
             $write('APP_ENV=dev there would override its environment. To develop on');
             $write('this machine, run: echo APP_ENV=dev >> .env.local');
+        }
+
+        // Not a failure: like an existing project, this one only goes
+        // without dev mode, and the rest of the skeleton is in place.
+        if ($devModeTracked) {
+            foreach (GitignoreEnvLocal::trackedWarning('create it: echo APP_ENV=dev >> .env.local') as $line) {
+                $write($line);
+            }
         }
 
         return 0;
