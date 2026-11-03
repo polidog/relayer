@@ -1164,17 +1164,21 @@ function-style pages.
 
 ### Class-style: `PageComponent::action()`
 
-`PageComponent::action([$this, 'handler'])` returns a CSRF-bound token for a
-form's hidden field. Submitting the form invokes the matching method on the
-page before `render()`:
+`PageComponent::action([$this, 'handler'])` returns a signed action token.
+Put it in the `<form>`'s `action` attribute: the framework turns that form
+into a `POST` back to the current URL and adds the `_rosanna_action` and
+`_rosanna_csrf` hidden fields itself. Submitting the form invokes the
+matching method on the page before `render()`:
 
 ```php
+use Polidog\Relayer\Router\RedirectException;
+
 public function render(): Element
 {
     return (
-        <form method="post">
-            <input type="hidden" name="_rosanna_action" value={$this->action([$this, 'save'])} />
+        <form action={$this->action([$this, 'save'])}>
             <input name="title" />
+            <button>save</button>
         </form>
     );
 }
@@ -1182,12 +1186,18 @@ public function render(): Element
 public function save(array $form): void
 {
     // ... handle $form['title']
-    header('Location: /dashboard', true, 303); // PRG
-    exit;
+    throw new RedirectException('/dashboard'); // 303 Post/Redirect/Get
 }
 ```
 
-Invalid CSRF tokens return a `403`.
+Invalid CSRF tokens return a `403`. Don't write the token into a
+`_rosanna_action` hidden input yourself: only a form whose `action` holds the
+token gets the `_rosanna_csrf` field, so such a form is always refused with
+`403`.
+
+A class-style page has no `PageContext`, so redirect by throwing
+`RedirectException` (what `$ctx->redirect()` throws). The router turns it
+into a `Location` response — 303 See Other by default.
 
 Only methods the page class itself declares can be actions: passing an
 inherited framework method (or anything other than `[$this, 'method']`)
@@ -1754,7 +1764,7 @@ return function (PageContext $ctx, Authenticator $auth): Closure {
         $ctx->redirect('/dashboard'); // 303 Post/Redirect/Get; unwinds here
     });
 
-    return function () use ($login, $error): Element {
+    return function () use ($login, &$error): Element {
         // ... render form, surface $error as a single generic message
     };
 };
