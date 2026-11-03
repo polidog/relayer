@@ -77,13 +77,27 @@ final readonly class ErrorResponder
      * user lacks). Attempts are bounded rather than re-entering the handlers:
      * with the layout, then without it, then the built-in document — the
      * status decided here always stands.
+     *
+     * An `error.psx` that cannot be used as an error page at all
+     * ({@see InvalidErrorPage}) is a configuration error, not something to
+     * pass over in silence: in dev it is thrown, so the debug page names the
+     * file and what is wrong with it; elsewhere it is logged as a warning and
+     * the built-in document answers with the status unchanged.
      */
     public function respond(int $status, string $message, Request $request): void
     {
         \http_response_code($status);
 
-        if ($this->renderErrorPage($status, $message, true, $request) || $this->renderErrorPage($status, $message, false, $request)) {
-            return;
+        try {
+            if ($this->renderErrorPage($status, $message, true, $request) || $this->renderErrorPage($status, $message, false, $request)) {
+                return;
+            }
+        } catch (InvalidErrorPage $exception) {
+            if ($this->debug) {
+                throw $exception;
+            }
+
+            $this->reportInvalidErrorPage($exception, $status, $request);
         }
 
         echo $this->document->renderError($status, $message);
@@ -226,7 +240,7 @@ final readonly class ErrorResponder
         }
 
         try {
-            $errorComponent = $this->pages->loadErrorPage($errorPagePath, $status, $message);
+            $errorComponent = $this->pages->loadErrorPage($errorPagePath, $status, $message, $request);
 
             if (null === $errorComponent) {
                 return false;
@@ -272,11 +286,9 @@ final readonly class ErrorResponder
         ]);
 
         try {
-            $logger = null !== $this->container && $this->container->has(LoggerInterface::class)
-                ? $this->container->get(LoggerInterface::class)
-                : null;
+            $logger = $this->logger();
 
-            if ($logger instanceof LoggerInterface) {
+            if (null !== $logger) {
                 $logger->error(\sprintf('Uncaught %s: %s', $exception::class, $exception->getMessage()), [
                     'exception' => $exception,
                     'method' => $request->method,
@@ -292,5 +304,45 @@ final readonly class ErrorResponder
         }
 
         \error_log('Uncaught ' . $exception);
+    }
+
+    /**
+     * Log an unusable `error.psx` at `warning` (PHP's error log when no
+     * logger is bound or it fails) and put it on the profiler timeline.
+     */
+    private function reportInvalidErrorPage(InvalidErrorPage $exception, int $status, Request $request): void
+    {
+        $this->profiler?->collect('route', 'error_page_invalid', [
+            'status' => $status,
+            'message' => $exception->getMessage(),
+        ]);
+
+        try {
+            $logger = $this->logger();
+
+            if (null !== $logger) {
+                $logger->warning($exception->getMessage(), [
+                    'exception' => $exception,
+                    'status' => $status,
+                    'method' => $request->method,
+                    'path' => $request->path,
+                ]);
+
+                return;
+            }
+        } catch (Throwable) {
+            // Fall through to the error log.
+        }
+
+        \error_log('Invalid error page: ' . $exception->getMessage());
+    }
+
+    private function logger(): ?LoggerInterface
+    {
+        $logger = null !== $this->container && $this->container->has(LoggerInterface::class)
+            ? $this->container->get(LoggerInterface::class)
+            : null;
+
+        return $logger instanceof LoggerInterface ? $logger : null;
     }
 }
