@@ -8,6 +8,7 @@ use Closure;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Auth\SessionStorage;
 use Polidog\Relayer\Http\OriginGuard;
+use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translator;
 use Polidog\Relayer\InjectorContainer;
@@ -163,6 +164,37 @@ final class DeferDispatchTest extends TestCase
         self::assertSame(200, \http_response_code());
         self::assertStringContainsString('<span data-id="greeting">hi</span>', $output);
         self::assertFileExists($marker);
+    }
+
+    public function testTheDeferEndpointRoutesByTheRequestTheGuardHandedOn(): void
+    {
+        \file_put_contents(
+            $this->workDir . '/src/Components/Greeting.psx',
+            <<<'PSX'
+                <?php
+                namespace App\Components;
+                use Polidog\Rosanna\Defer\Defer;
+                use Polidog\Rosanna\Runtime\Element;
+                use function Polidog\Rosanna\Defer\deferred;
+
+                return deferred(
+                    fn(array $props): Element => <span data-id="greeting">hi</span>,
+                    defer: new Defer(name: 'greeting'),
+                );
+                PSX,
+        );
+        $rosanna = $this->bootRosanna();
+
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+        $_SERVER['REQUEST_URI'] = '/rewritten';
+        $_GET = [];
+
+        $output = $this->runApp(
+            $rosanna,
+            guard: static fn (Request $request, Closure $next): mixed => $next($request->withPath('/_defer/greeting')),
+        );
+
+        self::assertStringContainsString('<span data-id="greeting">hi</span>', $output);
     }
 
     public function testUnregisteredDeferNameReturns404(): void

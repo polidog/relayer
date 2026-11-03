@@ -64,6 +64,45 @@ final class AppRouterLocaleTest extends TestCase
         self::assertSame(['path' => '/users', 'loc' => 'ja'], \json_decode($output, true));
     }
 
+    public function testADoubleSlashNeverRoutesThroughALocalePrefix(): void
+    {
+        $this->writeRoute('admin', <<<'PHP'
+            use Polidog\Relayer\Http\Response;
+
+            return ['GET' => static fn (): Response => Response::text('admin area')];
+            PHP);
+
+        $app = AppRouter::create($this->workDir);
+        $app->setContainer($this->container());
+
+        self::assertSame('admin area', $this->dispatch($app, '/ja/admin', 'GET'), 'the prefix itself still routes');
+
+        foreach (['//ja/admin', '///ja/admin', '/ja//admin'] as $path) {
+            $output = $this->dispatch($app, $path, 'GET');
+
+            self::assertSame(404, \http_response_code(), $path);
+            self::assertStringNotContainsString('admin area', $output, $path);
+        }
+    }
+
+    public function testADoubleSlashNeverReachesTheDeferEndpointThroughALocalePrefix(): void
+    {
+        $app = AppRouter::create($this->workDir);
+        $app->setContainer($this->container());
+
+        // The endpoint answers its own 404 for an unknown name: seeing it
+        // here is what tells the endpoint was reached.
+        $reached = 'Deferred component not registered';
+        self::assertStringContainsString($reached, $this->dispatch($app, '/ja/_defer/name', 'GET'));
+
+        foreach (['//ja/_defer/name', '/ja//_defer/name'] as $path) {
+            $output = $this->dispatch($app, $path, 'GET');
+
+            self::assertSame(404, \http_response_code(), $path);
+            self::assertStringNotContainsString($reached, $output, $path);
+        }
+    }
+
     public function testAnEncodedLocalePrefixIsStrippedAndTheRestDecodedOnce(): void
     {
         $this->writeRoute('記事/[slug]', <<<'PHP'

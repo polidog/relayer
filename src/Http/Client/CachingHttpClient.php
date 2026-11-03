@@ -6,6 +6,7 @@ namespace Polidog\Relayer\Http\Client;
 
 use Polidog\Relayer\Db\CachingDatabase;
 use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\RequestScopedInstances;
 
 /**
  * Request-scoped memoization for {@see HttpClient}.
@@ -43,7 +44,11 @@ final class CachingHttpClient implements HttpClient
     public function __construct(
         private readonly HttpClient $inner,
         private readonly Profiler $profiler,
-    ) {}
+    ) {
+        RequestScopedInstances::track($this, static function (self $client): void {
+            $client->cache = [];
+        });
+    }
 
     public function request(string $method, string $url, array $headers = [], ?string $body = null): HttpResponse
     {

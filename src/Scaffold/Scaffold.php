@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 10;
+    public const int STRUCTURE_VERSION = 11;
 
     /** Composer script publishing `public/rosanna-defer.js`. */
     public const string ASSET_PUBLISHER = 'Polidog\Rosanna\Defer\Installer\AssetInstaller::publish';
@@ -53,6 +53,10 @@ final class Scaffold
     {
         return [
             '.env' => self::env(),
+            // Conditional, unlike everything else here: it overrides .env, so
+            // `init` writes it only into a new project and `upgrade` only when
+            // a rewrite takes APP_ENV=dev out of an untouched .env.
+            '.env.local' => self::envLocal(),
             '.gitignore' => self::gitignore(),
             'README.md' => self::readme(),
             // Co-versioned agent conventions: ships with this framework
@@ -132,7 +136,10 @@ final class Scaffold
      * version that added them). The v1 baseline files ({@see files()}
      * minus every path here — `.env`, the `src/` tree,
      * `public/index.php`, …) need no step: any project carrying the
-     * `structure_version` marker was scaffolded with them.
+     * `structure_version` marker was scaffolded with them. `.env.local` is
+     * the exception: it is absent from this map despite arriving in v11,
+     * because "ensure it exists" would put dev mode into a production project
+     * (see {@see UpgradeCommand::moveDevModeToEnvLocal()}).
      *
      * Changes to the *content* of an already-shipped file live in
      * {@see rewrites()} instead; `upgrade` applies both maps for
@@ -280,6 +287,31 @@ final class Scaffold
                     'f82216bb74666c260ab5b9db8f3ba403b7ee5c1caa81967b58eec5c87de78d0b',
                 ],
             ],
+            // v11 keeps APP_ENV=dev out of the committed .env, so a deploy that
+            // forgets APP_ENV runs as production, and makes the Caddyfile
+            // actually use its worker.
+            11 => [
+                '.env' => [
+                    // v10
+                    '70eaadeb818b1b74bfb4d67dc2c6dc130dc70a10b2c3564be2ea56e3ee8b63ea',
+                ],
+                'README.md' => [
+                    // v10
+                    'd236304ad651551fe569f4dbd75d349995d4ec6909a2f749a652d430969eaeaf',
+                ],
+                'Dockerfile' => [
+                    // v10
+                    'df3a7700817d5f981697f820e333b8b63b92f0e6525be496537806c607795339',
+                ],
+                'Caddyfile' => [
+                    // v10, whose global worker block no request ever reached
+                    'ed711b195c0183b204f09e776290bcd18173632d86a640f84c6a1a85a4f40fc7',
+                ],
+                'php.ini' => [
+                    // v10
+                    'ed1f327bc2923959b75ba5f17a85ae0baa7e1d20d19cbe7abe3466ac8f565321',
+                ],
+            ],
         ];
     }
 
@@ -288,8 +320,8 @@ final class Scaffold
         return <<<'ENV'
             # Relayer reads APP_ENV: `dev` enables on-the-fly PSX compilation,
             # request profiling and traceable decorators. Unset (or any other
-            # value) is treated as production.
-            APP_ENV=dev
+            # value) is treated as production, so a deploy that forgets it does
+            # not expose them. Development sets it in the gitignored .env.local.
 
             # Set DATABASE_DSN to auto-wire the Db layer. It is passed
             # straight to PDO (no %placeholder% expansion), e.g.:
@@ -298,6 +330,16 @@ final class Scaffold
             # DATABASE_PASSWORD=secret
             # SQLite needs an ABSOLUTE path — PDO resolves a relative DSN
             # path against the process cwd: DATABASE_DSN=sqlite:/srv/app/var/app.db
+
+            ENV;
+    }
+
+    private static function envLocal(): string
+    {
+        return <<<'ENV'
+            # This machine only (gitignored). A fresh clone has no such file and
+            # runs as production until you create one.
+            APP_ENV=dev
 
             ENV;
     }
@@ -341,7 +383,8 @@ final class Scaffold
             ## Layout
 
             ```
-            .env                   APP_ENV=dev
+            .env                   committed defaults
+            .env.local             APP_ENV=dev, this machine only (gitignored)
             composer.json
             RELAYER.md             agent/LLM coding conventions (co-versioned)
             AGENTS.md              auto-read pointer → RELAYER.md
@@ -368,9 +411,9 @@ final class Scaffold
             ## Production
 
             `APP_ENV=dev` compiles `.psx`, scans routes, and rebuilds the
-            DI container on the fly. For deploys, set `APP_ENV=prod` in
-            `.env.local` or the real environment (unsetting it falls back
-            to `.env`, which says `dev`) and precompile all three once:
+            DI container on the fly. It comes from `.env.local`, which is
+            gitignored, so a fresh clone needs `echo APP_ENV=dev >> .env.local`.
+            A deploy without it runs as production; precompile all three once:
 
             ```bash
             composer install --no-dev --classmap-authoritative
@@ -430,6 +473,10 @@ final class Scaffold
             directory at startup, so artifacts precompiled at build time
             would point at paths that no longer exist. Only the first
             request pays for it.
+
+            The `Caddyfile` is for production: its worker keeps pages in
+            memory, so edits do not show until a restart. Develop with the
+            commands under Run.
 
             README;
     }
@@ -837,7 +884,7 @@ final class Scaffold
         return <<<'DOCKER'
             # Relayer app — FrankenPHP image with two build targets:
             #
-            #   dev   .psx compiled on the fly, APP_ENV=dev from .env, no
+            #   dev   .psx compiled on the fly, APP_ENV=dev set below, no
             #         build step. This is what `docker compose up --build`
             #         uses.
             #   prod  the three precompile steps run at BUILD time, so the
@@ -892,8 +939,9 @@ final class Scaffold
             ENV SERVER_NAME=:8000
             EXPOSE 8000
 
-            # --- dev: nothing precompiled, APP_ENV comes from .env -------
+            # --- dev: nothing precompiled, the app recompiles as it runs --
             FROM base AS dev
+            ENV APP_ENV=dev
 
             # --- prod: everything precompiled, nothing built at runtime --
             FROM base AS prod
@@ -904,9 +952,9 @@ final class Scaffold
             RUN composer install --no-interaction --prefer-dist \
                 --no-dev --classmap-authoritative
 
-            # .env.local overrides the committed .env (APP_ENV=dev) without
-            # editing it. .dockerignore keeps the host's own .env.local out
-            # of the image, so this is the only one.
+            # Say it outright rather than rely on APP_ENV being unset.
+            # .dockerignore keeps the host's own .env.local out of the image,
+            # so this is the only one.
             RUN printf 'APP_ENV=prod\n' > .env.local
 
             # The three precompile steps. Each removes a per-request cost:
@@ -956,7 +1004,7 @@ final class Scaffold
             ; Relayer app — PHP overrides. The Dockerfile copies this into
             ; $PHP_INI_DIR/conf.d/ so it loads LAST and overrides the base
             ; image defaults: list only the directives you want to change,
-            ; not a full php.ini. APP_ENV (in .env), not this file, drives
+            ; not a full php.ini. APP_ENV, not this file, drives
             ; the framework's dev/prod behaviour.
 
             expose_php = Off
@@ -1155,22 +1203,15 @@ final class Scaffold
     private static function caddyfile(): string
     {
         return <<<'CADDY'
-            # Relayer app — FrankenPHP/Caddy config. It is embedded in the
-            # single binary (`./app run`) and also usable directly:
-            # `frankenphp run --config Caddyfile`.
-
-            {
-            	# Worker mode: boot the app once and keep it in memory
-            	# between requests, which is where FrankenPHP's speed comes
-            	# from. Comment this block out for classic (per-request)
-            	# mode — public/index.php serves exactly the same routes.
-            	frankenphp {
-            		worker {
-            			file ./public/worker.php
-            			# num 8        # workers; defaults to 2x CPU cores
-            		}
-            	}
-            }
+            # Relayer app — FrankenPHP/Caddy config for production. It is
+            # embedded in the single binary (`./app run`) and also usable
+            # directly: `frankenphp run --config Caddyfile`.
+            #
+            # Not for development: a worker keeps loaded pages and
+            # components in memory, so an edit does not show until it
+            # restarts. Develop with `php -S 127.0.0.1:8000 -t public` or
+            # `docker compose up --build`; both serve public/index.php per
+            # request and never read this file.
 
             # SERVER_NAME overrides the bind address/host. With a real
             # hostname (SERVER_NAME=example.com) Caddy also provisions
@@ -1178,7 +1219,19 @@ final class Scaffold
             {$SERVER_NAME::8000} {
             	root public/
             	encode zstd br gzip
-            	php_server
+            	php_server {
+            		# Worker mode: boot the app once and keep it in memory
+            		# between requests, which is where FrankenPHP's speed
+            		# comes from. Requests only reach the worker through
+            		# `index`. Remove the `index` and `worker` lines for
+            		# classic (per-request) mode — public/index.php serves
+            		# exactly the same routes.
+            		index worker.php
+            		worker {
+            			file ./public/worker.php
+            			# num 8        # workers; defaults to 2x CPU cores
+            		}
+            	}
             }
 
             CADDY;

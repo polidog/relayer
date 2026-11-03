@@ -40,11 +40,43 @@ final class NativeHttpServerTest extends TestCase
             \$root = dirname(__DIR__);
             Polidog\\Relayer\\Router\\AppRouter::create(\$root . '/src/Pages')
                 ->setNativeDispatcher(Polidog\\Relayer\\Router\\Native\\NativeDispatcher::forProject(\$root, false))
+                // Routes a request on the path in X-Guard-Rewrite, the way an
+                // app's guard may substitute a Request.
+                ->setGuard(static function (Polidog\\Relayer\\Http\\Request \$request, Closure \$next): void {
+                    \$rewrite = \$request->header('x-guard-rewrite');
+                    \$next(null === \$rewrite ? \$request : \$request->withPath(\$rewrite));
+                })
                 ->run();
             PHP);
         self::write('src/Pages/about/page.php', <<<'PHP'
             <?php
             return static fn () => new Polidog\Rosanna\Runtime\Element('h1', [], ['About page']);
+            PHP);
+        self::write('src/Pages/layout.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Router\Layout\LayoutComponent;
+            use Polidog\Rosanna\Runtime\Element;
+
+            final class NativeHttpRootLayout extends LayoutComponent
+            {
+                public function render(): Element
+                {
+                    return new Element('div', [], ['root-layout-rendered', $this->getChildren()]);
+                }
+            }
+            PHP);
+        self::write('src/Pages/error.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Router\Component\ErrorPageComponent;
+            use Polidog\Rosanna\Runtime\Element;
+
+            final class NativeHttpErrorPage extends ErrorPageComponent
+            {
+                public function render(): Element
+                {
+                    return new Element('p', [], ['error-page-rendered']);
+                }
+            }
             PHP);
         self::write('src/Pages/middleware.go', <<<'GO'
             package main
@@ -264,6 +296,62 @@ final class NativeHttpServerTest extends TestCase
         self::assertStringNotContainsString('urlPath', $body);
     }
 
+    public function testAnUnroutablePathIsNotFoundWithoutReachingAGoProxy(): void
+    {
+        foreach (['/%zz', '/%E8%A8%98%E4%BA%8B/%zz', '/a%00b', '//about'] as $path) {
+            [$status, $headers, $body] = $this->request('GET', $path);
+
+            self::assertSame(404, $status, $path);
+            self::assertArrayNotHasKey('x-proxied-by', $headers, $path);
+            self::assertStringStartsWith('application/json', $headers['content-type'] ?? '', $path);
+            self::assertSame('{"error":"Not Found"}', $body, $path);
+        }
+    }
+
+    public function testAnUnroutablePathRendersNoApplicationCode(): void
+    {
+        // A path the proxy did see still gets the app's error page and root
+        // layout, so their absence below is not down to the fixture.
+        [$status, , $body] = $this->request('GET', '/nope');
+        self::assertSame(404, $status);
+        self::assertStringContainsString('error-page-rendered', $body);
+        self::assertStringContainsString('root-layout-rendered', $body);
+
+        // Layout content may rely on the Go middleware's authorization, and
+        // the middleware did not run for these.
+        foreach (['/%zz', '/a%00b', '//about'] as $path) {
+            [$status, , $body] = $this->request('GET', $path);
+
+            self::assertSame(404, $status, $path);
+            self::assertStringNotContainsString('error-page-rendered', $body, $path);
+            self::assertStringNotContainsString('root-layout-rendered', $body, $path);
+        }
+    }
+
+    public function testAGuardRewriteNeverSendsGoAnUnparseableTarget(): void
+    {
+        // Go gets the client's target as REQUEST_URI whatever the request is
+        // routed on; `net/http/cgi` cannot parse these and would answer 500.
+        foreach (['/%zz', '/%zz?a=1', '/a%00b', '//about'] as $path) {
+            foreach (['/about', '/upload'] as $rewrite) {
+                [$status, $headers, $body] = $this->request('GET', $path, requestHeaders: ['X-Guard-Rewrite: ' . $rewrite]);
+
+                self::assertSame(404, $status, $path . ' -> ' . $rewrite);
+                self::assertArrayNotHasKey('x-proxied-by', $headers, $path . ' -> ' . $rewrite);
+                self::assertSame('{"error":"Not Found"}', $body, $path . ' -> ' . $rewrite);
+            }
+        }
+    }
+
+    public function testAGuardRewriteKeepsTheClientsTargetForGo(): void
+    {
+        [$status, $headers, $body] = $this->request('GET', '/old?q=%zz', requestHeaders: ['X-Guard-Rewrite: /about']);
+
+        self::assertSame(200, $status, $body);
+        self::assertStringContainsString('About page', $body);
+        self::assertSame('go', $headers['x-proxied-by'] ?? null);
+    }
+
     public function testAGoProxySeesEverySpellingOfAProtectedPath(): void
     {
         self::assertSame(403, $this->request('GET', '/gone')[0]);
@@ -302,14 +390,20 @@ final class NativeHttpServerTest extends TestCase
     }
 
     /**
+     * @param list<string> $requestHeaders
+     *
      * @return array{int, array<string, string>, string}
      */
-    private function request(string $method, string $path, string $body = '', string $contentType = ''): array
+    private function request(string $method, string $path, string $body = '', string $contentType = '', array $requestHeaders = []): array
     {
+        if ('' !== $contentType) {
+            $requestHeaders[] = 'Content-Type: ' . $contentType;
+        }
+
         $context = \stream_context_create(['http' => [
             'method' => $method,
             'content' => $body,
-            'header' => '' !== $contentType ? 'Content-Type: ' . $contentType : '',
+            'header' => $requestHeaders,
             'ignore_errors' => true,
             'timeout' => 10,
             'proxy' => '',

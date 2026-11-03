@@ -147,14 +147,32 @@ final class FunctionPage
     }
 
     /**
-     * Re-render after a dispatched action that did not redirect. Resets all
-     * render-accumulated PageContext state (actions and scripts) so
-     * sub-components can re-register without hitting the duplicate-name guard
-     * and script tags are not emitted twice. Returns a fresh Element that
-     * reflects any state mutated by the action handler.
+     * The render before dispatch, run so actions registered while rendering
+     * exist when the request is dispatched. Marks what the factory left in
+     * the context first, so {@see renderAfterDispatch()} can go back to it.
+     * The caller renders the `Renderable` children of the tree it returns
+     * ({@see RenderableChildren}), with the layouts around it.
      *
-     * @internal called by AppRouter::renderPageInternal() in the double-render
-     *           path (pre-render → dispatch → renderAfterDispatch)
+     * @internal called by PageRenderer in the double-render path
+     *           (pre-render → dispatch → renderAfterDispatch)
+     */
+    public function renderToRegisterActions(): Element
+    {
+        $this->context->markRenderStart();
+
+        return $this->render();
+    }
+
+    /**
+     * Re-render after a dispatched action that did not redirect. Resets the
+     * PageContext to what the factory left in it (actions, scripts and
+     * metadata) so sub-components can re-register without hitting the
+     * duplicate-name guard, script tags are not emitted twice, and the
+     * factory's metadata stays. Returns a fresh Element that reflects any
+     * state mutated by the action handler.
+     *
+     * @internal called by PageRenderer in the double-render path
+     *           (pre-render → dispatch → renderAfterDispatch)
      */
     public function renderAfterDispatch(): Element
     {

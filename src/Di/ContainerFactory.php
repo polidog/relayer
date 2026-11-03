@@ -49,6 +49,7 @@ use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
 use RuntimeException;
 use Symfony\Component\Config\FileLocator;
+use Symfony\Component\DependencyInjection\Compiler\PassConfig;
 use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 use Symfony\Component\DependencyInjection\Definition;
@@ -373,6 +374,12 @@ final class ContainerFactory
         foreach ($container->getDefinitions() as $definition) {
             self::applyDefaults($definition);
         }
+
+        // Pages, layouts and error pages are built anew for every request
+        // (see NonSharedPagesPass), on the live and the dumped container.
+        // `src/Pages` is the app directory Relayer::boot() routes from; the
+        // pass reads the route files there to find the page classes.
+        $container->addCompilerPass(new NonSharedPagesPass($projectRoot . '/src/Pages'), PassConfig::TYPE_OPTIMIZE);
 
         // Two env-placeholder modes, picked by `$forDump`. A
         // `ContainerBuilder` used directly (dev boot, or the prod

@@ -4,21 +4,19 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Psx;
 
-use Closure;
-use Polidog\Rosanna\Defer\Deferred;
+use Polidog\Rosanna\Defer\DeclaresDefer;
 use Polidog\Rosanna\Defer\DeferredManifestCompiler;
 use Polidog\Rosanna\Defer\RosannaDefer;
 use Polidog\Rosanna\Psx\CompileCommand;
-use Polidog\Rosanna\Runtime\Element;
+use Polidog\Rosanna\Runtime\DefaultPsxArgumentResolver;
+use Polidog\Rosanna\Runtime\PsxArgumentResolver;
 use Polidog\Rosanna\Runtime\PsxRenderer;
 use Psr\Container\ContainerInterface;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
-use ReflectionFunction;
-use ReflectionMethod;
-use ReflectionNamedType;
 use RuntimeException;
 use SplFileInfo;
+use Throwable;
 
 /**
  * Compile reusable PSX components on demand and register the resulting
@@ -36,6 +34,11 @@ final class PsxComponentRegistrar
      * into `$app`. Returns the manifest path that was loaded, or null when
      * the components directory is absent — that's a valid configuration
      * for apps that don't use defer / shared PSX components yet.
+     *
+     * The components registered here resolve their own arguments, so
+     * {@see RosannaDefer::setArgumentResolver()} called afterwards does not
+     * reach them. With a container, arguments come from it; without one, pass
+     * `$argumentResolver` (Rosanna's default resolver otherwise).
      */
     public static function configure(
         RosannaDefer $app,
@@ -43,6 +46,7 @@ final class PsxComponentRegistrar
         string $cacheDir,
         bool $autoCompile,
         ?ContainerInterface $container = null,
+        ?PsxArgumentResolver $argumentResolver = null,
     ): ?string {
         if (!\is_dir($componentsDir)) {
             return null;
@@ -63,8 +67,20 @@ final class PsxComponentRegistrar
         }
 
         $app->loadComponentManifest($manifestPath);
-        if (null !== $container) {
-            self::registerContainerAwareComponents($app, $manifestPath, $container);
+        // Replaces Rosanna's own loading of the same entries, which requires
+        // each file again: a compile above may have executed it already, and a
+        // worker boots more than once. A closure's Defer declaration is not
+        // read here, but the deferred manifest loaded above has already
+        // registered its endpoint.
+        foreach (PsxRenderer::readArrayFile($manifestPath) as $fqcn => $entry) {
+            $file = \is_array($entry) ? ($entry['file'] ?? null) : null;
+            if (!\is_string($fqcn) || !\is_string($file)) {
+                continue;
+            }
+            $parameters = $entry['parameters'] ?? [];
+            $app->registerComponent($fqcn, null !== $container
+                ? new ContainerPsxComponent($fqcn, $file, $container)
+                : new ManifestPsxComponent($fqcn, $file, \is_array($parameters) ? $parameters : [], $argumentResolver ?? new DefaultPsxArgumentResolver()));
         }
 
         return $manifestPath;
@@ -115,7 +131,7 @@ final class PsxComponentRegistrar
         \ob_start();
 
         try {
-            $exitCode = (new CompileCommand((new DeferredManifestCompiler())->compile(...)))->run(
+            $exitCode = (new CompileCommand(self::writeDeferredManifest(...)))->run(
                 [$componentsDir, '--cache=' . $cacheDir],
                 $componentsDir,
             );
@@ -136,238 +152,50 @@ final class PsxComponentRegistrar
         );
     }
 
+    /**
+     * What {@see DeferredManifestCompiler::compile()} writes, for a compile
+     * that shares its process with rendering. That one requires each file to
+     * read its declaration, so rendering the file afterwards would run it twice.
+     *
+     * @param array<string, string> $components FQCN => source path
+     *
+     * @return list<string> the paths that changed
+     */
+    private static function writeDeferredManifest(array $components, string $cacheDir, string $buildId, bool $check): array
+    {
+        $entries = [];
+        foreach ($components as $fqcn => $source) {
+            $artifact = CompileCommand::cachePathFor($cacheDir, $source);
+            // Only files mentioning Defer are executed: this runs their top level.
+            if (!\str_contains((string) @\file_get_contents($artifact), 'Defer')) {
+                continue;
+            }
+
+            try {
+                $component = CompiledPsxFile::load($artifact);
+            } catch (Throwable $e) {
+                throw new RuntimeException("Error: failed to load {$artifact} ({$source}) while scanning for deferred components: {$e->getMessage()}", previous: $e);
+            }
+
+            $defer = $component instanceof DeclaresDefer ? $component->deferDeclaration() : null;
+            if (null === $defer) {
+                continue;
+            }
+            if (isset($entries[$defer->name])) {
+                throw new RuntimeException("Error: duplicate deferred component name '{$defer->name}'\n  registered by: {$entries[$defer->name]['component']}\n  also by:       {$fqcn}");
+            }
+            $entries[$defer->name] = ['component' => $fqcn, 'cacheControl' => $defer->cacheControl];
+        }
+        \ksort($entries, \SORT_STRING);
+
+        $path = $cacheDir . \DIRECTORY_SEPARATOR . PsxRenderer::DEFERRED_MANIFEST_FILENAME;
+        $manifest = '<?php return ' . \var_export([PsxRenderer::BUILD_ID_KEY => $buildId] + $entries, true) . ";\n";
+
+        return CompileCommand::writeIfChanged($path, $manifest, $check) ? [$path] : [];
+    }
+
     private static function versionPath(string $manifestPath): string
     {
         return $manifestPath . '.version';
-    }
-
-    private static function registerContainerAwareComponents(
-        RosannaDefer $app,
-        string $manifestPath,
-        ContainerInterface $container,
-    ): void {
-        $manifest = require $manifestPath;
-        if (!\is_array($manifest)) {
-            throw new RuntimeException("PSX manifest must return an array: {$manifestPath}");
-        }
-
-        foreach ($manifest as $fqcn => $entry) {
-            if (PsxRenderer::BUILD_ID_KEY === $fqcn) {
-                continue;
-            }
-
-            if (!\is_string($fqcn)) {
-                throw new RuntimeException("PSX manifest entries must use FQCN string keys: {$manifestPath}");
-            }
-
-            $parameterMetadata = null;
-            if (\is_string($entry)) {
-                $filePath = $entry;
-            } elseif (\is_array($entry) && isset($entry['file']) && \is_string($entry['file'])) {
-                $filePath = $entry['file'];
-
-                /** @var null|list<array<string, mixed>> $parameterMetadata */
-                $parameterMetadata = $entry['parameters'] ?? null;
-            } else {
-                throw new RuntimeException("PSX manifest entry for {$fqcn} is malformed in {$manifestPath}");
-            }
-
-            $app->registerComponent(
-                $fqcn,
-                self::makeContainerAwareComponent($filePath, $container, $parameterMetadata),
-            );
-        }
-    }
-
-    /**
-     * @param null|list<array<string, mixed>> $parameterMetadata
-     *
-     * @return Closure(array<string, mixed>): mixed
-     */
-    private static function makeContainerAwareComponent(
-        string $compiledPath,
-        ContainerInterface $container,
-        ?array $parameterMetadata,
-    ): Closure {
-        $invoke = null;
-
-        /** @param array<string, mixed> $props */
-        return static function (array $props = []) use (&$invoke, $compiledPath, $container, $parameterMetadata): mixed {
-            if (null === $invoke) {
-                if (!\is_file($compiledPath) || !\is_readable($compiledPath)) {
-                    throw new RuntimeException(
-                        "Compiled PSX file not found: {$compiledPath}. "
-                        . 'Run `vendor/bin/rosanna-defer compile` to regenerate.',
-                    );
-                }
-
-                $loaded = require $compiledPath;
-                if (!\is_callable($loaded)) {
-                    throw new RuntimeException("PSX file did not return a callable: {$compiledPath}");
-                }
-
-                if ($loaded instanceof Deferred) {
-                    $loaded = self::wrapDeferred($loaded, $container, $parameterMetadata);
-                }
-
-                $invoke = self::makeContainerAwareInvoker($loaded, $container, $compiledPath, $parameterMetadata);
-            }
-
-            return $invoke($props);
-        };
-    }
-
-    /**
-     * @param null|list<array<string, mixed>> $parameterMetadata
-     */
-    private static function wrapDeferred(
-        Deferred $component,
-        ContainerInterface $container,
-        ?array $parameterMetadata,
-    ): Deferred {
-        $invokeInner = self::makeContainerAwareInvoker($component->inner, $container, 'Deferred::inner', $parameterMetadata);
-
-        return new Deferred(
-            /** @param array<string, mixed> $props */
-            static fn (array $props): Element => $invokeInner($props),
-            $component->defer,
-        );
-    }
-
-    /**
-     * @param null|list<array<string, mixed>> $parameterMetadata
-     *
-     * @return Closure(array<array-key, mixed>): Element
-     */
-    private static function makeContainerAwareInvoker(
-        callable $component,
-        ContainerInterface $container,
-        string $source,
-        ?array $parameterMetadata,
-    ): Closure {
-        $argumentResolvers = null !== $parameterMetadata
-            ? self::buildArgumentResolversFromMetadata($parameterMetadata, $container)
-            : null;
-
-        if (null === $argumentResolvers) {
-            if ($component instanceof Closure || (\is_string($component) && !\str_contains($component, '::'))) {
-                $reflection = new ReflectionFunction($component);
-            } elseif (\is_array($component)) {
-                $reflection = new ReflectionMethod($component[0], $component[1]);
-            } elseif (\is_string($component)) {
-                $reflection = new ReflectionMethod($component);
-            } elseif (\is_object($component)) {
-                $reflection = new ReflectionMethod($component, '__invoke');
-            } else {
-                throw new RuntimeException("Unsupported PSX component callable in {$source}");
-            }
-
-            $argumentResolvers = self::buildArgumentResolvers($reflection, $container, $source);
-        }
-
-        return static function (array $props = []) use ($component, $argumentResolvers, $source): Element {
-            $args = [];
-            foreach ($argumentResolvers as $resolve) {
-                $args[] = $resolve($props);
-            }
-
-            $result = $component(...$args);
-            if (!$result instanceof Element) {
-                throw new RuntimeException("PSX component did not return an Element: {$source}");
-            }
-
-            return $result;
-        };
-    }
-
-    /**
-     * @param list<array<string, mixed>> $parameters
-     *
-     * @return null|list<Closure(array<array-key, mixed>): mixed>
-     */
-    private static function buildArgumentResolversFromMetadata(
-        array $parameters,
-        ContainerInterface $container,
-    ): ?array {
-        $resolvers = [];
-        foreach ($parameters as $parameter) {
-            $kind = $parameter['kind'] ?? null;
-            if ('props' === $kind) {
-                $resolvers[] = static fn (array $props): array => $props;
-
-                continue;
-            }
-
-            if ('service' === $kind && isset($parameter['service']) && \is_string($parameter['service'])) {
-                $service = $parameter['service'];
-                if (!$container->has($service)) {
-                    return null;
-                }
-                $resolvers[] = static fn (array $props): mixed => $container->get($service);
-
-                continue;
-            }
-
-            if ('null' === $kind) {
-                $resolvers[] = static fn (array $props): null => null;
-
-                continue;
-            }
-
-            return null;
-        }
-
-        return $resolvers;
-    }
-
-    /**
-     * @return list<Closure(array<array-key, mixed>): mixed>
-     */
-    private static function buildArgumentResolvers(
-        ReflectionFunction|ReflectionMethod $reflection,
-        ContainerInterface $container,
-        string $source,
-    ): array {
-        $resolvers = [];
-        foreach ($reflection->getParameters() as $index => $parameter) {
-            $type = $parameter->getType();
-            if (0 === $index
-                && (!$type instanceof ReflectionNamedType || 'array' === $type->getName())
-            ) {
-                $resolvers[] = static fn (array $props): array => $props;
-
-                continue;
-            }
-
-            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
-                $typeName = $type->getName();
-                if ($container->has($typeName)) {
-                    $resolvers[] = static fn (array $props): mixed => $container->get($typeName);
-
-                    continue;
-                }
-            }
-
-            if ($parameter->isDefaultValueAvailable()) {
-                $defaultValue = $parameter->getDefaultValue();
-                $resolvers[] = static fn (array $props): mixed => $defaultValue;
-
-                continue;
-            }
-
-            if ($parameter->allowsNull()) {
-                $resolvers[] = static fn (array $props): null => null;
-
-                continue;
-            }
-
-            throw new RuntimeException(\sprintf(
-                'Cannot autowire PSX component parameter $%s of %s: expected first array $props parameter, container service, default value, or nullable parameter.',
-                $parameter->getName(),
-                $source,
-            ));
-        }
-
-        return $resolvers;
     }
 }

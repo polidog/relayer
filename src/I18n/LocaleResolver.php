@@ -6,6 +6,7 @@ namespace Polidog\Relayer\I18n;
 
 use Polidog\Relayer\Auth\SessionStorage;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Http\RequestPath;
 
 /**
  * Resolves the active locale for a request from, in descending priority:
@@ -47,7 +48,9 @@ final class LocaleResolver
 
     public function resolve(Request $request): ResolvedLocale
     {
-        if ($this->pathPrefix) {
+        // An unroutable path keeps every byte: stripping could only hand the
+        // router something it would route (`//ja/admin` → `/admin`).
+        if ($this->pathPrefix && null !== RequestPath::forMatching($request->path)) {
             $segments = \explode('/', \ltrim($request->path, '/'), 2);
             $first = $segments[0];
             if ('' !== $first && $this->isSupported($first)) {

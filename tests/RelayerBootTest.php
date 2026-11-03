@@ -54,6 +54,26 @@ final class RelayerBootTest extends TestCase
         (new ReflectionProperty(Relayer::class, 'container'))->setValue(null, null);
     }
 
+    public function testADotEnvWithoutAppEnvIsProduction(): void
+    {
+        \file_put_contents($this->projectRoot . '/.env', "FRAMEWORK_TEST_VALUE=hello\n");
+
+        $router = Relayer::boot($this->projectRoot);
+
+        self::assertFalse((new ReflectionProperty(AppRouter::class, 'debug'))->getValue($router));
+        self::assertFalse((new ReflectionProperty(AppRouter::class, 'autoCompilePsx'))->getValue($router));
+    }
+
+    public function testDotEnvLocalCanTurnOnDev(): void
+    {
+        \file_put_contents($this->projectRoot . '/.env', "FRAMEWORK_TEST_VALUE=hello\n");
+        \file_put_contents($this->projectRoot . '/.env.local', "APP_ENV=dev\n");
+
+        $router = Relayer::boot($this->projectRoot);
+
+        self::assertTrue((new ReflectionProperty(AppRouter::class, 'debug'))->getValue($router));
+    }
+
     public function testBootReturnsAppRouterAndLoadsEnv(): void
     {
         $router = Relayer::boot($this->projectRoot);

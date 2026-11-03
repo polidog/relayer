@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Polidog\Relayer\Db;
 
 use Polidog\Relayer\Profiler\Profiler;
+use Polidog\Relayer\RequestScopedInstances;
 
 /**
  * Request-scoped read memoization for {@see Database}.
@@ -42,7 +43,11 @@ final class CachingDatabase implements Database
     public function __construct(
         private readonly Database $inner,
         private readonly Profiler $profiler,
-    ) {}
+    ) {
+        RequestScopedInstances::track($this, static function (self $db): void {
+            $db->flush();
+        });
+    }
 
     public function fetchAll(string $sql, array $params = []): array
     {

@@ -77,7 +77,7 @@ php -S 127.0.0.1:8000 -t public
 
 `composer install` (rather than `dump-autoload`) so the `App\` autoload
 *and* the publish scripts `init` just added both apply — the latter emits
-`public/rosanna-defer.js`, which the default document references.
+`public/rosanna-defer.js`, which the default document references on every page.
 
 It is idempotent and non-destructive:
 
@@ -86,7 +86,11 @@ It is idempotent and non-destructive:
 - your existing `composer.json` is patched **additively** — it adds the `App\`
   PSR-4 autoload, the rosanna-defer asset-publish scripts, and an
   `extra.relayer.structure_version` marker, and leaves everything else
-  untouched.
+  untouched;
+- `.env.local` (`APP_ENV=dev`) is written only into a new project: one with
+  no `.env`, no marker, and none of `src/Pages`, `src/AppConfigurator.php`,
+  `public/index.php` or `public/worker.php`. An existing app keeps its
+  environment, and `init` tells you how to add dev mode yourself.
 
 The `structure_version` marker records which skeleton shape the project was
 generated against, so `relayer upgrade` (below) can migrate it forward.
@@ -190,6 +194,22 @@ $router->addCssPath('/assets/style.css');
 $router->run();
 ```
 
+The default document loads `rosanna-defer.js` on every page. To load it only on
+pages that rendered a defer placeholder, opt in:
+
+```php
+use Polidog\Relayer\Router\Document\HtmlDocument;
+
+$router = Relayer::boot(__DIR__ . '/..');
+$router->setDocument(HtmlDocument::create()->loadClientScriptOnlyWithDefer());
+$router->run();
+```
+
+A page without a placeholder then has no `window.Rosanna`. A logout form on such
+a page cannot call `clearDeferCache()`, so a user-specific `localCache` fragment
+survives logout and a shared device can show it to the next user. Use the option
+only if no page without a placeholder needs `window.Rosanna`.
+
 ## Environment Variables
 
 Put a `.env` in the project root:
@@ -228,8 +248,9 @@ the committed counterparts.
 
 `APP_ENV=dev` (or `development`) enables PSX auto-compilation. Any other value
 treats the app as production, as does `APP_ENV` being set nowhere: neither in
-the real environment nor in any of these files. The scaffolded `.env` sets
-`APP_ENV=dev`, so unsetting the real variable is not enough to leave dev mode.
+the real environment nor in any of these files. For a new project, `relayer init`
+writes `APP_ENV=dev` to the gitignored `.env.local`, so a deploy that forgets it runs
+as production; after a fresh clone, run `echo APP_ENV=dev >> .env.local`.
 In production, pre-compile with `vendor/bin/rosanna-defer compile src/Pages` during
 deploy.
 
@@ -292,8 +313,8 @@ vendor/bin/relayer container:compile                  # DI container -> PHP
 
 Then set `APP_ENV=prod`, in `.env.local` or as a real environment variable,
 and run with OPcache `validate_timestamps=0` (the scaffolded `php.ini` carries
-the production block). Leaving `APP_ENV` unset does not select production: the
-scaffolded `.env` sets `APP_ENV=dev`, which exposes `/_profiler`. Each step is
+the production block). Make sure no `.env.local` with `APP_ENV=dev` reaches the
+server: it exposes `/_profiler`. Each step is
 presence-gated, so a missing artifact degrades to the live path rather
 than breaking.
 
@@ -1214,6 +1235,57 @@ The handler receives the POST body as its first argument (with
 `_rosanna_action` / `_rosanna_csrf` stripped). Action names must be unique
 per page — registering the same name twice throws.
 
+Actions can also be registered outside the factory, e.g. from a
+`Renderable` child's `render()` via `PageContext::current()->action()` —
+a child of the page or of a layout. On a POST that submits such an action,
+the render closure, the layouts around it and every `Renderable` child in
+the tree (inside arrays, nested elements and defer fallbacks too) render
+once before dispatch so the action is registered, and again after dispatch
+for the response. A GET, or a POST to an action the factory registered,
+renders once. Metadata and scripts the factory declared are kept for the
+response; ones declared while rendering are declared again by the second
+render, not twice.
+
+The response render runs the render closure again, so its children are new
+objects built with the props of that render (a list the action added to
+shows the new item). State the action kept on the child's `$this` is
+carried over: every property the action **changed** on a child of the
+first render is copied onto the child of the same class at the same place
+in the new tree before it renders. Readonly properties count as props and
+are never copied, and a property the action did not change keeps the new
+child's value. So a form child can hold its own validation errors:
+
+```php
+final class ContactForm implements Renderable
+{
+    private array $errors = [];
+
+    public function __construct(private readonly string $title) {}
+
+    public function render(): Element
+    {
+        $send = PageContext::current()->action('send', function (array $form): void {
+            $result = Validator::object([/* ... */])->safeParse($form);
+            if (!$result->success) {
+                $this->errors = $result->errors; // shown in the response
+            }
+        });
+
+        return <form action={$send}>{/* $this->title, $this->errors ... */}</form>;
+    }
+}
+```
+
+"The same place" is the position in the tree, as React keeps state by type
+and position: if the action changes which children come before the form
+(say, a new list item rendered as its own child ahead of it), the state
+lands on whichever child of that class is now there. Assign the property
+(`$this->errors = ...`, `$this->errors[] = ...`) rather than mutating an
+object it holds — a change inside such an object is not detected. State the
+page itself needs, or state that must survive such a reshuffle, belongs in
+the factory, captured by reference (see
+[Re-rendering after a failed submit](#re-rendering-after-a-failed-submit)).
+
 ### Binding arguments
 
 A third `$args` argument binds values into the handler. They are passed
@@ -1394,6 +1466,15 @@ It throws `\LogicException` if called before `boot()`. For regular services
 `AppConfigurator` — this accessor is an escape hatch specifically for the
 PSX component context where closures make injection impractical.
 
+A deferred component that throws still answers its `/_defer/{name}` fetch with
+a bare `500`, but the failure now also goes to the container's
+`LoggerInterface` (and the dev profiler), not only to PHP's error log.
+
+Components get their arguments from the container, so
+`RosannaDefer::setArgumentResolver()` does not apply to them. Code that calls
+`PsxComponentRegistrar::configure()` without a container can pass its own
+resolver as `argumentResolver:`.
+
 ### Autowire defaults
 
 The framework iterates every `Definition` you register and:
@@ -1438,6 +1519,24 @@ final class UsersPage extends PageComponent
 
 You only need to register a Page in `AppConfigurator` if you want non-default
 behavior (e.g. service tags, decorators, factory construction).
+
+A registered page, layout or error page is still built anew for every
+request: the container makes a non-shared service of each class declared in a
+`page`, `layout` or `error` file under `src/Pages` (including one that only
+implements `Renderable`) and of each class that extends `PageComponent` or
+`ErrorPageComponent`, or implements `LayoutInterface`, even if you call
+`setShared(true)` on it, and the compiled container (`relayer
+container:compile`) does the same. Other `Renderable` services, such as
+components, stay shared. So an object the page creates in its constructor (a
+form, a DTO) never carries one visitor's state to the next on a long-running
+worker, while the services injected into it are still the container's shared
+ones. The router renders such a new object as it is, so a page or layout
+does not have to be cloneable.
+
+An object handed to the container with `set()` cannot be rebuilt; the router
+renders a shallow clone of it, so objects it holds are shared between
+requests, and a class that cannot be cloned (a `private __clone()`) fails the
+request with a `RuntimeException`. Don't register pages that way.
 
 ## Accessing the HTTP Request
 
@@ -2024,6 +2123,23 @@ short-circuited:
 ETag comparison follows the weak comparison rules of RFC 7232 §2.3.2, so
 `W/"v1"` and `"v1"` match each other and `*` matches any tag.
 
+A request with a session cookie or an `Authorization` header always renders and
+never gets a 304, and so does one that has started a session by the time the
+policy is evaluated (a `middleware.php` that logged the visitor in from a
+remember-me cookie), even if it closed the session again with
+`session_write_close()` before calling `$next()`. A validator says nothing
+about who is asking, so a browser that cached the page anonymously would
+otherwise keep that copy after logging in.
+
+A response to a request carrying an `Authorization` header is never left
+storable by a shared cache either: any policy other than `private` or `noStore`
+goes out as `Cache-Control: private, no-store`, on class and function pages
+alike. This also covers a header a middleware added with
+`$request->withHeader()` and the `REDIRECT_HTTP_AUTHORIZATION` copy Apache/CGI
+hands over, which `Request` reads as `authorization` when the real header is
+missing. A session cookie on its own does not count: a page that never touches
+the session keeps its declared policy (see the session note below).
+
 ### Example
 
 ```php
@@ -2173,8 +2289,11 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   sets `session_cache_limiter('')` once one applies. Pages without a policy
   keep PHP's `no-store` when they use a session.
 - A response that used a session is never left storable by a shared cache. If
-  a session is active when headers go out, any policy other than `private` or
-  `noStore` is replaced with `Cache-Control: private, no-store`, so a logged-in
+  the request opened a session at any point, by `session_start()` from
+  anywhere (started or resumed from the visitor's cookie, and even if it was
+  closed again with `session_write_close()` before the page ran), any policy
+  other than `private` or `noStore` is replaced with
+  `Cache-Control: private, no-store`, so a logged-in
   visitor gets an uncached copy of a `#[Cache(public: true)]` page whose layout
   reads `$auth->user()`, while anonymous visitors still get the declared
   policy. A page that wants browser caching for logged-in users declares
@@ -2828,6 +2947,42 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
 5. Precompile with `vendor/bin/relayer compile`. `vendor/bin/usephp compile`
    no longer exists, and `vendor/bin/rosanna compile` does not write the
    deferred manifest Relayer needs.
+
+6. The committed `.env` no longer sets `APP_ENV=dev`, and a `.env` without
+   `APP_ENV` now means production. When `relayer upgrade` rewrites an untouched
+   `.env`, it moves `APP_ENV=dev` to the gitignored `.env.local`: it creates the
+   file, appends the line if the file does not set `APP_ENV`, and leaves a file
+   that does set it alone. An edited `.env` stays as it is and no `.env.local` is
+   written, whatever it says, so check `APP_ENV` yourself. `relayer init` writes
+   `.env.local` only in a new project. Other checkouts need
+   `echo APP_ENV=dev >> .env.local`. Both commands first make sure `.gitignore`
+   excludes `.env.local`, and write nothing if they cannot. If Git tracks
+   `.env.local`, `.gitignore` does not help: `upgrade` then leaves `.env` and
+   `.env.local` as they are and fails (`init` skips the file). Run
+   `git rm --cached .env.local`, commit, and re-run `relayer upgrade`.
+7. The `<div data-rosanna="…">` that wrapped the page is gone. Fix any CSS or JS
+   that relies on it.
+8. The scaffolded `Caddyfile` now really sends requests to `public/worker.php`
+   (the old worker block was never reached), so `relayer upgrade` turns worker
+   mode on if you have not edited the file. It is for production: the single
+   binary or `frankenphp run --config Caddyfile`. Develop with
+   `php -S 127.0.0.1:8000 -t public` or `docker compose up --build`, which serve
+   each request from scratch and do not read it. In a worker, container
+   services live across requests, so your own services must not keep
+   per-request state in properties. Clear what they do hold after each request
+   with `RequestLifecycle::onReset()` (one callback per name; the same name
+   replaces it):
+
+   ```php
+   use Polidog\Rosanna\Runtime\RequestLifecycle;
+
+   RequestLifecycle::onReset(self::class, function (): void {
+       $this->items = [];
+   });
+   ```
+
+   To stay in classic (per-request) mode, remove the `index` and `worker` lines
+   from the `Caddyfile`.
 
 Forms rendered by the previous version stop working when you deploy, because
 the field names and the session keys changed. Purge your CDN at deploy time so

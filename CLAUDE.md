@@ -48,6 +48,7 @@ The shipped CLI (`bin/relayer`, for *consumers* of the framework):
 | `Relayer`, `AppConfigurator`, `InjectorContainer` | boot entrypoint, app config hook, PSR-11 adapter |
 | `Di`                 | `ContainerFactory` — all DI container wiring                 |
 | `Router`             | file-based router, route groups, compiled routes, API route handlers |
+| `Router\Dispatch`    | per-request pipeline: `RequestDispatch`, page loading and rendering, error responses, API routes |
 | `Http`               | `Request`/`Response`, `#[Cache]`, ETag store, CORS          |
 | `Auth`               | session auth (`#[Auth]`, `UserProvider`, hashing)           |
 | `Auth\Token`         | bearer-token auth — Firebase/Cognito JWKS verification      |

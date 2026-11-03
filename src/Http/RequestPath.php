@@ -15,7 +15,9 @@ namespace Polidog\Relayer\Http;
  * receive — a malformed escape, a control character (`%00`, and `%0A`, which
  * `$` in a route regex would otherwise accept at the end of a path), invalid
  * UTF-8 (overlong `%C0%AE` included) or a dot-segment in any spelling
- * (`..`, `%2e%2e`, `..%2Fetc`, `..%5Cetc`). Such a path matches no route.
+ * (`..`, `%2e%2e`, `..%2Fetc`, `..%5Cetc`). So is a leading `//`: treating
+ * `//admin` as `/admin` would route past a middleware comparing against
+ * `/admin`. Such a path matches no route.
  */
 final class RequestPath
 {
@@ -28,8 +30,8 @@ final class RequestPath
 
     /**
      * Characters a canonical segment keeps literal; everything else is
-     * escaped. `:` is left out on purpose: `parse_url()` — which the router
-     * runs on this form — returns false for a path like `/a:80`.
+     * escaped. `:` is left out so that a canonical path is safe to hand to
+     * whatever runs `parse_url()` on it, which returns false for `/a:80`.
      */
     private const CANONICAL_ESCAPE = '/[^A-Za-z0-9\-._~!$&\'()*+,;=@]/';
 
@@ -100,6 +102,10 @@ final class RequestPath
      */
     private static function decodeSegments(string $path): ?array
     {
+        if (\str_starts_with($path, '//')) {
+            return null;
+        }
+
         $decoded = [];
         foreach (\explode('/', $path) as $segment) {
             $value = self::decodeSegment($segment);

@@ -4,9 +4,13 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Psx;
 
+use LogicException;
+use PHPUnit\Framework\Attributes\PreserveGlobalState;
+use PHPUnit\Framework\Attributes\RunInSeparateProcess;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Psx\PsxComponentRegistrar;
 use Polidog\Relayer\Tests\Fixtures\PlainService;
+use Polidog\Rosanna\Defer\DeferRequest;
 use Polidog\Rosanna\Defer\RosannaDefer;
 use Polidog\Rosanna\Psx\CompileCommand;
 use Polidog\Rosanna\Runtime\Element;
@@ -216,6 +220,124 @@ final class PsxComponentRegistrarTest extends TestCase
 
         self::assertInstanceOf(Element::class, $element);
         self::assertSame(['hello:' . PlainService::class], $element->children);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testWithoutAContainerADeferredFileDeclaringAFunctionSurvivesTheCompile(): void
+    {
+        // Compiling executes the file to read its Defer declaration, and the
+        // endpoint then renders it in the same process.
+        $this->writeComponent('Late', 'function helper(): string { return "h"; }
+            return deferred(fn(array $props) => <b>{helper()}:{$props["q"]}</b>, new Defer(name: "late"));');
+
+        $response = $this->configureWithoutContainer()->handleDeferred(new DeferRequest('GET', '/_defer/late', ['q' => 'Z']));
+
+        self::assertNotNull($response);
+        self::assertSame(200, $response->status);
+        self::assertSame('<b>h:Z</b>', $response->body);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testWithoutAContainerADeferredFileDeclaringAClassIsAPlaceholderOnThePage(): void
+    {
+        $this->writeComponent('Late', 'final class Helper { public const string NAME = "h"; }
+            return deferred(fn(array $props) => <b>{Helper::NAME}</b>, new Defer(name: "late"));');
+
+        $html = self::renderHtml($this->configureWithoutContainer(), 'App\Components\Late');
+
+        self::assertStringContainsString('/_defer/late', $html);
+    }
+
+    #[RunInSeparateProcess]
+    #[PreserveGlobalState(false)]
+    public function testWithoutAContainerAFileDeclaringAFunctionSurvivesASecondBoot(): void
+    {
+        $this->writeComponent('Thing', 'function helper(): string { return "h"; }
+            return fn(array $props) => <p>{helper()}</p>;');
+
+        self::assertSame('<p>h</p>', self::renderHtml($this->configureWithoutContainer(), 'App\Components\Thing'));
+        self::assertSame('<p>h</p>', self::renderHtml($this->configureWithoutContainer(autoCompile: false), 'App\Components\Thing'));
+    }
+
+    public function testWithoutAContainerADeferredFileRunsOnceAcrossTheCompileThePageAndTheEndpoint(): void
+    {
+        $log = $this->workDir . '/executions.log';
+        $this->writeComponent('Late', '\file_put_contents(' . \var_export($log, true) . ', "x", \FILE_APPEND);
+            return deferred(fn(array $props) => <b>late</b>, new Defer(name: "late"));');
+
+        $app = $this->configureWithoutContainer();
+        self::renderHtml($app, 'App\Components\Late');
+        $response = $app->handleDeferred(new DeferRequest('GET', '/_defer/late'));
+
+        self::assertNotNull($response);
+        self::assertSame('<b>late</b>', $response->body);
+        self::assertSame('x', \file_get_contents($log));
+    }
+
+    public function testWithoutAContainerAComponentGetsItsPropsDefaultsAndNulls(): void
+    {
+        $this->writeComponent('Thing', 'return fn(array $props, ?int $n, string $d = "dflt") => <p>{$props["label"]}|{$n === null ? "none" : "some"}|{$d}</p>;');
+
+        self::assertSame('<p>hi|none|dflt</p>', self::renderHtml($this->configureWithoutContainer(), 'App\Components\Thing', ['label' => 'hi']));
+    }
+
+    public function testWithoutAContainerADeferredComponentGetsItsPropsAndNullsAtTheEndpoint(): void
+    {
+        $this->writeComponent('Late', 'return deferred(fn(array $props, ?int $n, string $d = "dflt") => <b>{$props["q"]}|{$n === null ? "none" : "some"}|{$d}</b>, new Defer(name: "late"));');
+
+        $response = $this->configureWithoutContainer()->handleDeferred(new DeferRequest('GET', '/_defer/late', ['q' => 'Z']));
+
+        self::assertNotNull($response);
+        self::assertSame('<b>Z|none|dflt</b>', $response->body);
+    }
+
+    public function testWithoutAContainerAServiceParameterCannotBeResolved(): void
+    {
+        $this->writeComponent('Thing', 'return fn(array $props, \Countable $c) => <p>x</p>;');
+
+        $this->expectException(LogicException::class);
+        $this->expectExceptionMessage('parameter $c cannot be resolved without a PsxArgumentResolver');
+
+        self::renderHtml($this->configureWithoutContainer(), 'App\Components\Thing');
+    }
+
+    private function writeComponent(string $name, string $body): void
+    {
+        $dir = $this->workDir . '/Components';
+        if (!\is_dir($dir)) {
+            \mkdir($dir, 0o777, true);
+        }
+        \file_put_contents($dir . "/{$name}.psx", <<<PSX
+            <?php
+            namespace App\\Components;
+            use Polidog\\Rosanna\\Defer\\Defer;
+            use function Polidog\\Rosanna\\Defer\\deferred;
+            {$body}
+
+            PSX);
+    }
+
+    private function configureWithoutContainer(bool $autoCompile = true): RosannaDefer
+    {
+        $app = new RosannaDefer();
+        PsxComponentRegistrar::configure(
+            $app,
+            componentsDir: $this->workDir . '/Components',
+            cacheDir: $this->workDir . '/cache',
+            autoCompile: $autoCompile,
+        );
+
+        return $app;
+    }
+
+    /**
+     * @param array<string, mixed> $props
+     */
+    private static function renderHtml(RosannaDefer $app, string $fqcn, array $props = []): string
+    {
+        return $app->renderElement(self::renderComponent($app, $fqcn, $props));
     }
 
     /**

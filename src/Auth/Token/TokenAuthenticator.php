@@ -8,6 +8,8 @@ use LogicException;
 use Polidog\Relayer\Auth\Authenticator;
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\RequestScopedInstances;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
 
 /**
  * Stateless {@see AuthenticatorInterface}: every request re-derives the
@@ -25,8 +27,8 @@ use Polidog\Relayer\Auth\Identity;
  * to mint a normal cookie session.
  *
  * The verified principal is memoized for the lifetime of the instance,
- * which the container scopes to one request, so a page that checks auth
- * several times verifies the JWT once.
+ * which ends with the request ({@see RequestLifecycle}), so a page that
+ * checks auth several times verifies the JWT once.
  */
 final class TokenAuthenticator implements AuthenticatorInterface
 {
@@ -37,7 +39,12 @@ final class TokenAuthenticator implements AuthenticatorInterface
     public function __construct(
         private readonly TokenVerifier $verifier,
         private readonly AuthorizationHeader $header,
-    ) {}
+    ) {
+        RequestScopedInstances::track($this, static function (self $auth): void {
+            $auth->cached = null;
+            $auth->resolved = false;
+        });
+    }
 
     /**
      * Unsupported: bearer auth has no identifier+password handshake.

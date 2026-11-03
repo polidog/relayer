@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Tests\Router\Native;
 
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Native\CgiRunner;
@@ -213,6 +214,119 @@ final class NativeProxyTest extends TestCase
         self::assertSame('continued', $this->invoke($prod, new Request('GET', '/'), static function (): void {
             echo 'continued';
         }));
+    }
+
+    #[DataProvider('provideAnUnroutablePathIsAFramework404WithNothingElseRunningCases')]
+    public function testAnUnroutablePathIsAFramework404WithNothingElseRunning(string $path): void
+    {
+        $marker = $this->workDir . '/proxy-ran';
+        $proxy = $this->proxy("touch '{$marker}'\nprintf 'Relayer-Next: 1\\r\\n\\r\\n'");
+
+        $nextCalled = false;
+        $out = $this->invoke($proxy, new Request('GET', $path), static function () use (&$nextCalled): void {
+            $nextCalled = true;
+        });
+
+        self::assertFalse($nextCalled, 'no application code may run for an unroutable path');
+        self::assertFileDoesNotExist($marker, 'Go is not started for an unroutable path');
+        self::assertSame(404, \http_response_code());
+        self::assertSame('{"error":"Not Found"}', $out);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnUnroutablePathIsAFramework404WithNothingElseRunningCases(): iterable
+    {
+        yield 'malformed escape' => ['/%zz'];
+
+        yield 'NUL' => ['/a%00b'];
+
+        yield 'dot-dot' => ['/a/%2e%2e/b'];
+
+        yield 'leading double slash' => ['//admin'];
+    }
+
+    /**
+     * A guard (or anything else before the proxy) may route the request on
+     * another path, but Go still gets the client's target as `REQUEST_URI`,
+     * so that target has to be one Go can take too.
+     */
+    #[DataProvider('provideAnUnroutableTargetBehindARewrittenPathIsAFramework404Cases')]
+    public function testAnUnroutableTargetBehindARewrittenPathIsAFramework404(string $uri): void
+    {
+        $marker = $this->workDir . '/proxy-ran';
+        $proxy = $this->proxy("touch '{$marker}'\nprintf 'Relayer-Next: 1\\r\\n\\r\\n'");
+
+        $nextCalled = false;
+        $request = new Request('GET', $uri, uri: $uri)->withPath('/safe');
+        $out = $this->invoke($proxy, $request, static function () use (&$nextCalled): void {
+            $nextCalled = true;
+        });
+
+        self::assertFalse($nextCalled, 'no application code may run for an unroutable target');
+        self::assertFileDoesNotExist($marker, 'Go is not started for an unroutable target');
+        self::assertSame(404, \http_response_code());
+        self::assertSame('{"error":"Not Found"}', $out);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function provideAnUnroutableTargetBehindARewrittenPathIsAFramework404Cases(): iterable
+    {
+        yield 'malformed escape' => ['/%zz'];
+
+        yield 'malformed escape with a query' => ['/%zz?a=1'];
+
+        yield 'NUL' => ['/a%00b'];
+
+        yield 'dot-dot' => ['/a/%2e%2e/b'];
+
+        yield 'leading double slash' => ['//admin'];
+
+        yield 'raw control character in the query' => ["/ok?a=\x01"];
+
+        yield 'malformed escape in the fragment' => ['/ok#%zz'];
+
+        yield 'malformed escape in an absolute-form target' => ['http://example.com/%zz'];
+
+        yield 'asterisk-form' => ['*'];
+    }
+
+    public function testARewrittenPathKeepsTheClientsTargetInRequestUri(): void
+    {
+        // A query Go's url.Parse keeps as raw text, malformed escape or not.
+        $proxy = $this->proxy("printf 'Content-Type: text/plain\\r\\n\\r\\n%s %s' \"\$REQUEST_URI\" \"\$PATH_INFO\"");
+
+        $request = new Request('GET', '/old', uri: '/old?q=%zz')->withPath('/new');
+
+        self::assertSame('/old?q=%zz /new', $this->invoke($proxy, $request, static function (): void {}));
+    }
+
+    public function testAnAbsoluteFormTargetReachesGoInOriginForm(): void
+    {
+        // Go prefixes the Host itself; `http://hosthttp://…` would not parse.
+        $proxy = $this->proxy("printf 'Content-Type: text/plain\\r\\n\\r\\n%s' \"\$REQUEST_URI\"");
+
+        $request = new Request('GET', '/old', uri: 'http://example.com/old?q=1', host: 'example.com');
+
+        self::assertSame('/old?q=1', $this->invoke($proxy, $request, static function (): void {}));
+    }
+
+    public function testAnUnroutablePathIsAFramework404EvenWhenTheMiddlewareIsNotBuilt(): void
+    {
+        $proxy = new NativeProxy(
+            $this->workDir . '/not-built',
+            $this->workDir . '/middleware.go',
+            new CgiRunner(),
+            static fn (): ?string => null,
+        );
+
+        $out = $this->invoke($proxy, new Request('GET', '/%zz'), static function (): void {});
+
+        self::assertSame(404, \http_response_code());
+        self::assertSame('{"error":"Not Found"}', $out);
     }
 
     private function proxy(string $scriptBody, ?string $matchedPattern = null): NativeProxy

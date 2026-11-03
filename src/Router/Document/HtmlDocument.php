@@ -9,6 +9,8 @@ final class HtmlDocument implements DocumentInterface
     private string $lang = 'en';
     private string $title = 'Relayer App';
     private string $jsPath = '/rosanna-defer.js';
+    private bool $clientScriptNeeded = true;
+    private bool $loadClientScriptOnlyWithDefer = false;
 
     /** @var array<int, string> */
     private array $cssPaths = [];
@@ -66,6 +68,32 @@ final class HtmlDocument implements DocumentInterface
         return $this;
     }
 
+    /**
+     * Load the client script only on pages that rendered a defer placeholder.
+     *
+     * Opt-in because such a page has no `window.Rosanna`: a logout form on it
+     * cannot call `clearDeferCache()`, so a user-specific `localCache` fragment
+     * survives logout and a shared device can show it to the next user. Use
+     * this only if no page without a placeholder needs `window.Rosanna`.
+     */
+    public function loadClientScriptOnlyWithDefer(): self
+    {
+        $this->loadClientScriptOnlyWithDefer = true;
+
+        return $this;
+    }
+
+    /**
+     * @internal the page renderer reports whether this page has a placeholder,
+     *           which matters only under {@see loadClientScriptOnlyWithDefer()}
+     */
+    public function setClientScriptNeeded(bool $needed): self
+    {
+        $this->clientScriptNeeded = $needed;
+
+        return $this;
+    }
+
     public function addCssPath(string $path): self
     {
         $this->cssPaths[] = $path;
@@ -101,7 +129,7 @@ final class HtmlDocument implements DocumentInterface
         $title = $this->getTitle();
         $escapedTitle = \htmlspecialchars($title, \ENT_QUOTES, 'UTF-8');
         $escapedLang = \htmlspecialchars($this->lang, \ENT_QUOTES, 'UTF-8');
-        $escapedJsPath = \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8');
+        $clientScript = $this->getClientScriptTag();
         $metaTags = $this->getMetaTags();
         $scriptTags = $this->getScriptTags();
 
@@ -119,7 +147,7 @@ final class HtmlDocument implements DocumentInterface
 </head>
 <body>
     {$content}
-    <script src="{$escapedJsPath}"></script>
+    {$clientScript}
     {$scriptTags}
 </body>
 </html>
@@ -172,6 +200,15 @@ HTML;
         }
 
         return \implode("\n    ", $links);
+    }
+
+    private function getClientScriptTag(): string
+    {
+        if ($this->loadClientScriptOnlyWithDefer && !$this->clientScriptNeeded) {
+            return '';
+        }
+
+        return \sprintf('<script src="%s"></script>', \htmlspecialchars($this->jsPath, \ENT_QUOTES, 'UTF-8'));
     }
 
     private function getScriptTags(): string

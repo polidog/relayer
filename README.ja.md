@@ -81,7 +81,8 @@ php -S 127.0.0.1:8000 -t public
 
 `dump-autoload` ではなく `composer install` を使うのは、`App\` の autoload と
 `init` が追加した publish スクリプトの両方を効かせるためです（後者が
-`public/rosanna-defer.js` を生成し、既定ドキュメントがこれを参照します）。
+`public/rosanna-defer.js` を生成し、既定ドキュメントがすべてのページでこれを
+参照します）。
 
 冪等かつ非破壊です:
 
@@ -89,6 +90,10 @@ php -S 127.0.0.1:8000 -t public
 - 既存の `composer.json` は**加算的に**パッチします。`App\` の PSR-4 autoload、
   rosanna-defer のアセット publish スクリプト、`extra.relayer.structure_version` の
   マーカーを追加するだけで、他は一切変更しません
+- `.env.local`（`APP_ENV=dev`）を書くのは新規プロジェクトだけです。`.env` も
+  マーカーもなく、`src/Pages`・`src/AppConfigurator.php`・`public/index.php`・
+  `public/worker.php` のどれもないものを新規とみなします。既存のアプリの環境は
+  変えず、開発モードを自分で足す方法を表示します
 
 `structure_version` マーカーはプロジェクトがどの雛形バージョンで生成されたかを
 記録します。これにより後述の `relayer upgrade` で構造を前進させられます。
@@ -194,6 +199,23 @@ $router->addCssPath('/assets/style.css');
 $router->run();
 ```
 
+既定ドキュメントはすべてのページで `rosanna-defer.js` を読み込みます。defer の
+プレースホルダーを描いたページでだけ読み込むには、明示的に有効にします:
+
+```php
+use Polidog\Relayer\Router\Document\HtmlDocument;
+
+$router = Relayer::boot(__DIR__ . '/..');
+$router->setDocument(HtmlDocument::create()->loadClientScriptOnlyWithDefer());
+$router->run();
+```
+
+このときプレースホルダーのないページには `window.Rosanna` がありません。そのような
+ページのログアウトフォームは `clearDeferCache()` を呼べないので、ユーザー固有の
+`localCache` の断片がログアウト後も残り、共有端末で次のユーザーに表示されることが
+あります。プレースホルダーのないページで `window.Rosanna` を使わない場合にだけ
+有効にしてください。
+
 ## 環境変数
 
 プロジェクトルートに `.env` を置きます:
@@ -232,8 +254,9 @@ LOCALE_PATH_PREFIX=true
 
 `APP_ENV=dev`（または `development`）で PSX ファイルの auto-compile が
 有効になります。それ以外の値は本番扱いで、実環境にもこれらのファイルにも
-`APP_ENV` が無い場合も本番扱いです。雛形の `.env` には `APP_ENV=dev` が入って
-いるため、実環境の変数を未設定にしただけでは dev モードのままです。本番では
+`APP_ENV` が無い場合も本番扱いです。新規プロジェクトでは `relayer init` が gitignore 対象の
+`.env.local` に `APP_ENV=dev` を書くので、指定し忘れたデプロイは本番として動きます。
+clone した直後は `echo APP_ENV=dev >> .env.local` を実行してください。本番では
 デプロイ時に `vendor/bin/rosanna-defer compile src/Pages` で事前コンパイルします。
 
 ## ルーティングとページ
@@ -296,8 +319,8 @@ vendor/bin/relayer container:compile                  # DI コンテナ -> PHP
 
 あとは `.env.local` か実環境の変数で `APP_ENV=prod` を指定し、OPcache の
 `validate_timestamps=0`（雛形の `php.ini` に本番ブロックを同梱）で起動します。
-`APP_ENV` を未設定にしても本番にはなりません。雛形の `.env` の `APP_ENV=dev`
-が使われ、`/_profiler` が公開されます。各ステップは
+`APP_ENV=dev` の入った `.env.local` をサーバに持ち込むと `/_profiler` が公開される
+ので、注意してください。各ステップは
 有無ゲートなので、アーティファクトが無くてもライブ経路に縮退する
 だけで壊れません。
 
@@ -1221,6 +1244,51 @@ return function (PageContext $ctx, UserRepository $users): Closure {
 `_rosanna_csrf` は除外済み)。アクション名はページごとに一意で、同じ名前を
 2 回登録すると例外になります。
 
+ファクトリの外、たとえば `Renderable` の子の `render()` からも
+`PageContext::current()->action()` で登録できます。ページの子でもレイアウトの
+子でもかまいません。アクションを送信した POST では、ディスパッチの前に描画関数と
+それを囲むレイアウト、木の中の `Renderable` の子 (配列、入れ子の要素、defer の
+フォールバックの中も含む) を一度描画して登録を済ませ、ディスパッチの後に応答用に
+もう一度描画します。GET や、ファクトリで登録したアクションへの POST では描画は
+1 回です。ファクトリで宣言したメタデータとスクリプトは応答にも残り、描画中に
+宣言したものは 2 回目の描画で宣言し直されます (2 重にはなりません)。
+
+応答の描画では描画関数をもう一度呼ぶので、子はその描画の props で作られた新しい
+オブジェクトです (アクションが足したリストの項目は応答に出ます)。アクションが子の
+`$this` に持たせた状態は引き継がれます。1 回目の描画の子でアクションが **変えた**
+プロパティを、新しい木の同じ位置にある同じクラスの子へ、描画の前に写します。
+readonly のプロパティは props とみなして写さず、アクションが変えなかったプロパティは
+新しい子の値のままです。なので、フォームの子が自分の入力エラーを持てます。
+
+```php
+final class ContactForm implements Renderable
+{
+    private array $errors = [];
+
+    public function __construct(private readonly string $title) {}
+
+    public function render(): Element
+    {
+        $send = PageContext::current()->action('send', function (array $form): void {
+            $result = Validator::object([/* ... */])->safeParse($form);
+            if (!$result->success) {
+                $this->errors = $result->errors; // 応答に出る
+            }
+        });
+
+        return <form action={$send}>{/* $this->title, $this->errors ... */}</form>;
+    }
+}
+```
+
+「同じ位置」は木の中の位置で、React が型と位置で状態を保つのと同じです。アクションで
+フォームより前に来る子が変わると (たとえば前に新しいリストの項目を子として描く)、
+状態はそのとき同じ位置にある同じクラスの子に渡ります。プロパティには代入してください
+(`$this->errors = ...`、`$this->errors[] = ...`)。プロパティが持つオブジェクトの中を
+書き換えても検出されません。ページ自体が使う状態や、そうした並びの変化をまたいで
+残したい状態は、ファクトリに置いて参照で取り込みます
+([送信失敗時の再レンダリング](#送信失敗時の再レンダリング) を参照)。
+
 ### 引数のバインド
 
 第3引数 `$args` でハンドラに値をバインドできます。フォームボディの **後ろ**
@@ -1398,6 +1466,14 @@ return function (array $props): Element {
 インジェクションするのが正道です。このメソッドはクロージャゆえに
 インジェクションが難しい PSX コンポーネント専用の逃げ道です。
 
+deferred コンポーネントが例外を投げると、`/_defer/{name}` の応答はこれまでどおり
+本文のない `500` ですが、失敗はコンテナの `LoggerInterface`（と dev のプロファイラ）
+にも記録されます。PHP のエラーログだけではありません。
+
+コンポーネントの引数はコンテナから解決するので、`RosannaDefer::setArgumentResolver()`
+は効きません。コンテナなしで `PsxComponentRegistrar::configure()` を呼ぶコードは、
+`argumentResolver:` で独自のリゾルバーを渡せます。
+
 ### autowire のデフォルト挙動
 
 フレームワークは登録済みの `Definition` を一通り見て:
@@ -1441,6 +1517,23 @@ final class UsersPage extends PageComponent
 
 サービスタグやデコレータ、ファクトリ経由の生成など、独自の挙動が必要な
 場合のみ `AppConfigurator` で登録してください。
+
+登録したページ・レイアウト・エラーページも、リクエストごとに作り直されます。
+コンテナは `src/Pages` の下の `page`・`layout`・`error` ファイルで宣言された
+クラス（`Renderable` を実装するだけのクラスも含む）と、`PageComponent` か
+`ErrorPageComponent` を継承するクラス、`LayoutInterface` を実装するクラスを
+共有しないサービスにします（`setShared(true)` を指定しても同じです）。
+`relayer container:compile` でコンパイルしたコンテナでも同じです。コンポーネント
+など、それ以外の `Renderable` のサービスは共有されたままです。そのため、ページが
+コンストラクタで作ったオブジェクト（フォームや DTO など）が、常駐する worker で
+次の訪問者に状態を持ち越すことはありません。注入されたサービスは、これまでどおり
+コンテナが共有するものです。ルーターは作り直したオブジェクトをそのまま描画する
+ので、ページやレイアウトは複製できなくてもかまいません。
+
+`set()` でコンテナに渡したオブジェクトは作り直せないため、ルーターはその浅い
+複製を描画します。複製が持つオブジェクトはリクエスト間で共有され、複製できない
+クラス（`private __clone()` を持つもの）はリクエストが `RuntimeException` で
+失敗します。ページをこの方法で登録しないでください。
 
 ## HTTP リクエストへのアクセス
 
@@ -2027,6 +2120,22 @@ final class HomePage extends PageComponent
 ETag 比較は RFC 7232 §2.3.2 の弱比較に準拠。`W/"v1"` と `"v1"` は一致と
 みなされ、`*` はあらゆるタグにマッチします。
 
+セッション Cookie か `Authorization` ヘッダーのあるリクエストには 304 を返さず、
+必ず描画します。方針を評価する時点までにセッションを開始したリクエスト
+（`middleware.php` が remember-me の Cookie からログインさせた場合など）も同じ
+です。`$next()` の前に `session_write_close()` で閉じていても変わりません。
+検証子は誰のリクエストかを含まないので、匿名で表示したブラウザが
+ログイン後も匿名のコピーを使い続けるのを防ぐためです。
+
+`Authorization` ヘッダーのあるリクエストへのレスポンスも、共有キャッシュに保存
+できる状態では返しません。クラス型でも関数型のページでも、`private` /
+`noStore` 以外の方針は `Cache-Control: private, no-store` で送ります。
+middleware が `$request->withHeader()` で付けたヘッダーや、Apache/CGI が渡す
+`REDIRECT_HTTP_AUTHORIZATION` も対象です。後者は本来のヘッダーがないとき
+`Request` が `authorization` として読みます。セッション Cookie だけでは対象に
+なりません。セッションに触れないページは宣言どおりの方針のままです（後述の
+セッションの注意を参照）。
+
 ### サンプル
 
 ```php
@@ -2174,7 +2283,9 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   した時点でフレームワークが `session_cache_limiter('')` を設定します。方針の
   ないページがセッションを使う場合は、PHP の `no-store` のままです。
 - セッションを使ったレスポンスは、共有キャッシュに保存できる状態では返しま
-  せん。ヘッダー送出時にセッションが有効なら、`private` / `noStore` 以外の
+  せん。そのリクエストのどこかでセッションを開いていれば（どこから呼んだ
+  `session_start()` でも、新規開始でも訪問者の Cookie からの再開でも、ページの
+  前に `session_write_close()` で閉じていても）、`private` / `noStore` 以外の
   方針は `Cache-Control: private, no-store` に置き換えます。レイアウトで
   `$auth->user()` を読む `#[Cache(public: true)]` のページは、ログイン中の
   訪問者にはキャッシュされない形で返り、匿名の訪問者には宣言どおりの方針で
@@ -2826,6 +2937,41 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
 5. プリコンパイルは `vendor/bin/relayer compile` で行います。
    `vendor/bin/usephp compile` はなくなり、`vendor/bin/rosanna compile` は
    Relayer に必要な deferred manifest を書き出しません。
+
+6. コミットする `.env` に `APP_ENV=dev` を書かなくなり、`APP_ENV` のない `.env` は
+   本番扱いになりました。`relayer upgrade` は手を入れていない `.env` を書き換えるとき、
+   `APP_ENV=dev` を gitignore 対象の `.env.local` に移します。ファイルがなければ作り、
+   `APP_ENV` を指定していなければ行を追記し、指定済みなら触りません。手を入れた `.env`
+   は内容にかかわらずそのまま残し、`.env.local` も書かないので、`APP_ENV` は自分で
+   確かめてください。`relayer init` が `.env.local` を書くのは新規プロジェクトだけです。
+   別の環境では `echo APP_ENV=dev >> .env.local` を実行してください。どちらのコマンドも
+   先に `.gitignore` が `.env.local` を除外していることを確かめ、確かめられなければ何も
+   書きません。`.env.local` が Git で追跡されていると `.gitignore` は効かないため、
+   `upgrade` は `.env` と `.env.local` をそのままにして失敗します（`init` はこのファイルを
+   作りません）。`git rm --cached .env.local` を実行してコミットし、`relayer upgrade` を
+   もう一度実行してください。
+7. ページを包んでいた `<div data-rosanna="…">` はなくなりました。この要素に頼る
+   CSS や JS を直します。
+8. 雛形の `Caddyfile` は実際にリクエストを `public/worker.php` に送るようになりました
+   （以前の worker ブロックにはリクエストが届いていませんでした）。手を入れていなければ
+   `relayer upgrade` で worker モードが有効になります。これは本番用で、単一バイナリか
+   `frankenphp run --config Caddyfile` で使います。開発には
+   `php -S 127.0.0.1:8000 -t public` か `docker compose up --build` を使ってください。
+   どちらもリクエストごとに起動し直し、このファイルを読みません。worker ではコンテナの
+   サービスがリクエストをまたいで生き続けるので、自分のサービスのプロパティに
+   リクエストごとの状態を持たせないでください。持たせるものはリクエストの後に
+   `RequestLifecycle::onReset()` で消します（名前ごとに 1 つで、同じ名前なら置き換わります）:
+
+   ```php
+   use Polidog\Rosanna\Runtime\RequestLifecycle;
+
+   RequestLifecycle::onReset(self::class, function (): void {
+       $this->items = [];
+   });
+   ```
+
+   クラシック（リクエストごと）モードのままにするには、`Caddyfile` から `index` と
+   `worker` の行を消してください。
 
 フィールド名とセッションのキーが変わるので、旧バージョンが描画したフォームは
 デプロイの時点で動かなくなります。古い HTML や `usephp.js` が配信されないよう、

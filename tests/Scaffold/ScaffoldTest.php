@@ -9,12 +9,46 @@ use Polidog\Relayer\Scaffold\Scaffold;
 
 final class ScaffoldTest extends TestCase
 {
+    public function testTheCaddyfileSaysItIsForProductionAndHowToDevelop(): void
+    {
+        // Workers retain page factories and components, so edits stay stale.
+        $caddyfile = Scaffold::files()['Caddyfile'];
+
+        self::assertStringContainsString('production', $caddyfile);
+        self::assertStringContainsString('php -S 127.0.0.1:8000 -t public', $caddyfile);
+        self::assertStringContainsString('docker compose up --build', $caddyfile);
+    }
+
+    public function testDevelopmentDoesNotRunTheCaddyfile(): void
+    {
+        // The note above is only true while these hold. The image's own CMD
+        // names its bundled Caddyfile, so /app/Caddyfile is not read unless the
+        // Dockerfile or compose.yaml points at it.
+        $files = Scaffold::files();
+
+        self::assertStringNotContainsString('Caddyfile', $files['Dockerfile']);
+        self::assertStringNotContainsString('Caddyfile', $files['compose.yaml']);
+        self::assertStringNotContainsString('command:', $files['compose.yaml']);
+        self::assertStringContainsString('target: dev', $files['compose.yaml']);
+    }
+
+    public function testTheCaddyfileRoutesRequestsToTheWorker(): void
+    {
+        $caddyfile = Scaffold::files()['Caddyfile'];
+
+        // A worker block alone is not enough: php_server would still send
+        // requests to public/index.php, and nothing would stay booted.
+        self::assertStringContainsString('index worker.php', $caddyfile);
+        self::assertStringContainsString('file ./public/worker.php', $caddyfile);
+    }
+
     public function testFilesCoversTheMinimalBootableLayoutWithoutComposerJson(): void
     {
         $files = Scaffold::files();
 
         self::assertSame([
             '.env',
+            '.env.local',
             '.gitignore',
             'README.md',
             'RELAYER.md',
@@ -204,8 +238,8 @@ final class ScaffoldTest extends TestCase
         // which `rosanna-defer compile` would fail on.
         self::assertStringContainsString('RUN vendor/bin/relayer compile', $dockerfile);
         self::assertStringNotContainsString('rosanna-defer compile', $dockerfile);
-        // ...and prod must actually boot as prod: the committed .env says
-        // APP_ENV=dev, which would live-build past every artifact above.
+        // ...and prod must say so outright, and only the dev target is dev.
+        self::assertSame(1, \substr_count($dockerfile, 'ENV APP_ENV=dev'));
         self::assertStringContainsString("printf 'APP_ENV=prod\\n' > .env.local", $dockerfile);
 
         // Nothing may be left compiling at request time, so timestamps go
@@ -338,6 +372,18 @@ final class ScaffoldTest extends TestCase
             \array_diff($fileKeys, \array_keys($seen)),
             'expected at least one v1 baseline file outside the migration map',
         );
+    }
+
+    public function testDevModeIsNotAnUnconditionalMigrationAndLeftTheCommittedEnv(): void
+    {
+        // A migration writes whenever the file is missing, and .env.local
+        // overrides .env, so listing it would turn production into dev.
+        foreach (Scaffold::migrations() as $paths) {
+            self::assertNotContains('.env.local', $paths);
+        }
+
+        self::assertDoesNotMatchRegularExpression('/^\s*APP_ENV=/m', Scaffold::files()['.env']);
+        self::assertMatchesRegularExpression('/^APP_ENV=dev$/m', Scaffold::files()['.env.local']);
     }
 
     public function testRewritesMapListsOnlySupersededContentForRealFiles(): void

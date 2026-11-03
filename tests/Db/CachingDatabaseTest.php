@@ -7,6 +7,8 @@ namespace Polidog\Relayer\Tests\Db;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Db\CachingDatabase;
 use Polidog\Relayer\Profiler\RecordingProfiler;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
+use WeakReference;
 
 final class CachingDatabaseTest extends TestCase
 {
@@ -85,5 +87,35 @@ final class CachingDatabaseTest extends TestCase
 
         $db->fetchAll('SELECT * FROM t');
         self::assertSame(2, $inner->fetchAllCalls, 'transaction flushed the cache');
+    }
+
+    public function testRequestResetFlushesEveryInstance(): void
+    {
+        $firstInner = new FakeDatabase();
+        $first = new CachingDatabase($firstInner, new RecordingProfiler());
+        $secondInner = new FakeDatabase();
+        $second = new CachingDatabase($secondInner, new RecordingProfiler());
+
+        $first->fetchAll('SELECT * FROM t');
+        $second->fetchAll('SELECT * FROM t');
+
+        RequestLifecycle::reset();
+
+        $first->fetchAll('SELECT * FROM t');
+        $second->fetchAll('SELECT * FROM t');
+
+        self::assertSame(2, $firstInner->fetchAllCalls, "the first instance served the previous request's rows");
+        self::assertSame(2, $secondInner->fetchAllCalls);
+    }
+
+    public function testADiscardedInstanceIsNotKeptAliveByTheReset(): void
+    {
+        $db = new CachingDatabase(new FakeDatabase(), new RecordingProfiler());
+        $reference = WeakReference::create($db);
+
+        unset($db);
+        RequestLifecycle::reset();
+
+        self::assertNull($reference->get());
     }
 }

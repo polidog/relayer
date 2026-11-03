@@ -25,6 +25,27 @@ final class RequestTest extends TestCase
         self::assertTrue($req->isMethod('post'));
     }
 
+    public function testAColonInThePathIsNotReadAsAPort(): void
+    {
+        $_SERVER['REQUEST_URI'] = '/x/a:80';
+
+        self::assertSame('/x/a%3A80', Request::fromGlobals()->path);
+    }
+
+    public function testALeadingDoubleSlashIsNotReadAsAHost(): void
+    {
+        $_SERVER['REQUEST_URI'] = '//admin/x?y=1';
+
+        self::assertSame('//admin/x', Request::fromGlobals()->path);
+    }
+
+    public function testTheAbsoluteFormStillGivesItsPath(): void
+    {
+        $_SERVER['REQUEST_URI'] = 'http://example.test/p?q=1';
+
+        self::assertSame('/p', Request::fromGlobals()->path);
+    }
+
     public function testFromGlobalsCollectsHttpHeaders(): void
     {
         $_SERVER = [
@@ -41,6 +62,46 @@ final class RequestTest extends TestCase
         self::assertSame('abc', $req->header('x-custom'));
         self::assertSame('application/json', $req->header('Content-Type'));
         self::assertSame('42', $req->header('content-length'));
+    }
+
+    public function testFromGlobalsReadsRedirectHttpAuthorizationAsTheAuthorizationHeader(): void
+    {
+        // Apache/CGI + mod_rewrite passes the header on under this key only.
+        $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer abc'];
+
+        self::assertSame('Bearer abc', Request::fromGlobals()->header('Authorization'));
+    }
+
+    public function testARealAuthorizationHeaderWinsOverTheRedirectCopy(): void
+    {
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/',
+            'HTTP_AUTHORIZATION' => 'Bearer real',
+            'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer redirect',
+        ];
+
+        self::assertSame('Bearer real', Request::fromGlobals()->header('authorization'));
+    }
+
+    public function testAnEmptyAuthorizationHeaderFallsBackToTheRedirectCopy(): void
+    {
+        // The same order ServerAuthorizationHeader reads them in.
+        $_SERVER = [
+            'REQUEST_METHOD' => 'GET',
+            'REQUEST_URI' => '/',
+            'HTTP_AUTHORIZATION' => '',
+            'REDIRECT_HTTP_AUTHORIZATION' => 'Bearer redirect',
+        ];
+
+        self::assertSame('Bearer redirect', Request::fromGlobals()->header('authorization'));
+    }
+
+    public function testAnEmptyRedirectCopyAddsNoAuthorizationHeader(): void
+    {
+        $_SERVER = ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/', 'REDIRECT_HTTP_AUTHORIZATION' => ''];
+
+        self::assertNull(Request::fromGlobals()->header('authorization'));
     }
 
     public function testPostAndQueryReturnNullForMissingOrNonString(): void

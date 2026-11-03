@@ -48,6 +48,20 @@ abstract class LayoutComponent implements LayoutInterface, Renderable
     }
 
     /**
+     * Put back the scripts {@see getScripts()} returned, dropping the ones a
+     * render added since: a layout renders twice on a POST that submits an
+     * action registered while rendering, and declares its scripts once.
+     *
+     * @param array<int, Script> $scripts
+     *
+     * @internal called by the router after the render before dispatch
+     */
+    public function restoreScripts(array $scripts): void
+    {
+        $this->scripts = $scripts;
+    }
+
+    /**
      * @return array<Element|string>|Element|string
      */
     protected function getChildren(): array|Element|string

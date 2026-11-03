@@ -40,8 +40,6 @@ final class Authenticator implements AuthenticatorInterface
 {
     private const SESSION_KEY = 'relayer.auth.identity';
 
-    private ?Identity $cached = null;
-    private bool $cacheLoaded = false;
     private ?string $dummyHash = null;
 
     /**
@@ -101,29 +99,23 @@ final class Authenticator implements AuthenticatorInterface
     {
         $this->session->regenerateId();
         $this->session->set(self::SESSION_KEY, $identity->toArray());
-        $this->cached = $identity;
-        $this->cacheLoaded = true;
     }
 
     public function logout(): void
     {
         $this->session->remove(self::SESSION_KEY);
         $this->session->regenerateId();
-        $this->cached = null;
-        $this->cacheLoaded = true;
     }
 
+    /**
+     * Read from the session every time. This object outlives the request on a
+     * worker, so remembering the answer would hand it to the next visitor.
+     */
     public function user(): ?Identity
     {
-        if ($this->cacheLoaded) {
-            return $this->cached;
-        }
-
         $raw = $this->session->get(self::SESSION_KEY);
-        $this->cached = \is_array($raw) ? Identity::fromArray($raw) : null;
-        $this->cacheLoaded = true;
 
-        return $this->cached;
+        return \is_array($raw) ? Identity::fromArray($raw) : null;
     }
 
     public function check(): bool

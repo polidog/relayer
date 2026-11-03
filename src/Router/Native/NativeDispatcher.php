@@ -119,6 +119,15 @@ final class NativeDispatcher
      */
     public function dispatch(Route $route, array $params, Request $request): void
     {
+        // The route matched the routed path, but Go gets the client's
+        // target as REQUEST_URI; one it cannot parse (a guard or middleware
+        // routed `/%zz` on a real path) is a request for nothing.
+        if (null === CgiRequestUri::of($request)) {
+            Response::json(['error' => 'Not Found'], 404)->send();
+
+            return;
+        }
+
         $binary = $this->binaryFor($route);
 
         if (!\is_file($binary)) {

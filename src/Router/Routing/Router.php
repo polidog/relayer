@@ -60,9 +60,13 @@ final class Router implements RouterInterface
 
     private function normalizePath(string $path): string
     {
-        $parsed = \parse_url($path, \PHP_URL_PATH);
-        $path = \is_string($parsed) ? $parsed : '/';
-        $path = '/' . \trim($path, '/');
+        // A leading `//` stays as it is: the route match refuses it, where
+        // collapsing it would make `//admin` reach `/admin`.
+        if (\str_starts_with($path, '//')) {
+            return $path;
+        }
+
+        $path = '/' . \trim(\explode('?', $path, 2)[0], '/');
 
         return '/' !== $path ? \rtrim($path, '/') : $path;
     }

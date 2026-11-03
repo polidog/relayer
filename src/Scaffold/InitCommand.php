@@ -18,6 +18,11 @@ use JsonException;
  *
  * Idempotent and non-destructive by contract:
  *  - existing skeleton files are never overwritten (reported as skipped),
+ *  - `.env.local` (dev mode, which overrides `.env`) is written only into a
+ *    new project: no `.env`, no `structure_version` marker and none of
+ *    {@see APP_PATHS} yet. It is written first, so an init that dies partway
+ *    leaves either nothing or dev mode already in place for the retry, and
+ *    only once `.gitignore` excludes it and Git does not track it,
  *  - the existing `composer.json` is patched additively — user values win,
  *    only missing keys / array members are added,
  *  - `extra.relayer.structure_version` is stamped only on the initial
@@ -47,6 +52,25 @@ final class InitCommand
         TXT;
 
     /**
+     * Paths that mean an application already exists here, even without a
+     * `.env` or the marker: one configured by hand can run in production on
+     * real environment variables alone. `src/Pages` is the directory
+     * `Relayer::boot()` always routes from, so every Relayer app has it; the
+     * two entrypoints are what a server runs (and also catch a non-Relayer
+     * app adopting the framework); the configurator is the app's own wiring.
+     * The other scaffold files (Dockerfile, config/, …) serve nothing on
+     * their own.
+     *
+     * @var list<string>
+     */
+    private const array APP_PATHS = [
+        'src/Pages',
+        'src/AppConfigurator.php',
+        'public/index.php',
+        'public/worker.php',
+    ];
+
+    /**
      * @param list<string>               $args  argv without the script name (e.g. `['init']`)
      * @param null|Closure(string): void $write line writer; defaults to STDOUT
      * @param null|string                $cwd   project root; defaults to getcwd()
@@ -65,6 +89,26 @@ final class InitCommand
             $write(self::USAGE);
 
             return null === $command ? 2 : 0;
+        }
+
+        // Every command below acts on the project and takes no options, so a
+        // flag it does not know must stop it before it writes anything.
+        foreach (\array_slice($args, 1) as $argument) {
+            if (\in_array($argument, ['-h', '--help'], true)) {
+                $write(self::USAGE);
+
+                return 0;
+            }
+        }
+
+        foreach (\array_slice($args, 1) as $argument) {
+            if (\str_starts_with($argument, '-')) {
+                $write(\sprintf('Unknown option "%s".', $argument));
+                $write('');
+                $write(self::USAGE);
+
+                return 2;
+            }
         }
 
         if ('upgrade' === $command) {
@@ -148,7 +192,19 @@ final class InitCommand
             return 1;
         }
 
-        if (0 !== ($status = self::writeFiles($root, $write))) {
+        // Decided before any file is written, since init itself creates every
+        // path looked at here. The marker is what tells a project that merely
+        // lost its .env from one that never had a framework-written one.
+        $extra = \is_array($composer['extra'] ?? null) ? $composer['extra'] : [];
+        $relayer = \is_array($extra['relayer'] ?? null) ? $extra['relayer'] : [];
+        $isNewProject = !\file_exists($root . '/.env') && !\array_key_exists('structure_version', $relayer);
+        foreach (self::APP_PATHS as $relative) {
+            if (\file_exists($root . '/' . $relative)) {
+                $isNewProject = false;
+            }
+        }
+
+        if (0 !== ($status = self::writeFiles($root, $isNewProject, $write))) {
             return $status;
         }
 
@@ -225,18 +281,58 @@ final class InitCommand
     /**
      * @param Closure(string): void $write
      */
-    private static function writeFiles(string $root, Closure $write): int
+    private static function writeFiles(string $root, bool $isNewProject, Closure $write): int
     {
         $created = [];
         $skipped = [];
+        $devModeWithheld = false;
+        $devModeTracked = false;
+        $ignore = null;
 
-        foreach (Scaffold::files() as $relative => $contents) {
+        // .env.local before every path the newness check reads, so a retry
+        // after an interruption or a failed check still sees a new project,
+        // or finds dev mode already in place. The skeleton's .gitignore (which
+        // lists it) goes first, so the check below finds it, not nothing.
+        $files = Scaffold::files();
+        $files = ['.gitignore' => $files['.gitignore'], '.env.local' => $files['.env.local']] + $files;
+
+        foreach ($files as $relative => $contents) {
             $path = $root . '/' . $relative;
 
             if (\file_exists($path)) {
                 $skipped[] = $relative;
 
                 continue;
+            }
+
+            if ('.env.local' === $relative) {
+                // .env.local overrides .env, so in a project that already runs
+                // somewhere, writing APP_ENV=dev here would turn production into
+                // dev. Only a new project has no environment to change.
+                if (!$isNewProject) {
+                    $devModeWithheld = true;
+
+                    continue;
+                }
+
+                // Before the write, not after: dev mode left behind by a failed
+                // check would be taken as done by the retry. A project that
+                // brought its own .gitignore may not list it.
+                $ignore = GitignoreEnvLocal::ensure($root);
+                if (null === $ignore) {
+                    $write('Could not make sure .gitignore excludes .env.local, so it was not created.');
+                    $write('Fix .gitignore, then re-run `relayer init`.');
+
+                    return 1;
+                }
+
+                // Committed, then deleted from this checkout: .gitignore does
+                // not apply, so writing it would put dev mode in the next commit.
+                if (GitignoreEnvLocal::isTracked($root)) {
+                    $devModeTracked = true;
+
+                    continue;
+                }
             }
 
             $dir = \dirname($path);
@@ -265,10 +361,29 @@ final class InitCommand
             }
         }
 
+        $ignoreReport = null === $ignore ? null : GitignoreEnvLocal::report($ignore);
+        if (null !== $ignoreReport) {
+            $write($ignoreReport);
+        }
+
         if ([] !== $skipped) {
             $write(\sprintf('Skipped %d existing files:', \count($skipped)));
             foreach ($skipped as $relative) {
                 $write('  = ' . $relative);
+            }
+        }
+
+        if ($devModeWithheld) {
+            $write('Did not create .env.local: this is an existing project, and');
+            $write('APP_ENV=dev there would override its environment. To develop on');
+            $write('this machine, run: echo APP_ENV=dev >> .env.local');
+        }
+
+        // Not a failure: like an existing project, this one only goes
+        // without dev mode, and the rest of the skeleton is in place.
+        if ($devModeTracked) {
+            foreach (GitignoreEnvLocal::trackedWarning('create it: echo APP_ENV=dev >> .env.local') as $line) {
+                $write($line);
             }
         }
 

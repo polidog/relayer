@@ -31,6 +31,10 @@ use JsonException;
  */
 final class UpgradeCommand
 {
+    private const string ENV_LOCAL_CREATED = 'created';
+    private const string ENV_LOCAL_APPENDED = 'appended';
+    private const string ENV_LOCAL_KEPT = 'kept';
+
     /**
      * @param list<string>               $args  argv after the `upgrade` verb (unused; reserved)
      * @param null|Closure(string): void $write line writer; defaults to STDOUT
@@ -152,7 +156,9 @@ final class UpgradeCommand
 
         $rewrites = Scaffold::rewrites();
         $refreshed = [];
+        $ignoreReport = null;
         $kept = [];
+        $devModeAppended = false;
 
         for ($v = $recorded + 1; $v <= $target; ++$v) {
             foreach ($migrations[$v] ?? [] as $relative) {
@@ -227,6 +233,28 @@ final class UpgradeCommand
                     continue;
                 }
 
+                // Before the rewrite, not after: if .env went first and this
+                // failed, the re-run would find a current .env, see nothing
+                // left to move, and the dev app would stay production.
+                if ('.env' === $relative && 1 === \preg_match('/^APP_ENV=dev$/m', $existing)) {
+                    $result = self::moveDevModeToEnvLocal($root, $files['.env.local'], $write);
+
+                    if (null === $result) {
+                        return 1;
+                    }
+
+                    [$moved, $ignore] = $result;
+                    $ignoreReport = GitignoreEnvLocal::report($ignore);
+
+                    if (self::ENV_LOCAL_CREATED === $moved) {
+                        $created[] = '.env.local';
+                    } elseif (self::ENV_LOCAL_KEPT === $moved) {
+                        $skipped[] = '.env.local';
+                    } else {
+                        $devModeAppended = true;
+                    }
+                }
+
                 if (!self::atomicWrite($path, $files[$relative])) {
                     $write(\sprintf('Could not write "%s".', $relative));
 
@@ -256,6 +284,15 @@ final class UpgradeCommand
             }
         }
 
+        if ($devModeAppended) {
+            $write('Moved APP_ENV=dev out of .env, into your existing file:');
+            $write('  ~ .env.local');
+        }
+
+        if (null !== $ignoreReport) {
+            $write($ignoreReport);
+        }
+
         if ([] !== $skipped) {
             $write(\sprintf('Skipped %d existing files:', \count($skipped)));
             foreach ($skipped as $relative) {
@@ -276,6 +313,93 @@ final class UpgradeCommand
         }
 
         return 0;
+    }
+
+    /**
+     * Keep a project in dev mode while its untouched `.env` loses the
+     * `APP_ENV=dev` line. `.env.local` overrides `.env`, so this runs only
+     * for that rewrite; it is deliberately not a {@see Scaffold::migrations()}
+     * entry, which would write dev mode into any project lacking the file.
+     *
+     * An existing file is appended to rather than replaced: it can hold
+     * secrets, and a temp file + rename would lose its permissions.
+     *
+     * Nothing is written until `.env.local` is known to stay out of Git: not
+     * tracked, and ignored by `.gitignore`. Checked after the write, a failure
+     * would leave dev mode behind for the re-run to find and take as done.
+     * The `.gitignore` check also runs when the file already sets APP_ENV
+     * (which may be dev mode left by such a run): once `.env` loses
+     * `APP_ENV=dev`, that file is where dev mode lives.
+     *
+     * Returns what happened to `.env.local` and to `.gitignore`, or null
+     * when `.env.local` cannot be kept out of Git, read or written.
+     *
+     * @param Closure(string): void $write
+     *
+     * @return null|array{self::ENV_LOCAL_*, GitignoreEnvLocal::ADDED|GitignoreEnvLocal::ALREADY_IGNORED|GitignoreEnvLocal::CREATED}
+     */
+    private static function moveDevModeToEnvLocal(string $root, string $template, Closure $write): ?array
+    {
+        $path = $root . '/.env.local';
+        $existing = null;
+
+        if (\file_exists($path)) {
+            $existing = \is_file($path) ? @\file_get_contents($path) : false;
+            if (false === $existing) {
+                $write('Could not read ".env.local".');
+
+                return null;
+            }
+        }
+
+        $outcome = match (true) {
+            null === $existing => self::ENV_LOCAL_CREATED,
+            1 === \preg_match('/^[ \t]*(?:export[ \t]+)?APP_ENV[ \t]*=/m', $existing) => self::ENV_LOCAL_KEPT,
+            default => self::ENV_LOCAL_APPENDED,
+        };
+
+        $ignore = GitignoreEnvLocal::ensure($root);
+        if (null === $ignore) {
+            $write('Could not make sure .gitignore excludes .env.local, so dev mode was not');
+            $write('moved there and .env is unchanged. Fix .gitignore, then re-run `relayer upgrade`.');
+
+            return null;
+        }
+
+        // Failing rather than carrying on without dev mode in .env.local:
+        // .env stays as it is, so the app stays dev, and the marker stays
+        // put, so a script sees the upgrade did not finish and a re-run
+        // after untracking redoes this step. The rule added above already
+        // keeps the untracked file out of the next commit.
+        if (self::ENV_LOCAL_KEPT !== $outcome && GitignoreEnvLocal::isTracked($root)) {
+            foreach (GitignoreEnvLocal::trackedWarning('re-run `relayer upgrade`.') as $line) {
+                $write($line);
+            }
+
+            $ignoreReport = GitignoreEnvLocal::report($ignore);
+            if (null !== $ignoreReport) {
+                $write($ignoreReport);
+            }
+
+            return null;
+        }
+
+        if (self::ENV_LOCAL_CREATED === $outcome && !self::atomicWrite($path, $template)) {
+            $write('Could not write ".env.local".');
+
+            return null;
+        }
+
+        if (self::ENV_LOCAL_APPENDED === $outcome) {
+            $separator = '' === $existing || \str_ends_with((string) $existing, "\n") ? '' : "\n";
+            if (false === @\file_put_contents($path, $separator . "APP_ENV=dev\n", \FILE_APPEND)) {
+                $write('Could not write ".env.local".');
+
+                return null;
+            }
+        }
+
+        return [$outcome, $ignore];
     }
 
     /**
