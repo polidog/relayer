@@ -2776,7 +2776,9 @@ dev 限定のリクエストプロファイラです。各リクエストを `Pr
 
 dev では Traceable デコレータ群が AppRouter / Database / EtagStore /
 SessionStorage / Authenticator をラップし、`db.query`・`cache.etag_*`・
-`session.*` などのスパンを自動でプロファイルへ流します。`<X defer />`
+`session.*` などのスパンを自動でプロファイルへ流します。描画中に Rosanna が出す notice
+（属性を捨てたときなど）は `rosanna.notice` / `rosanna.warning` として記録し、そのあと
+元のエラーハンドラに渡します。`<X defer />`
 によるサブリクエストは `parentToken` で親リクエストに紐づきます。
 
 ### Web ビュー
@@ -2972,6 +2974,12 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
 
    クラシック（リクエストごと）モードのままにするには、`Caddyfile` から `index` と
    `worker` の行を消してください。
+
+Rosanna は一部の prop を React と違うように描画します。`style` は文字列で渡してください
+（`style="color: red"`）。配列は捨てられます。`key` は特別扱いされず、`<li key="1">` は
+そのまま出力されます。生 HTML を差し込む手段はなく、`dangerouslySetInnerHTML` もほかの
+スカラーでない属性と同じく捨てられます。Rosanna は捨てた属性ごとに `E_USER_NOTICE` を
+出し、dev では[プロファイラ](#プロファイラ)が `rosanna` イベントとして記録します。
 
 フィールド名とセッションのキーが変わるので、旧バージョンが描画したフォームは
 デプロイの時点で動かなくなります。古い HTML や `usephp.js` が配信されないよう、
