@@ -10,6 +10,7 @@ use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\HttpException;
 use Polidog\Rosanna\Runtime\Element;
 
 final class FunctionPage
@@ -108,18 +109,16 @@ final class FunctionPage
 
         $csrf = $request->post(self::FORM_CSRF_FIELD);
         if (null === $csrf || !CsrfToken::validate($csrf)) {
-            \http_response_code(403);
-
-            return;
+            // Answer like `$ctx->abort(403)`: the router renders error.psx
+            // (or the built-in page) instead of the page with fresh tokens.
+            throw new HttpException(403);
         }
 
         // Verified decode: the name and the bound args below come only from
         // a token this server signed, so a client cannot rewrite them.
         $payload = FormAction::decode($token);
         if (null === $payload || ($payload['page'] ?? null) !== $this->pageId) {
-            \http_response_code(403);
-
-            return;
+            throw new HttpException(403);
         }
 
         $name = $payload['name'] ?? null;
