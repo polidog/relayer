@@ -1174,16 +1174,21 @@ page は `GET,POST` を表示します（POST はサーバアクション
 
 ### クラス型: `PageComponent::action()`
 
-`PageComponent::action([$this, 'handler'])` が CSRF トークン付きのアクション
-識別子を返します。フォーム送信時に対応するメソッドが `render()` の前に呼ばれます:
+`PageComponent::action([$this, 'handler'])` は署名付きのアクショントークンを
+返します。これを `<form>` の `action` 属性に渡すと、フレームワークがその form を
+現在の URL への `POST` にし、`_rosanna_action` と `_rosanna_csrf` の hidden
+フィールドを自動で足します。フォーム送信時に対応するメソッドが `render()` の
+前に呼ばれます:
 
 ```php
+use Polidog\Relayer\Router\RedirectException;
+
 public function render(): Element
 {
     return (
-        <form method="post">
-            <input type="hidden" name="_rosanna_action" value={$this->action([$this, 'save'])} />
+        <form action={$this->action([$this, 'save'])}>
             <input name="title" />
+            <button>save</button>
         </form>
     );
 }
@@ -1191,12 +1196,17 @@ public function render(): Element
 public function save(array $form): void
 {
     // ... $form['title'] を処理
-    header('Location: /dashboard', true, 303); // PRG
-    exit;
+    throw new RedirectException('/dashboard'); // 303 Post/Redirect/Get
 }
 ```
 
-CSRF トークンが無効な場合は `403` が返ります。
+CSRF トークンが無効な場合は `403` が返ります。トークンを `_rosanna_action` の
+hidden input に自分で書かないでください。`_rosanna_csrf` が入るのは `action` に
+トークンを持つ form だけなので、その形の form は必ず `403` になります。
+
+クラス型のページには `PageContext` が無いので、リダイレクトは
+`RedirectException`（`$ctx->redirect()` が投げる例外）を投げて行います。ルータが
+これを `Location` の応答に変えます（既定は 303 See Other）。
 
 アクションにできるのはページクラス自身が宣言したメソッドだけです。継承した
 フレームワークのメソッド（や `[$this, 'method']` 以外）を `action()` に渡すと
@@ -1749,7 +1759,7 @@ return function (PageContext $ctx, Authenticator $auth): Closure {
         $ctx->redirect('/dashboard'); // 303 Post/Redirect/Get。ここでアンワインド
     });
 
-    return function () use ($login, $error): Element {
+    return function () use ($login, &$error): Element {
         // ... フォームを描画、$error は単一の汎用メッセージで表示
     };
 };
