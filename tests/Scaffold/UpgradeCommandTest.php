@@ -298,6 +298,35 @@ final class UpgradeCommandTest extends TestCase
         self::assertStringContainsString('log_errors = On', $updated);
     }
 
+    public function testRefreshesAnUntouchedStarterPageThatDroppedASpace(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 11]]]);
+        // The v11 starter page broke the line between "files under" and
+        // <code>, and a line break between text and a tag is dropped.
+        \mkdir($this->project . '/src/Pages', 0o755, true);
+        \file_put_contents($this->project . '/src/Pages/page.psx', self::priorContent('src/Pages/page.psx', 11));
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        $updated = (string) \file_get_contents($this->project . '/src/Pages/page.psx');
+        self::assertSame(Scaffold::files()['src/Pages/page.psx'], $updated);
+        self::assertStringContainsString("files under{' '}", $updated);
+        self::assertStringContainsString('~ src/Pages/page.psx', $this->captured());
+    }
+
+    public function testKeepsAnEditedStarterPage(): void
+    {
+        $this->writeComposer(['extra' => ['relayer' => ['structure_version' => 11]]]);
+        \mkdir($this->project . '/src/Pages', 0o755, true);
+        $mine = \str_replace('It works', 'Hello', self::priorContent('src/Pages/page.psx', 11));
+        \file_put_contents($this->project . '/src/Pages/page.psx', $mine);
+
+        self::assertSame(0, UpgradeCommand::run([], $this->capture(), $this->project), $this->captured());
+
+        self::assertSame($mine, \file_get_contents($this->project . '/src/Pages/page.psx'));
+        self::assertStringContainsString('! src/Pages/page.psx', $this->captured());
+    }
+
     public function testLeavesALocallyModifiedTemplateAloneAndSaysSo(): void
     {
         $this->writeComposer([

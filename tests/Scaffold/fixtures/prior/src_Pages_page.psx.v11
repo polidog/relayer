@@ -1,0 +1,15 @@
+<?php
+
+declare(strict_types=1);
+
+use Polidog\Rosanna\Html\H;
+
+return fn () => <section>
+    <h1>It works</h1>
+    <p>
+        Edit <code>src/Pages/page.psx</code> to change this page. Add
+        routes by creating more <code>page.psx</code> files under
+        <code>src/Pages/</code> (nested directories become path
+        segments; <code>[id]</code> directories are dynamic).
+    </p>
+</section>;
