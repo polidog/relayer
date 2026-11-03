@@ -377,7 +377,9 @@ final class ContainerFactory
 
         // Pages, layouts and error pages are built anew for every request
         // (see NonSharedPagesPass), on the live and the dumped container.
-        $container->addCompilerPass(new NonSharedPagesPass(), PassConfig::TYPE_OPTIMIZE);
+        // `src/Pages` is the app directory Relayer::boot() routes from; the
+        // pass reads the route files there to find the page classes.
+        $container->addCompilerPass(new NonSharedPagesPass($projectRoot . '/src/Pages'), PassConfig::TYPE_OPTIMIZE);
 
         // Two env-placeholder modes, picked by `$forDump`. A
         // `ContainerBuilder` used directly (dev boot, or the prod

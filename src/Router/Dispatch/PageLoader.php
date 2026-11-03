@@ -9,7 +9,9 @@ use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
 use Polidog\Relayer\Auth\AuthorizationException;
 use Polidog\Relayer\Auth\Identity;
+use Polidog\Relayer\Di\RouteFileClasses;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Psx\PsxCache;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
@@ -24,6 +26,7 @@ use Polidog\Rosanna\Runtime\Renderable;
 use Psr\Container\ContainerInterface;
 use ReflectionFunction;
 use ReflectionNamedType;
+use ReflectionObject;
 use RuntimeException;
 
 /**
@@ -403,116 +406,55 @@ final class PageLoader
     /**
      * Resolve a class instance using the container or direct instantiation.
      *
-     * The container built by ContainerFactory makes every page, layout and
-     * error page a non-shared service (NonSharedPagesPass), so `get()` runs
-     * the constructor again and the objects a page builds for itself (a
-     * form, a DTO) are fresh for each request, while the services injected
-     * into it are still the container's. An unregistered class is autowired
-     * by InjectorContainer, which also builds a new object every time.
+     * A page, layout or error page is written to by the render (params,
+     * request, scripts, metadata, children, a form action's state), so the
+     * object a request renders must be its own. Usually it already is:
+     * the container built by ContainerFactory makes every page class a
+     * non-shared service (NonSharedPagesPass), so `get()` runs the
+     * constructor again and what it builds for itself (a form, a DTO) is
+     * fresh, and an unregistered class is autowired anew by
+     * InjectorContainer. Such an object is used as it is.
      *
-     * What comes from the container is still cloned, because not every
-     * container is built that way: a container the app hands to the router
-     * itself, or an object put into the container with `set()`, can return
-     * the same object to every request. The clone keeps the render's writes
-     * (params, request, scripts, metadata, children, a form action's state)
-     * off that object. It is shallow, so in that case alone an object the
-     * page built in its constructor is shared between requests. For a fresh
-     * instance the clone costs one copy and changes nothing.
+     * Only an object the container may return to every request — a shared
+     * service of a container that did not go through ContainerFactory, an
+     * object put in with `set()`, anything from a container other than
+     * InjectorContainer — is cloned, so the render's writes never reach the
+     * container's object. The clone is shallow, so in that case alone an
+     * object the page built in its constructor is shared between requests.
+     * A class that cannot be cloned cannot be protected that way, which is a
+     * configuration error rather than something to render anyway.
      *
      * @param class-string $className
      */
     private function resolveInstance(string $className): object
     {
-        if (null !== $this->container && $this->container->has($className)) {
-            $instance = $this->container->get($className);
-            \assert(\is_object($instance));
-
-            return $instance instanceof Renderable || $instance instanceof LayoutInterface
-                ? clone $instance
-                : $instance;
+        if (null === $this->container || !$this->container->has($className)) {
+            return new $className();
         }
 
-        return new $className();
+        $instance = $this->container->get($className);
+        \assert(\is_object($instance));
+
+        if (!$instance instanceof Renderable && !$instance instanceof LayoutInterface) {
+            return $instance;
+        }
+
+        if ($this->container instanceof InjectorContainer && $this->container->buildsNewInstance($className)) {
+            return $instance;
+        }
+
+        if (!(new ReflectionObject($instance))->isCloneable()) {
+            throw new RuntimeException(\sprintf(
+                '%s comes from the container as an object that may be shared between requests, and it cannot be cloned to keep one request\'s state from the next. Register it as a non-shared service (not an instance passed to set()), or make it cloneable.',
+                $instance::class,
+            ));
+        }
+
+        return clone $instance;
     }
 
     private function getClassFromFile(string $filePath): ?string
     {
-        $content = \file_get_contents($filePath);
-
-        if (false === $content) {
-            return null;
-        }
-
-        $tokens = \token_get_all($content);
-        $tokenCount = \count($tokens);
-        $namespace = null;
-        $className = null;
-
-        for ($i = 0; $i < $tokenCount; ++$i) {
-            $token = $tokens[$i];
-
-            if (!\is_array($token)) {
-                continue;
-            }
-
-            if (\T_NAMESPACE === $token[0]) {
-                $namespaceParts = [];
-                ++$i;
-
-                while ($i < $tokenCount) {
-                    $nextToken = $tokens[$i];
-
-                    if (';' === $nextToken || '{' === $nextToken) {
-                        break;
-                    }
-
-                    if (\is_array($nextToken)) {
-                        if (\T_NAME_QUALIFIED === $nextToken[0] || \T_STRING === $nextToken[0]) {
-                            $namespaceParts[] = $nextToken[1];
-                        }
-                    }
-
-                    ++$i;
-                }
-
-                $namespace = \implode('', $namespaceParts);
-            }
-
-            if (\T_CLASS === $token[0]) {
-                ++$i;
-
-                while ($i < $tokenCount) {
-                    $nextToken = $tokens[$i];
-
-                    if (\is_array($nextToken) && \T_STRING === $nextToken[0]) {
-                        $className = $nextToken[1];
-
-                        break;
-                    }
-
-                    if (\is_array($nextToken) && \T_WHITESPACE === $nextToken[0]) {
-                        ++$i;
-
-                        continue;
-                    }
-
-                    break;
-                }
-
-                if (null !== $className) {
-                    break;
-                }
-            }
-        }
-
-        if (null === $className) {
-            return null;
-        }
-
-        if (null !== $namespace) {
-            return $namespace . '\\' . $className;
-        }
-
-        return $className;
+        return RouteFileClasses::declaredIn($filePath);
     }
 }

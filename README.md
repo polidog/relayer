@@ -1521,15 +1521,22 @@ You only need to register a Page in `AppConfigurator` if you want non-default
 behavior (e.g. service tags, decorators, factory construction).
 
 A registered page, layout or error page is still built anew for every
-request: the container makes each class that extends `PageComponent` or
-`ErrorPageComponent`, or implements `LayoutInterface`, a non-shared service,
-even if you call `setShared(true)` on it, and the compiled container
-(`relayer container:compile`) does the same. So an object the page creates in
-its constructor (a form, a DTO) never carries one visitor's state to the
-next on a long-running worker, while the services injected into it are still
-the container's shared ones. An object handed to the container with `set()`
-cannot be rebuilt; the router renders a shallow clone of it, so objects it
-holds are shared between requests. Don't register pages that way.
+request: the container makes a non-shared service of each class declared in a
+`page`, `layout` or `error` file under `src/Pages` (including one that only
+implements `Renderable`) and of each class that extends `PageComponent` or
+`ErrorPageComponent`, or implements `LayoutInterface`, even if you call
+`setShared(true)` on it, and the compiled container (`relayer
+container:compile`) does the same. Other `Renderable` services, such as
+components, stay shared. So an object the page creates in its constructor (a
+form, a DTO) never carries one visitor's state to the next on a long-running
+worker, while the services injected into it are still the container's shared
+ones. The router renders such a new object as it is, so a page or layout
+does not have to be cloneable.
+
+An object handed to the container with `set()` cannot be rebuilt; the router
+renders a shallow clone of it, so objects it holds are shared between
+requests, and a class that cannot be cloned (a `private __clone()`) fails the
+request with a `RuntimeException`. Don't register pages that way.
 
 ## Accessing the HTTP Request
 

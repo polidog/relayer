@@ -6,6 +6,8 @@ namespace Polidog\Relayer;
 
 use Polidog\Relayer\Auth\AuthenticatorInterface;
 use Polidog\Relayer\Auth\AuthGuard;
+use Polidog\Relayer\Di\ContainerFactory;
+use Polidog\Relayer\Di\NonSharedPagesPass;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\EtagStore;
 use Polidog\Relayer\Http\Request;
@@ -18,7 +20,9 @@ use Psr\Container\NotFoundExceptionInterface;
 use ReflectionClass;
 use ReflectionNamedType;
 use RuntimeException;
+use Symfony\Component\DependencyInjection\ContainerBuilder;
 use Symfony\Component\DependencyInjection\ContainerInterface as SymfonyContainerInterface;
+use Symfony\Component\DependencyInjection\Exception\ServiceNotFoundException;
 
 /**
  * PSR-11 adapter over the Symfony DI container.
@@ -57,6 +61,47 @@ final class InjectorContainer implements ContainerInterface
         }
 
         return $this->container->has($id) || \class_exists($id);
+    }
+
+    /**
+     * Whether {@see get()} builds a new object for `$id` on every call, so
+     * the caller owns what it gets and need not copy it.
+     *
+     * True for a class that is not registered (it is autowired here, anew
+     * each time) and for a non-shared definition. The container built by
+     * {@see ContainerFactory} lists its non-shared ids in a parameter that
+     * survives `relayer container:compile`; a bare {@see ContainerBuilder}
+     * is asked for the definition itself. Anything else — a shared service,
+     * an object put in with `set()` — may be the same object every time.
+     */
+    public function buildsNewInstance(string $id): bool
+    {
+        if (Request::class === $id) {
+            return false;
+        }
+
+        if (!$this->container->has($id)) {
+            return \class_exists($id);
+        }
+
+        if ($this->container instanceof ContainerBuilder) {
+            try {
+                $definition = $this->container->findDefinition($id);
+            } catch (ServiceNotFoundException) {
+                // An object set() on the builder without a definition.
+                return false;
+            }
+
+            return !$definition->isShared() && !$definition->isSynthetic();
+        }
+
+        if (!$this->container->hasParameter(NonSharedPagesPass::PARAMETER)) {
+            return false;
+        }
+
+        $nonShared = $this->container->getParameter(NonSharedPagesPass::PARAMETER);
+
+        return \is_array($nonShared) && \in_array($id, $nonShared, true);
     }
 
     public function get(string $id): object
