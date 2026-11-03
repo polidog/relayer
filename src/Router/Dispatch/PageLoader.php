@@ -15,6 +15,7 @@ use Polidog\Relayer\InjectorContainer;
 use Polidog\Relayer\Profiler\Profiler;
 use Polidog\Relayer\Psx\PsxCache;
 use Polidog\Relayer\Router\Component\ErrorPageComponent;
+use Polidog\Relayer\Router\Component\FunctionErrorPage;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageComponent;
 use Polidog\Relayer\Router\Component\PageContext;
@@ -48,6 +49,14 @@ final class PageLoader
      * @var array<string, Closure>
      */
     private static array $pageFactories = [];
+
+    /**
+     * Function-style error page factories keyed by the (compiled) file path,
+     * for the same reason as {@see $pageFactories}.
+     *
+     * @var array<string, Closure>
+     */
+    private static array $errorPageFactories = [];
 
     public function __construct(
         private readonly string $appDirectory,
@@ -110,33 +119,67 @@ final class PageLoader
         return $layout;
     }
 
-    public function loadErrorPage(string $errorPath, int $statusCode, string $message): ?Renderable
+    /**
+     * The project's error page, ready to render with the given status and
+     * message, or null when `$errorPath` does not exist.
+     *
+     * The file is either function-style — it returns a closure, autowired
+     * like a page factory, that receives the status and message (see
+     * {@see resolveErrorPageArguments()}) — or declares a `Renderable` class,
+     * which receives them through {@see ErrorPageComponent::setError()}.
+     *
+     * @throws InvalidErrorPage when the file exists but is neither
+     */
+    public function loadErrorPage(string $errorPath, int $statusCode, string $message, ?Request $request = null): ?Renderable
     {
         if (!\file_exists($errorPath)) {
             return null;
         }
+
+        $sourcePath = $errorPath;
 
         // .psx is the source; the runtime requires the compiled .psx.php sibling.
         if (\str_ends_with($errorPath, '.psx')) {
             $errorPath = $this->psxCache->compiledPath($errorPath, $this->profiler);
         }
 
-        require_once $errorPath;
+        // Same reason as for pages: `require_once` hands back the closure
+        // only on the first include, so keep it for the later requests of a
+        // long-running worker.
+        $factory = self::$errorPageFactories[$errorPath] ?? null;
+
+        if (null === $factory) {
+            $result = require_once $errorPath;
+
+            if ($result instanceof Closure) {
+                $factory = self::$errorPageFactories[$errorPath] = $result;
+            }
+        }
+
+        if (null !== $factory) {
+            return $this->buildFunctionErrorPage($factory, $sourcePath, $statusCode, $message, $request);
+        }
 
         $className = $this->getClassFromFile($errorPath);
 
-        if (null === $className) {
-            return null;
-        }
-
-        if (!\class_exists($className)) {
-            return null;
+        if (null === $className || !\class_exists($className)) {
+            throw new InvalidErrorPage(\sprintf(
+                'The error page %s neither returns a closure nor declares a class. Return `fn (array $props): Element => ...` (the props carry `status` and `message`), or declare a class extending %s.',
+                $sourcePath,
+                ErrorPageComponent::class,
+            ));
         }
 
         $instance = $this->resolveInstance($className);
 
         if (!$instance instanceof Renderable) {
-            return null;
+            throw new InvalidErrorPage(\sprintf(
+                'The error page class %s (%s) must extend %s or implement %s.',
+                $className,
+                $sourcePath,
+                ErrorPageComponent::class,
+                Renderable::class,
+            ));
         }
 
         if ($instance instanceof ErrorPageComponent) {
@@ -401,6 +444,92 @@ final class PageLoader
         }
 
         return new FunctionPage($renderFn, $context, $pageId, $request);
+    }
+
+    private function buildFunctionErrorPage(Closure $factory, string $errorPath, int $statusCode, string $message, ?Request $request): FunctionErrorPage
+    {
+        $result = $factory(...$this->resolveErrorPageArguments($factory, $errorPath, $statusCode, $message, $request));
+
+        // Like a page: the factory returns the Element itself, or a render
+        // closure (the two-level form).
+        if ($result instanceof Element) {
+            return new FunctionErrorPage(static fn (): Element => $result, $errorPath);
+        }
+
+        if ($result instanceof Closure) {
+            return new FunctionErrorPage($result, $errorPath);
+        }
+
+        throw new InvalidErrorPage(\sprintf(
+            'The function-style error page %s must return an Element or a render closure, got %s.',
+            $errorPath,
+            \get_debug_type($result),
+        ));
+    }
+
+    /**
+     * Arguments for a function-style error page. The error comes in by type:
+     * an `array` parameter receives the props `['status' => int, 'message'
+     * => string]`, an `int` one the status and a `string` one the message —
+     * the two values a class-style page reads through `getStatusCode()` /
+     * `getMessage()`. An untyped parameter named `props`, `status` (or
+     * `statusCode`) or `message` is filled the same way. A `Request`
+     * parameter receives the request, and any other class type is resolved
+     * from the container, as for a page factory.
+     *
+     * @return array<int, mixed>
+     */
+    private function resolveErrorPageArguments(Closure $factory, string $errorPath, int $statusCode, string $message, ?Request $request): array
+    {
+        $props = ['status' => $statusCode, 'message' => $message];
+        $args = [];
+
+        foreach ((new ReflectionFunction($factory))->getParameters() as $parameter) {
+            $type = $parameter->getType();
+            $typeName = $type instanceof ReflectionNamedType ? $type->getName() : null;
+            $isClass = $type instanceof ReflectionNamedType && !$type->isBuiltin();
+
+            $value = match (true) {
+                'array' === $typeName => $props,
+                'int' === $typeName => $statusCode,
+                'string' === $typeName => $message,
+                null === $type => match ($parameter->getName()) {
+                    'props' => $props,
+                    'status', 'statusCode' => $statusCode,
+                    'message' => $message,
+                    default => null,
+                },
+                Request::class === $typeName => $request ?? Request::fromGlobals(),
+                $isClass && null !== $typeName && null !== $this->container && $this->container->has($typeName) => $this->container->get($typeName),
+                default => null,
+            };
+
+            if (null !== $value) {
+                $args[] = $value;
+
+                continue;
+            }
+
+            if ($parameter->isDefaultValueAvailable()) {
+                $args[] = $parameter->getDefaultValue();
+
+                continue;
+            }
+
+            if ($parameter->allowsNull()) {
+                $args[] = null;
+
+                continue;
+            }
+
+            throw new InvalidErrorPage(\sprintf(
+                'Cannot autowire parameter $%s of the function-style error page %s. It takes `array $props` (status and message), `int $status`, `string $message`, a Request, or a container service.',
+                $parameter->getName(),
+                $errorPath,
+            ));
+        }
+
+        return $args;
     }
 
     /**

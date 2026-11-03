@@ -230,6 +230,39 @@ final class AppRouterProfilerTest extends TestCase
         self::assertSame([], $storage->saved);
     }
 
+    public function testRosannaNoticesDuringDispatchLandOnTheProfile(): void
+    {
+        \mkdir($this->workDir . '/styled', 0o777, true);
+        \file_put_contents(
+            $this->workDir . '/styled/route.php',
+            "<?php\n\nuse Polidog\\Relayer\\Http\\Response;\nuse Polidog\\Rosanna\\Runtime\\Element;\nuse Polidog\\Rosanna\\Runtime\\Renderer;\n\n"
+            . "return ['GET' => static fn (): Response => Response::text(\n"
+            . "    new Renderer()->renderElement(new Element('p', ['style' => ['color' => 'red']], ['hi'])),\n"
+            . ")];\n",
+        );
+        $storage = new InMemoryProfilerStorage();
+        $router = AppRouter::create($this->workDir)->setProfiler(new RecordingProfiler($storage), $storage);
+
+        // The collector forwards to the previous handler; swallow there so
+        // PHPUnit does not report the notice.
+        \set_error_handler(static fn (): bool => true);
+
+        try {
+            $output = $this->dispatch($router, '/styled', 'GET');
+        } finally {
+            \restore_error_handler();
+        }
+
+        self::assertSame('<p>hi</p>', $output);
+        $profile = \array_values($storage->saved)[0];
+        $notices = \array_values(\array_filter(
+            $profile->getEvents(),
+            static fn ($event): bool => 'rosanna' === $event->collector,
+        ));
+        self::assertCount(1, $notices);
+        self::assertSame('Non-scalar value for attribute "style" (array) was dropped.', $notices[0]->payload['message']);
+    }
+
     private function dispatch(AppRouter $router, string $path, string $method): string
     {
         $_SERVER['REQUEST_URI'] = $path;

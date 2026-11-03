@@ -458,17 +458,50 @@ src/Pages/
 
 ### Error pages
 
-A root `error.psx` (extending `ErrorPageComponent`) renders error responses
-inside the root layout — an unmatched route (404), an unsupported method on a
-page (405), every `$ctx->abort()` status, the `401` / `403` from `#[Auth]` /
+A root `error.psx` renders error responses inside the root layout — an
+unmatched route (404), an unsupported method on a page (405), every
+`$ctx->abort()` status, the `401` / `403` from `#[Auth]` /
 `$ctx->requireAuth()`, the `403` of a form action refused for its CSRF token or
 signature, and an uncaught exception (500). If the root layout itself
 fails an auth guard or aborts while rendering the error, `error.psx` renders
 without it; if `error.psx` fails the same way, the default document is used. The
-status is unchanged either way. It receives the status and message via
-`ErrorPageComponent`, so one `error.psx` can branch on `getStatusCode()` for a
-404 vs. 403 vs. 500 page — don't hard-code "not found" wording in it.
-Without one, the framework emits a minimal default document.
+status is unchanged either way. It receives the status and message, so one
+`error.psx` can branch on the status for a 404 vs. 403 vs. 500 page — don't
+hard-code "not found" wording in it. Without one, the framework emits a
+minimal default document.
+
+Write it function-style, like a page, or as a class extending
+`ErrorPageComponent`:
+
+```php
+// src/Pages/error.psx — function-style
+return fn (array $props): Element => <section>
+    <h1>{(string) $props['status']}</h1>
+    <p>{$props['message']}</p>
+</section>;
+```
+
+```php
+// src/Pages/error.psx — class-style
+final class ErrorPage extends ErrorPageComponent
+{
+    public function render(): Element
+    {
+        return <h1>{(string) $this->getStatusCode()}: {$this->getMessage()}</h1>;
+    }
+}
+```
+
+The function's parameters are filled by type: `array` gets the props
+`['status' => int, 'message' => string]`, `int` the status, `string` the
+message, `Request` the request, and any other class a container service. It
+may return the `Element` or, like a page factory, a render closure.
+
+An `error.psx` that is neither (it returns no closure and declares no
+`Renderable` class, or its closure can't be wired) is a configuration error:
+in dev it is thrown, so the debug page says what is wrong; otherwise it is
+logged as a `warning` (and recorded on the profiler) and the default document
+answers with the same status.
 
 ### Uncaught exceptions
 
@@ -573,7 +606,7 @@ return [
   `Response::json($data, $status, $headers)` (encodes + sets
   `Content-Type: application/json`, slashes/unicode unescaped),
   `Response::text()`, `Response::noContent()` (a bodyless `204` by
-  default), `Response::redirect($location, $status)`, or `Response::make()`
+  default, sent without a `Content-Type`), `Response::redirect($location, $status)`, or `Response::make()`
   for a raw body. Status and headers are always explicit — there is no
   raw-data return path; returning anything else is a hard server error.
 - Set cookies with `->withCookie($name, $value, $options)` and delete them
@@ -1165,17 +1198,21 @@ function-style pages.
 
 ### Class-style: `PageComponent::action()`
 
-`PageComponent::action([$this, 'handler'])` returns a CSRF-bound token for a
-form's hidden field. Submitting the form invokes the matching method on the
-page before `render()`:
+`PageComponent::action([$this, 'handler'])` returns a signed action token.
+Put it in the `<form>`'s `action` attribute: the framework turns that form
+into a `POST` back to the current URL and adds the `_rosanna_action` and
+`_rosanna_csrf` hidden fields itself. Submitting the form invokes the
+matching method on the page before `render()`:
 
 ```php
+use Polidog\Relayer\Router\RedirectException;
+
 public function render(): Element
 {
     return (
-        <form method="post">
-            <input type="hidden" name="_rosanna_action" value={$this->action([$this, 'save'])} />
+        <form action={$this->action([$this, 'save'])}>
             <input name="title" />
+            <button>save</button>
         </form>
     );
 }
@@ -1183,14 +1220,19 @@ public function render(): Element
 public function save(array $form): void
 {
     // ... handle $form['title']
-    header('Location: /dashboard', true, 303); // PRG
-    exit;
+    throw new RedirectException('/dashboard'); // 303 Post/Redirect/Get
 }
 ```
 
 Invalid CSRF tokens return a `403`, rendered through the same error path as
 `$ctx->abort(403)` (`error.psx`, or the built-in page) — the page itself is
-not rendered.
+not rendered. Don't write the token into a `_rosanna_action` hidden input
+yourself: only a form whose `action` holds the token gets the `_rosanna_csrf`
+field, so such a form is always refused with `403`.
+
+A class-style page has no `PageContext`, so redirect by throwing
+`RedirectException` (what `$ctx->redirect()` throws). The router turns it
+into a `Location` response — 303 See Other by default.
 
 Only methods the page class itself declares can be actions: passing an
 inherited framework method (or anything other than `[$this, 'method']`)
@@ -1757,7 +1799,7 @@ return function (PageContext $ctx, Authenticator $auth): Closure {
         $ctx->redirect('/dashboard'); // 303 Post/Redirect/Get; unwinds here
     });
 
-    return function () use ($login, $error): Element {
+    return function () use ($login, &$error): Element {
         // ... render form, surface $error as a single generic message
     };
 };
@@ -2790,7 +2832,9 @@ A dev-only request profiler. Each request is recorded as a `Profile`
 
 In dev, the Traceable decorators wrap AppRouter / Database / EtagStore /
 SessionStorage / Authenticator and feed spans like `db.query`,
-`cache.etag_*`, and `session.*` into the profile automatically.
+`cache.etag_*`, and `session.*` into the profile automatically. Notices
+Rosanna raises while rendering (an attribute it drops) are recorded as
+`rosanna.notice` / `rosanna.warning`, then passed on to your error handler.
 `<X defer />` sub-requests are linked to their parent via `parentToken`.
 
 ### Web view
@@ -2986,6 +3030,13 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
 
    To stay in classic (per-request) mode, remove the `index` and `worker` lines
    from the `Caddyfile`.
+
+Rosanna renders some props differently from React. Pass `style` as a string
+(`style="color: red"`); an array is dropped. `key` is not special: `<li key="1">`
+renders as is. There is no raw HTML injection: `dangerouslySetInnerHTML` is
+dropped like any other non-scalar attribute. Rosanna reports each dropped
+attribute with an `E_USER_NOTICE`, and in dev the [profiler](#profiler) records
+it as a `rosanna` event.
 
 Forms rendered by the previous version stop working when you deploy, because
 the field names and the session keys changed. Purge your CDN at deploy time so

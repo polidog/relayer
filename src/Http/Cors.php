@@ -100,6 +100,8 @@ final class Cors
                     \header('Access-Control-Allow-Methods: ' . \implode(', ', $methods));
                     \header('Access-Control-Allow-Headers: ' . \implode(', ', $headers));
                     \header('Access-Control-Max-Age: ' . $maxAge);
+                    // Bodiless 204: no PHP default `text/html` Content-Type.
+                    BodilessHeaders::removeContentType();
                 }
                 \http_response_code(204);
 

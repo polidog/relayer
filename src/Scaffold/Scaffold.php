@@ -31,7 +31,7 @@ final class Scaffold
      * the value in effect when it was scaffolded; `upgrade` (future) diffs
      * the recorded value against this constant.
      */
-    public const int STRUCTURE_VERSION = 11;
+    public const int STRUCTURE_VERSION = 12;
 
     /** Composer script publishing `public/rosanna-defer.js`. */
     public const string ASSET_PUBLISHER = 'Polidog\Rosanna\Defer\Installer\AssetInstaller::publish';
@@ -310,6 +310,14 @@ final class Scaffold
                 'php.ini' => [
                     // v10
                     'ed1f327bc2923959b75ba5f17a85ae0baa7e1d20d19cbe7abe3466ac8f565321',
+                ],
+            ],
+            // v12 keeps the space between "files under" and <code>src/Pages/</code>
+            // in page.psx. A line break between them is dropped, as in JSX.
+            12 => [
+                'src/Pages/page.psx' => [
+                    // v10-v11
+                    'd1ca03972801bc06e2500231823901cfd96093be74d1268e015fc32a99efb954',
                 ],
             ],
         ];
@@ -870,7 +878,7 @@ final class Scaffold
                 <h1>It works</h1>
                 <p>
                     Edit <code>src/Pages/page.psx</code> to change this page. Add
-                    routes by creating more <code>page.psx</code> files under
+                    routes by creating more <code>page.psx</code> files under{' '}
                     <code>src/Pages/</code> (nested directories become path
                     segments; <code>[id]</code> directories are dynamic).
                 </p>

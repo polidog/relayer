@@ -463,18 +463,48 @@ src/Pages/
 
 ### エラーページ
 
-ルート直下に `error.psx`（`ErrorPageComponent` を継承）を置くと、ルートレイ
-アウト内にエラーレスポンスがレンダリングされます。未マッチルート（404）、
-ページへの未対応メソッド（405）、すべての `$ctx->abort()` ステータス、
-`#[Auth]` / `$ctx->requireAuth()` の `401` / `403`、CSRF トークンや署名の検証で
-拒否したフォームアクションの `403`、未捕捉例外（500）が対象です。
+ルート直下に `error.psx` を置くと、ルートレイアウト内にエラーレスポンスが
+レンダリングされます。未マッチルート（404）、ページへの未対応メソッド（405）、
+すべての `$ctx->abort()` ステータス、`#[Auth]` / `$ctx->requireAuth()` の
+`401` / `403`、CSRF トークンや署名の検証で拒否したフォームアクションの `403`、
+未捕捉例外（500）が対象です。
 エラーの描画中にルートレイアウト自身が認証ガードで失敗したり abort した場合は
 レイアウトなしで `error.psx` を描画し、`error.psx` も同様に失敗した場合はデフォルト
-表示になります。どの場合もステータスは変わりません。ステータスとメッセージは
-`ErrorPageComponent` 経由で渡されるので、1 つの `error.psx` で
-`getStatusCode()` を見て 404 / 403 / 500 を出し分けられます（「見つかりません」
-のような文言を決め打ちしないでください）。無ければ最小限のデフォルト表示に
-なります。
+表示になります。どの場合もステータスは変わりません。ステータスとメッセージが
+渡されるので、1 つの `error.psx` でステータスを見て 404 / 403 / 500 を出し分け
+られます（「見つかりません」のような文言を決め打ちしないでください）。無ければ
+最小限のデフォルト表示になります。
+
+ページと同じ関数型でも、`ErrorPageComponent` を継承するクラスでも書けます。
+
+```php
+// src/Pages/error.psx — 関数型
+return fn (array $props): Element => <section>
+    <h1>{(string) $props['status']}</h1>
+    <p>{$props['message']}</p>
+</section>;
+```
+
+```php
+// src/Pages/error.psx — クラス型
+final class ErrorPage extends ErrorPageComponent
+{
+    public function render(): Element
+    {
+        return <h1>{(string) $this->getStatusCode()}: {$this->getMessage()}</h1>;
+    }
+}
+```
+
+関数の引数は型で埋まります。`array` には props
+`['status' => int, 'message' => string]`、`int` にはステータス、`string` には
+メッセージ、`Request` にはリクエスト、それ以外のクラスにはコンテナのサービスが
+入ります。戻り値は `Element` か、ページのファクトリと同じく描画用のクロージャです。
+
+どちらでもない `error.psx`（クロージャを返さず `Renderable` のクラスも宣言しない、
+あるいはクロージャの引数を埋められない）は設定の誤りとして扱います。dev では
+例外にするので、デバッグページに何が悪いかが出ます。それ以外では `warning` で
+ログに残し（プロファイラにも記録します）、同じステータスのデフォルト表示で応答します。
 
 ### 未捕捉例外
 
@@ -576,7 +606,7 @@ return [
 - ハンドラは **必ず `Response` を返します**。`Response::json($data,
   $status, $headers)`（JSON 化＋`Content-Type: application/json`、スラッシュ
   ／ユニコードは非エスケープ）、`Response::text()`、`Response::noContent()`
-  （既定は本文なしの `204`）、`Response::redirect($location, $status)`、
+  （既定は本文なしの `204`。`Content-Type` は付けない）、`Response::redirect($location, $status)`、
   生ボディ用の `Response::make()` で生成します。ステータスとヘッダは常に
   明示 — 生データを返す経路はなく、それ以外を返すと即サーバエラーです。
 - Cookie は `->withCookie($name, $value, $options)` で設定し、
@@ -1175,16 +1205,21 @@ page は `GET,POST` を表示します（POST はサーバアクション
 
 ### クラス型: `PageComponent::action()`
 
-`PageComponent::action([$this, 'handler'])` が CSRF トークン付きのアクション
-識別子を返します。フォーム送信時に対応するメソッドが `render()` の前に呼ばれます:
+`PageComponent::action([$this, 'handler'])` は署名付きのアクショントークンを
+返します。これを `<form>` の `action` 属性に渡すと、フレームワークがその form を
+現在の URL への `POST` にし、`_rosanna_action` と `_rosanna_csrf` の hidden
+フィールドを自動で足します。フォーム送信時に対応するメソッドが `render()` の
+前に呼ばれます:
 
 ```php
+use Polidog\Relayer\Router\RedirectException;
+
 public function render(): Element
 {
     return (
-        <form method="post">
-            <input type="hidden" name="_rosanna_action" value={$this->action([$this, 'save'])} />
+        <form action={$this->action([$this, 'save'])}>
             <input name="title" />
+            <button>save</button>
         </form>
     );
 }
@@ -1192,13 +1227,19 @@ public function render(): Element
 public function save(array $form): void
 {
     // ... $form['title'] を処理
-    header('Location: /dashboard', true, 303); // PRG
-    exit;
+    throw new RedirectException('/dashboard'); // 303 Post/Redirect/Get
 }
 ```
 
 CSRF トークンが無効な場合は `403` が返ります。`$ctx->abort(403)` と同じ経路
 （`error.psx`、無ければ組み込みの表示）で応答し、ページ自体は描画しません。
+トークンを `_rosanna_action` の hidden input に自分で書かないでください。
+`_rosanna_csrf` が入るのは `action` にトークンを持つ form だけなので、その形の
+form は必ず `403` になります。
+
+クラス型のページには `PageContext` が無いので、リダイレクトは
+`RedirectException`（`$ctx->redirect()` が投げる例外）を投げて行います。ルータが
+これを `Location` の応答に変えます（既定は 303 See Other）。
 
 アクションにできるのはページクラス自身が宣言したメソッドだけです。継承した
 フレームワークのメソッド（や `[$this, 'method']` 以外）を `action()` に渡すと
@@ -1751,7 +1792,7 @@ return function (PageContext $ctx, Authenticator $auth): Closure {
         $ctx->redirect('/dashboard'); // 303 Post/Redirect/Get。ここでアンワインド
     });
 
-    return function () use ($login, $error): Element {
+    return function () use ($login, &$error): Element {
         // ... フォームを描画、$error は単一の汎用メッセージで表示
     };
 };
@@ -2778,7 +2819,9 @@ dev 限定のリクエストプロファイラです。各リクエストを `Pr
 
 dev では Traceable デコレータ群が AppRouter / Database / EtagStore /
 SessionStorage / Authenticator をラップし、`db.query`・`cache.etag_*`・
-`session.*` などのスパンを自動でプロファイルへ流します。`<X defer />`
+`session.*` などのスパンを自動でプロファイルへ流します。描画中に Rosanna が出す notice
+（属性を捨てたときなど）は `rosanna.notice` / `rosanna.warning` として記録し、そのあと
+元のエラーハンドラに渡します。`<X defer />`
 によるサブリクエストは `parentToken` で親リクエストに紐づきます。
 
 ### Web ビュー
@@ -2974,6 +3017,12 @@ Relayer は `polidog/rosanna` と `polidog/rosanna-defer` の上で動くよう�
 
    クラシック（リクエストごと）モードのままにするには、`Caddyfile` から `index` と
    `worker` の行を消してください。
+
+Rosanna は一部の prop を React と違うように描画します。`style` は文字列で渡してください
+（`style="color: red"`）。配列は捨てられます。`key` は特別扱いされず、`<li key="1">` は
+そのまま出力されます。生 HTML を差し込む手段はなく、`dangerouslySetInnerHTML` もほかの
+スカラーでない属性と同じく捨てられます。Rosanna は捨てた属性ごとに `E_USER_NOTICE` を
+出し、dev では[プロファイラ](#プロファイラ)が `rosanna` イベントとして記録します。
 
 フィールド名とセッションのキーが変わるので、旧バージョンが描画したフォームは
 デプロイの時点で動かなくなります。古い HTML や `usephp.js` が配信されないよう、

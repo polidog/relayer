@@ -74,6 +74,32 @@ final class PageMethodHttpServerTest extends TestCase
                 ]);
             };
             PHP);
+        // The class-style form-action example in the README (#129): the token
+        // goes in the form's `action`, so the CSRF field is added for it.
+        self::write('app/class-form/page.php', <<<'PHP'
+            <?php
+            use Polidog\Relayer\Router\Component\PageComponent;
+            use Polidog\Relayer\Router\RedirectException;
+            use Polidog\Rosanna\Runtime\Element;
+
+            final class PageMethodClassFormPage extends PageComponent
+            {
+                public function render(): Element
+                {
+                    return new Element('form', ['action' => $this->action([$this, 'save'])], [
+                        new Element('input', ['name' => 'title']),
+                    ]);
+                }
+
+                /** @param array<string, mixed> $form */
+                public function save(array $form): void
+                {
+                    \file_put_contents(\dirname(__DIR__, 2) . '/action-ran', (string) $form['title']);
+
+                    throw new RedirectException('/dashboard');
+                }
+            }
+            PHP);
         self::write('cors/middleware.php', <<<'PHP'
             <?php
             use Polidog\Relayer\Http\Cors;
@@ -220,6 +246,24 @@ final class PageMethodHttpServerTest extends TestCase
         ], \http_build_query(self::hiddenFields($html) + ['title' => 'hello']));
 
         self::assertSame(200, $status);
+        self::assertSame('hello', (string) \file_get_contents(self::$root . '/action-ran'));
+    }
+
+    public function testAClassPageFormActionPostsWithItsCsrfFieldAndRedirects(): void
+    {
+        [, $headers, $html] = $this->request('GET', '/class-form');
+        $fields = self::hiddenFields($html);
+
+        self::assertArrayHasKey('_rosanna_action', $fields);
+        self::assertArrayHasKey('_rosanna_csrf', $fields);
+
+        [$status, $postHeaders] = $this->request('POST', '/class-form', [
+            'Cookie' => self::sessionCookie($headers),
+            'Content-Type' => 'application/x-www-form-urlencoded',
+        ], \http_build_query($fields + ['title' => 'hello']));
+
+        self::assertSame(303, $status);
+        self::assertSame('/dashboard', $postHeaders['location'] ?? null);
         self::assertSame('hello', (string) \file_get_contents(self::$root . '/action-ran'));
     }
 
