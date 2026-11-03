@@ -2282,9 +2282,11 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   sets `session_cache_limiter('')` once one applies. Pages without a policy
   keep PHP's `no-store` when they use a session.
 - A response that used a session is never left storable by a shared cache. If
-  a session is active when headers go out, or this response issues the session
-  cookie of one that was started and already closed, any policy other than
-  `private` or `noStore` is replaced with `Cache-Control: private, no-store`, so a logged-in
+  the request opened a session at any point, by `session_start()` from
+  anywhere (started or resumed from the visitor's cookie, and even if it was
+  closed again with `session_write_close()` before the page ran), any policy
+  other than `private` or `noStore` is replaced with
+  `Cache-Control: private, no-store`, so a logged-in
   visitor gets an uncached copy of a `#[Cache(public: true)]` page whose layout
   reads `$auth->user()`, while anonymous visitors still get the declared
   policy. A page that wants browser caching for logged-in users declares

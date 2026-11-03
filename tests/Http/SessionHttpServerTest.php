@@ -278,6 +278,32 @@ final class SessionHttpServerTest extends TestCase
         self::assertArrayNotHasKey('pragma', $headers);
     }
 
+    #[DataProvider('publicEtagPages')]
+    public function testASessionAMiddlewareResumedAndClosedMakesARenderingNotSharedCacheable(string $path): void
+    {
+        // Resuming the visitor's own session issues no new cookie, so once it
+        // is closed nothing on the response shows that it was read.
+        [$status, $headers] = $this->get($path, ['Cookie: ' . $this->login(), 'X-Test-Resume-Closed: 1']);
+
+        self::assertSame(200, $status);
+        self::assertArrayNotHasKey('set-cookie', $headers);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+        self::assertArrayNotHasKey('expires', $headers);
+        self::assertArrayNotHasKey('pragma', $headers);
+    }
+
+    #[DataProvider('publicEtagPages')]
+    public function testASessionAMiddlewareResumedAndClosedIsNeverAnsweredWithA304(string $path): void
+    {
+        [$status, $headers] = $this->get(
+            $path,
+            ['Cookie: ' . $this->login(), 'X-Test-Resume-Closed: 1', 'If-None-Match: "v1"'],
+        );
+
+        self::assertSame(200, $status);
+        self::assertSame(['private, no-store'], $headers['cache-control'] ?? null);
+    }
+
     public function testAPrivatePolicySurvivesASessionAMiddlewareStartedAndClosed(): void
     {
         [$status, $headers] = $this->get('/private-etag', ['X-Test-Remember-Me-Closed: 1']);
@@ -512,6 +538,13 @@ final class SessionHttpServerTest extends TestCase
                     session_start();
                     $_SESSION['user'] = 'alice';
                     session_write_close();
+                }
+                if (null !== $request->header('x-test-resume-closed')) {
+                    // Reads the visitor's existing session, then releases the lock.
+                    session_start();
+                    $user = $_SESSION['user'] ?? null;
+                    session_write_close();
+                    $request = $request->withHeader('X-Test-User', is_string($user) ? $user : '');
                 }
                 if (null !== $request->header('x-test-inject-authorization')) {
                     $request = $request->withHeader('Authorization', 'Bearer injected');

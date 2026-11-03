@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Cache;
 use Polidog\Relayer\Http\CachePolicy;
 use Polidog\Relayer\Http\SessionStarter;
+use Polidog\Rosanna\Runtime\RequestLifecycle;
 
 /**
  * A FrankenPHP worker keeps ini changes between requests, so what one request
@@ -39,6 +40,18 @@ final class SessionWorkerStateTest extends TestCase
         CachePolicy::restoreSessionCacheLimiter();
 
         self::assertSame('private', \session_cache_limiter());
+    }
+
+    #[RunInSeparateProcess]
+    public function testASessionClosedInOneRequestIsNotSeenAsUsedByTheNext(): void
+    {
+        CachePolicy::restoreSessionCacheLimiter();
+        // What session_start() + session_write_close() leave behind.
+        $_SESSION = ['user' => 'alice'];
+
+        RequestLifecycle::reset();
+
+        self::assertFalse(isset($_SESSION));
     }
 
     #[RunInSeparateProcess]

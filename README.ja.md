@@ -2277,9 +2277,10 @@ $container->setAlias(EtagStore::class, RedisEtagStore::class)->setPublic(true);
   した時点でフレームワークが `session_cache_limiter('')` を設定します。方針の
   ないページがセッションを使う場合は、PHP の `no-store` のままです。
 - セッションを使ったレスポンスは、共有キャッシュに保存できる状態では返しま
-  せん。ヘッダー送出時にセッションが有効なら、または開始してすでに閉じた
-  セッションの Cookie をこのレスポンスで発行するなら、`private` / `noStore`
-  以外の方針は `Cache-Control: private, no-store` に置き換えます。レイアウトで
+  せん。そのリクエストのどこかでセッションを開いていれば（どこから呼んだ
+  `session_start()` でも、新規開始でも訪問者の Cookie からの再開でも、ページの
+  前に `session_write_close()` で閉じていても）、`private` / `noStore` 以外の
+  方針は `Cache-Control: private, no-store` に置き換えます。レイアウトで
   `$auth->user()` を読む `#[Cache(public: true)]` のページは、ログイン中の
   訪問者にはキャッシュされない形で返り、匿名の訪問者には宣言どおりの方針で
   返ります。ログイン中もブラウザにキャッシュさせたいページは `private: true`

@@ -25,6 +25,13 @@ final class PsxIntegrationTest extends TestCase
     {
         $this->workDir = \sys_get_temp_dir() . '/psx-approuter-' . \uniqid();
         \mkdir($this->workDir, 0o777, true);
+        // A fresh request has opened no session. Earlier tests in this process
+        // can leave one behind (started, or just written to `$_SESSION`), and
+        // the cache policy would count it as this request's.
+        if (\PHP_SESSION_ACTIVE === \session_status()) {
+            \session_abort();
+        }
+        unset($_SESSION);
     }
 
     protected function tearDown(): void

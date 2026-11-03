@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Polidog\Relayer\Http;
 
+use Polidog\Rosanna\Runtime\RequestLifecycle;
 use ReflectionClass;
 
 /**
@@ -20,6 +21,9 @@ final class CachePolicy
     private const string NOT_SHARED = 'Cache-Control: private, no-store';
 
     private static ?string $limiterBeforePolicy = null;
+
+    /** A policy a shared cache may store went out this request; see {@see endRequest()}. */
+    private static bool $sharedPolicyPending = false;
 
     /**
      * Convenience: read the attribute, resolve any dynamic `etagKey` via the
@@ -142,9 +146,14 @@ final class CachePolicy
      * keeps ini changes between requests, so a page declaring a policy would
      * otherwise strip PHP's `no-store` from later session pages that declare
      * none. A no-op in the classic per-request model.
+     *
+     * Called at the top of `AppRouter::run()`, so it also makes sure this
+     * request ends with {@see endRequest()}.
      */
     public static function restoreSessionCacheLimiter(): void
     {
+        self::registerEndRequest();
+
         if (null === self::$limiterBeforePolicy
             || \PHP_SESSION_NONE !== \session_status()
             || \headers_sent()
@@ -165,9 +174,9 @@ final class CachePolicy
      * confirm the client's validator against, so such a request never matches.
      *
      * A request carrying a session cookie or credentials always renders, and
-     * so does one that started a session of its own (a middleware that logged
-     * the visitor in from a remember-me cookie, with no session cookie sent
-     * yet), even if it already closed it again. The validator says nothing
+     * so does one that opened a session (a middleware that logged the visitor
+     * in from a remember-me cookie, with no session cookie sent yet), even if
+     * it already closed it again. The validator says nothing
      * about who is asking, so a browser that cached the page anonymously and
      * then logged in would otherwise be told to keep that copy.
      *
@@ -288,16 +297,62 @@ final class CachePolicy
     }
 
     /**
-     * True if this request has a session: one that is active now, or one it
-     * started and already closed (`session_write_close()` before `$next()`, to
-     * release the lock). The latter is no longer visible in
-     * `session_status()`, but the session cookie it issued is still queued on
-     * this response, and only on this one, so it needs no per-request state of
-     * its own to forget in a worker.
+     * True if this request has opened a session: one that is active now, or
+     * one it started or resumed and already closed (`session_write_close()`
+     * before `$next()`, to release the lock), whoever called
+     * `session_start()`.
+     *
+     * A closed session is no longer visible in `session_status()`, and one
+     * resumed from the visitor's cookie queues no `Set-Cookie` either. What it
+     * does leave is `$_SESSION`: `session_start()` defines it and nothing
+     * before the end of the request takes it away again (closing, aborting
+     * and destroying all keep it), while a request that never opens a session
+     * has none, even if it carries a session cookie. A worker keeps the
+     * superglobal between requests, so it is dropped when the request ends
+     * ({@see endRequest()}).
      */
     private static function sessionInUse(): bool
     {
-        return \PHP_SESSION_ACTIVE === \session_status() || self::sessionCookieQueued();
+        self::registerEndRequest();
+
+        return \PHP_SESSION_ACTIVE === \session_status()
+            || isset($_SESSION)
+            || self::sessionCookieQueued();
+    }
+
+    /**
+     * Registered under one name, so it is one entry however often this runs.
+     */
+    private static function registerEndRequest(): void
+    {
+        RequestLifecycle::onReset(self::class, self::endRequest(...));
+    }
+
+    /**
+     * Run by {@see RequestLifecycle::reset()} at the end of `AppRouter::run()`.
+     *
+     * A closed session's `$_SESSION` is dropped, which PHP itself only does
+     * when the process's request ends: in a worker the next visitor would
+     * otherwise count as having used a session, and could read the previous
+     * visitor's data from it. An active session keeps it, as PHP still has to
+     * write it.
+     *
+     * Headers usually go out only after this (`output_buffering` holds a
+     * small response until the script ends), so the withdrawal
+     * {@see reconcileWithSession()} leaves to its header callback is decided
+     * here first, while `$_SESSION` still shows the session. Everything has
+     * rendered by now; the callback still catches a session opened later.
+     */
+    private static function endRequest(): void
+    {
+        if (self::$sharedPolicyPending && !\headers_sent() && self::sessionInUse()) {
+            \header(self::NOT_SHARED);
+        }
+        self::$sharedPolicyPending = false;
+
+        if (\PHP_SESSION_ACTIVE !== \session_status()) {
+            unset($_SESSION);
+        }
     }
 
     private static function sessionCookieQueued(): bool
@@ -321,7 +376,7 @@ final class CachePolicy
     /**
      * Only `Authorization` counts. A session cookie alone does not: a page
      * that never touches the session renders the same for everyone, and one
-     * that does is caught when the session becomes active
+     * that does is caught when it opens the session
      * ({@see reconcileWithSession()}).
      */
     private static function carriesCredentials(Request $request): bool
@@ -360,10 +415,12 @@ final class CachePolicy
      * from going out as declared, and a CDN could then serve one visitor's
      * rendering (or their `Set-Cookie`) to everyone. A policy that allows
      * shared storage is therefore withdrawn at the last moment if the request
-     * has a session by the time headers go out, including one a middleware
-     * started and closed before the page ran. It has to be that late: layouts
-     * render after this runs, and the session may be started by code the
-     * framework does not own. A `private` / `no-store` policy is already safe and stays
+     * has opened a session by then ({@see sessionInUse()}), including one a
+     * middleware started or resumed and closed before the page ran. It has to
+     * be that late: layouts render after this runs, and the session may be
+     * started by code the framework does not own. "The last moment" is the end
+     * of the request ({@see endRequest()}) or the header callback, whichever
+     * comes first. A `private` / `no-store` policy is already safe and stays
      * as declared.
      */
     private static function reconcileWithSession(Cache $cache): void
@@ -388,6 +445,7 @@ final class CachePolicy
             return;
         }
 
+        self::$sharedPolicyPending = true;
         \header_register_callback(static function (): void {
             if (self::sessionInUse()) {
                 \header(self::NOT_SHARED);
