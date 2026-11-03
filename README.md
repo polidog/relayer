@@ -461,7 +461,8 @@ src/Pages/
 A root `error.psx` (extending `ErrorPageComponent`) renders error responses
 inside the root layout — an unmatched route (404), an unsupported method on a
 page (405), every `$ctx->abort()` status, the `401` / `403` from `#[Auth]` /
-`$ctx->requireAuth()`, and an uncaught exception (500). If the root layout itself
+`$ctx->requireAuth()`, the `403` of a form action refused for its CSRF token or
+signature, and an uncaught exception (500). If the root layout itself
 fails an auth guard or aborts while rendering the error, `error.psx` renders
 without it; if `error.psx` fails the same way, the default document is used. The
 status is unchanged either way. It receives the status and message via
@@ -1187,7 +1188,9 @@ public function save(array $form): void
 }
 ```
 
-Invalid CSRF tokens return a `403`.
+Invalid CSRF tokens return a `403`, rendered through the same error path as
+`$ctx->abort(403)` (`error.psx`, or the built-in page) — the page itself is
+not rendered.
 
 Only methods the page class itself declares can be actions: passing an
 inherited framework method (or anything other than `[$this, 'method']`)

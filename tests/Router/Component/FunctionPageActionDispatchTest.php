@@ -11,6 +11,7 @@ use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\HttpException;
 use Polidog\Relayer\Router\RedirectException;
 use Polidog\Relayer\Tests\Fixtures\FormActionTokens;
 use Polidog\Rosanna\Runtime\Element;
@@ -58,7 +59,7 @@ final class FunctionPageActionDispatchTest extends TestCase
     }
 
     #[RunInSeparateProcess]
-    public function testDispatchReturns403OnInvalidCsrf(): void
+    public function testDispatchAbortsWith403OnInvalidCsrf(): void
     {
         $called = false;
 
@@ -78,10 +79,8 @@ final class FunctionPageActionDispatchTest extends TestCase
             '_rosanna_csrf' => 'bogus',
         ];
 
-        $page->dispatchActionFromRequest();
-
+        self::assertForbidden($page);
         self::assertFalse($called);
-        self::assertSame(403, \http_response_code());
     }
 
     #[RunInSeparateProcess]
@@ -174,10 +173,8 @@ final class FunctionPageActionDispatchTest extends TestCase
             '_rosanna_csrf' => CsrfToken::getToken(),
         ];
 
-        $page->dispatchActionFromRequest();
-
+        self::assertForbidden($page);
         self::assertFalse($called);
-        self::assertSame(403, \http_response_code());
     }
 
     #[RunInSeparateProcess]
@@ -385,5 +382,22 @@ final class FunctionPageActionDispatchTest extends TestCase
         $pageClass = FunctionPage::class;
 
         return new $pageClass($renderFn, $context, $pageId);
+    }
+
+    /**
+     * A refused action unwinds as `HttpException(403)`, which the router
+     * answers with the error page, like `$ctx->abort(403)`.
+     */
+    private static function assertForbidden(FunctionPage $page): void
+    {
+        try {
+            $page->dispatchActionFromRequest();
+        } catch (HttpException $exception) {
+            self::assertSame(403, $exception->status);
+
+            return;
+        }
+
+        self::fail('Expected the action to be refused with a 403.');
     }
 }

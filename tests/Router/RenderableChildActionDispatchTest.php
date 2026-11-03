@@ -148,10 +148,14 @@ final class RenderableChildActionDispatchTest extends TestCase
 
         $html = $this->request('GET');
         ActionChild::$renders = 0;
-        $this->request('POST', ['_rosanna_csrf' => 'forged'] + $this->submission($html, 'save'));
+        $html = $this->request('POST', ['_rosanna_csrf' => 'forged'] + $this->submission($html, 'save'));
 
         self::assertSame([], ActionChild::$dispatched);
-        self::assertSame(1, ActionChild::$renders);
+        // Refused before any render: the response is the 403 error page.
+        self::assertSame(0, ActionChild::$renders);
+        self::assertSame(403, \http_response_code());
+        self::assertStringNotContainsString('data-child="save"', $html);
+        self::assertStringNotContainsString('_rosanna_csrf', $html);
     }
 
     #[RunInSeparateProcess]

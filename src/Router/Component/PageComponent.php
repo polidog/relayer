@@ -10,6 +10,7 @@ use Polidog\Relayer\Http\SessionStarter;
 use Polidog\Relayer\Router\Document\Script;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\HttpException;
 use Polidog\Rosanna\Runtime\Renderable;
 use ReflectionMethod;
 
@@ -83,9 +84,9 @@ abstract class PageComponent implements Renderable
 
         $csrf = $request->post(self::FORM_CSRF_FIELD);
         if (null === $csrf || !CsrfToken::validate($csrf)) {
-            \http_response_code(403);
-
-            return;
+            // Answer like `$ctx->abort(403)`: the router renders error.psx
+            // (or the built-in page) instead of the page with fresh tokens.
+            throw new HttpException(403);
         }
 
         // Verified decode: only a token this server minted via action() for
@@ -96,7 +97,7 @@ abstract class PageComponent implements Renderable
         if (null === $payload) {
             if (FormAction::isToken($token)) {
                 // Forged or tampered token: refuse, like a bad CSRF token.
-                \http_response_code(403);
+                throw new HttpException(403);
             }
 
             return;

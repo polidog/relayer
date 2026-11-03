@@ -10,6 +10,7 @@ use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Request;
 use Polidog\Relayer\Router\Form\CsrfToken;
 use Polidog\Relayer\Router\Form\FormAction;
+use Polidog\Relayer\Router\HttpException;
 use Polidog\Relayer\Tests\Fixtures\FormActionPage;
 use Polidog\Relayer\Tests\Fixtures\FormActionTokens;
 
@@ -59,10 +60,9 @@ final class PageComponentActionDispatchTest extends TestCase
             'args' => ['id' => 999],
         ]);
 
-        $this->post($page, ['_rosanna_action' => $forged]);
+        $this->assertForbidden($page, ['_rosanna_action' => $forged]);
 
         self::assertSame([], $page->calls);
-        self::assertSame(403, \http_response_code());
     }
 
     #[RunInSeparateProcess]
@@ -77,14 +77,14 @@ final class PageComponentActionDispatchTest extends TestCase
             'method' => 'internalOnly',
             'args' => [],
         ]);
-        $this->post($page, ['_rosanna_action' => $unsigned]);
+        $this->assertForbidden($page, ['_rosanna_action' => $unsigned]);
 
         $resigned = FormActionTokens::withPayload($page->saveToken(), [
             'class' => FormActionPage::class,
             'method' => 'internalOnly',
             'args' => [],
         ]);
-        $this->post($page, ['_rosanna_action' => $resigned]);
+        $this->assertForbidden($page, ['_rosanna_action' => $resigned]);
 
         self::assertSame([], $page->calls);
     }
@@ -101,7 +101,7 @@ final class PageComponentActionDispatchTest extends TestCase
             'args' => [],
         ]);
 
-        $this->post($page, ['_rosanna_action' => $forged]);
+        $this->assertForbidden($page, ['_rosanna_action' => $forged]);
 
         self::assertSame([], $page->calls);
     }
@@ -129,7 +129,26 @@ final class PageComponentActionDispatchTest extends TestCase
         unset($_SESSION['rosanna:form-action-key']);
         $page->saveToken();
 
-        $this->post($page, ['_rosanna_action' => $token]);
+        $this->assertForbidden($page, ['_rosanna_action' => $token]);
+
+        self::assertSame([], $page->calls);
+    }
+
+    #[RunInSeparateProcess]
+    public function testInvalidCsrfIsRefusedWith403(): void
+    {
+        $page = new FormActionPage();
+        $token = $page->saveToken(['id' => 1]);
+        CsrfToken::getToken();
+
+        $page->setRequest(new Request('POST', '/', post: ['_rosanna_action' => $token, '_rosanna_csrf' => 'bogus']));
+
+        try {
+            $page->dispatchActionFromRequest();
+            self::fail('Expected the action to be refused with a 403.');
+        } catch (HttpException $exception) {
+            self::assertSame(403, $exception->status);
+        }
 
         self::assertSame([], $page->calls);
     }
@@ -150,5 +169,24 @@ final class PageComponentActionDispatchTest extends TestCase
         $post['_rosanna_csrf'] = CsrfToken::getToken();
         $page->setRequest(new Request('POST', '/', post: $post));
         $page->dispatchActionFromRequest();
+    }
+
+    /**
+     * A refused action unwinds as `HttpException(403)`, which the router
+     * answers with the error page, like `$ctx->abort(403)`.
+     *
+     * @param array<string, mixed> $post
+     */
+    private function assertForbidden(FormActionPage $page, array $post): void
+    {
+        try {
+            $this->post($page, $post);
+        } catch (HttpException $exception) {
+            self::assertSame(403, $exception->status);
+
+            return;
+        }
+
+        self::fail('Expected the action to be refused with a 403.');
     }
 }
