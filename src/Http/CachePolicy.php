@@ -226,7 +226,8 @@ final class CachePolicy
 
     /**
      * Send the `304 Not Modified` status. Callers should terminate the
-     * request after this so no body is emitted.
+     * request after this so no body is emitted. Any queued `Content-Type`
+     * (and PHP's `default_mimetype`) is dropped: a 304 has no body.
      */
     public static function sendNotModified(): void
     {
@@ -234,6 +235,7 @@ final class CachePolicy
             return;
         }
         \http_response_code(304);
+        BodilessHeaders::removeContentType();
     }
 
     /**

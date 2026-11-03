@@ -106,6 +106,7 @@ final readonly class Response
     /**
      * No body, no `Content-Type` — `204 No Content` by default. The status
      * is explicit here; there is no implicit "null becomes 204" magic.
+     * {@see send()} also suppresses PHP's default `Content-Type` for it.
      */
     public static function noContent(int $status = 204): self
     {
@@ -207,12 +208,19 @@ final readonly class Response
      * Set the status, emit the headers (skipped if output already started,
      * mirroring the rest of the router), then echo the body if any. Status
      * is always set: with this contract the handler chose it explicitly.
+     *
+     * A bodiless `204` / `304` carries no `Content-Type` unless the handler
+     * set one: otherwise PHP would add its `default_mimetype`
+     * (`text/html; charset=UTF-8`) to a response that has no body.
      */
     public function send(): void
     {
         \http_response_code($this->status);
 
         if (!\headers_sent()) {
+            if (BodilessHeaders::isBodiless($this->status) && !$this->hasHeader('Content-Type')) {
+                BodilessHeaders::removeContentType();
+            }
             foreach ($this->headers as $name => $value) {
                 // Never let a raw Set-Cookie replace one PHP already queued
                 // (the session cookie); every other header replaces as usual.
@@ -226,6 +234,18 @@ final readonly class Response
         if (null !== $this->body) {
             echo $this->body;
         }
+    }
+
+    private function hasHeader(string $name): bool
+    {
+        $lower = \strtolower($name);
+        foreach (\array_keys($this->headers) as $existing) {
+            if (\strtolower($existing) === $lower) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

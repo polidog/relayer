@@ -575,7 +575,7 @@ return [
 - ハンドラは **必ず `Response` を返します**。`Response::json($data,
   $status, $headers)`（JSON 化＋`Content-Type: application/json`、スラッシュ
   ／ユニコードは非エスケープ）、`Response::text()`、`Response::noContent()`
-  （既定は本文なしの `204`）、`Response::redirect($location, $status)`、
+  （既定は本文なしの `204`。`Content-Type` は付けない）、`Response::redirect($location, $status)`、
   生ボディ用の `Response::make()` で生成します。ステータスとヘッダは常に
   明示 — 生データを返す経路はなく、それ以外を返すと即サーバエラーです。
 - Cookie は `->withCookie($name, $value, $options)` で設定し、
