@@ -14,6 +14,7 @@ use Polidog\Relayer\Http\Response;
 use Polidog\Relayer\I18n\LocaleResolver;
 use Polidog\Relayer\I18n\Translators;
 use Polidog\Relayer\InjectorContainer;
+use Polidog\Relayer\Profiler\RosannaNoticeCollector;
 use Polidog\Relayer\Router\Component\FunctionPage;
 use Polidog\Relayer\Router\Component\PageContext;
 use Polidog\Relayer\Router\Document\DocumentInterface;
@@ -149,6 +150,12 @@ final class RequestDispatch
         // LocaleResolver is bound.
         $request = $this->request = $this->resolveLocale($request);
 
+        // Dev only: record the notices Rosanna raises while rendering
+        // (attributes it drops) on the profile instead of losing them.
+        $rosannaNotices = null !== $this->env->recording && null !== $this->env->recording->currentProfile()
+            ? RosannaNoticeCollector::install($this->env->recording)
+            : null;
+
         try {
             // Deferred component GETs (under `/_defer/{name}`) are dispatched
             // before route matching: Rosanna owns that URL space, and we
@@ -208,6 +215,7 @@ final class RequestDispatch
             // closure translates them and stops StopRequest itself.
             $this->errors->respondToUncaught($exception, $this->request, $outputLevel, true);
         } finally {
+            $rosannaNotices?->restore();
             $this->end();
         }
     }

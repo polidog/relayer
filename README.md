@@ -2797,7 +2797,9 @@ A dev-only request profiler. Each request is recorded as a `Profile`
 
 In dev, the Traceable decorators wrap AppRouter / Database / EtagStore /
 SessionStorage / Authenticator and feed spans like `db.query`,
-`cache.etag_*`, and `session.*` into the profile automatically.
+`cache.etag_*`, and `session.*` into the profile automatically. Notices
+Rosanna raises while rendering (an attribute it drops) are recorded as
+`rosanna.notice` / `rosanna.warning`, then passed on to your error handler.
 `<X defer />` sub-requests are linked to their parent via `parentToken`.
 
 ### Web view
@@ -2993,6 +2995,13 @@ island instead. `USEPHP_SNAPSHOT_SECRET` is no longer read, and
 
    To stay in classic (per-request) mode, remove the `index` and `worker` lines
    from the `Caddyfile`.
+
+Rosanna renders some props differently from React. Pass `style` as a string
+(`style="color: red"`); an array is dropped. `key` is not special: `<li key="1">`
+renders as is. There is no raw HTML injection: `dangerouslySetInnerHTML` is
+dropped like any other non-scalar attribute. Rosanna reports each dropped
+attribute with an `E_USER_NOTICE`, and in dev the [profiler](#profiler) records
+it as a `rosanna` event.
 
 Forms rendered by the previous version stop working when you deploy, because
 the field names and the session keys changed. Purge your CDN at deploy time so
