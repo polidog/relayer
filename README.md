@@ -572,7 +572,7 @@ return [
   `Response::json($data, $status, $headers)` (encodes + sets
   `Content-Type: application/json`, slashes/unicode unescaped),
   `Response::text()`, `Response::noContent()` (a bodyless `204` by
-  default), `Response::redirect($location, $status)`, or `Response::make()`
+  default, sent without a `Content-Type`), `Response::redirect($location, $status)`, or `Response::make()`
   for a raw body. Status and headers are always explicit — there is no
   raw-data return path; returning anything else is a hard server error.
 - Set cookies with `->withCookie($name, $value, $options)` and delete them
