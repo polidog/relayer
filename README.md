@@ -50,8 +50,8 @@ Exposes a single `Relayer::boot()` entrypoint so app code stays small.
 ## Requirements
 
 - PHP >= 8.5
-- [polidog/rosanna](https://github.com/polidog/rosanna) ^0.1
-- [polidog/rosanna-defer](https://github.com/polidog/rosanna-defer) ^0.1
+- [polidog/rosanna](https://github.com/polidog/rosanna) ^1.0
+- [polidog/rosanna-defer](https://github.com/polidog/rosanna-defer) ^1.0
 - [symfony/dependency-injection](https://github.com/symfony/dependency-injection) ^7.1
 - [symfony/config](https://github.com/symfony/config) ^7.1
 - [symfony/yaml](https://github.com/symfony/yaml) ^7.1

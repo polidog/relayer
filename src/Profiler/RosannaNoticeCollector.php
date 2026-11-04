@@ -14,6 +14,7 @@ use ReflectionClass;
  * events, so they show up on `/_profiler` instead of vanishing.
  *
  * Only `E_USER_NOTICE` / `E_USER_WARNING` raised from Rosanna's own source
+ * (`src/` and `src-functions/`)
  * are recorded. Every error, recorded or not, is then handed to the handler
  * that was active before {@see install()} (or to PHP's standard handler when
  * there was none), so the existing error handling is unchanged.
@@ -26,11 +27,11 @@ final class RosannaNoticeCollector
 
     public static function install(Profiler $profiler): self
     {
-        $sourceDir = self::rosannaSourceDir();
+        $sourceDirs = self::rosannaSourceDirs();
         $previous = null;
         $previous = \set_error_handler(
-            static function (int $errno, string $errstr, string $errfile = '', int $errline = 0) use ($profiler, $sourceDir, &$previous): bool {
-                if (null !== $sourceDir && \str_starts_with($errfile, $sourceDir)) {
+            static function (int $errno, string $errstr, string $errfile = '', int $errline = 0) use ($profiler, $sourceDirs, &$previous): bool {
+                if (self::isUnder($errfile, $sourceDirs)) {
                     $profiler->collect('rosanna', \E_USER_WARNING === $errno ? 'warning' : 'notice', [
                         'message' => $errstr,
                         'file' => $errfile,
@@ -62,14 +63,34 @@ final class RosannaNoticeCollector
         }
     }
 
-    private static function rosannaSourceDir(): ?string
+    /**
+     * @return list<string>
+     */
+    private static function rosannaSourceDirs(): array
     {
         $file = new ReflectionClass(Renderer::class)->getFileName();
         if (false === $file) {
-            return null;
+            return [];
         }
 
-        // Renderer lives in `<rosanna>/src/Runtime/`; match all of `src/`.
-        return \dirname($file, 2) . \DIRECTORY_SEPARATOR;
+        // Renderer lives in `<rosanna>/src/Runtime/`. Since 1.0 the notices
+        // are raised from `<rosanna>/src-functions/`, so match both.
+        $root = \dirname($file, 3) . \DIRECTORY_SEPARATOR;
+
+        return [$root . 'src' . \DIRECTORY_SEPARATOR, $root . 'src-functions' . \DIRECTORY_SEPARATOR];
+    }
+
+    /**
+     * @param list<string> $dirs
+     */
+    private static function isUnder(string $file, array $dirs): bool
+    {
+        foreach ($dirs as $dir) {
+            if (\str_starts_with($file, $dir)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
