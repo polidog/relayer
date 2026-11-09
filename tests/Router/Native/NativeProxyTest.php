@@ -7,8 +7,11 @@ namespace Polidog\Relayer\Tests\Router\Native;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Polidog\Relayer\Http\Request;
+use Polidog\Relayer\Router\Native\CgiResponse;
 use Polidog\Relayer\Router\Native\CgiRunner;
 use Polidog\Relayer\Router\Native\NativeProxy;
+use Polidog\Relayer\Router\Native\NativeRun;
+use Polidog\Relayer\Router\Native\NativeRunner;
 use Polidog\Relayer\Tests\Fixtures\SpyLogger;
 
 /**
@@ -151,6 +154,87 @@ final class NativeProxyTest extends TestCase
         $proxy = $this->proxy("printf 'Content-Type: text/plain\\r\\n\\r\\n%s' \"[\$RELAYER_MATCHED_PATTERN]\"", null);
 
         self::assertSame('[]', $this->invoke($proxy, new Request('GET', '/nope'), static function (): void {}));
+    }
+
+    public function testMatchedPatternIsPassedAsARequestHeader(): void
+    {
+        $proxy = $this->proxy("printf 'Content-Type: text/plain\\r\\n\\r\\n%s' \"[\$HTTP_RELAYER_MATCHED_PATTERN]\"", '/api/users/[id]');
+
+        $out = $this->invoke($proxy, new Request('GET', '/api/users/1'), static function (): void {});
+
+        self::assertSame('[/api/users/[id]]', $out);
+    }
+
+    public function testNoMatchPassesAnEmptyPatternHeader(): void
+    {
+        // proc_open() drops empty environment values, so under CGI the
+        // header is absent rather than empty; Go's r.Header.Get() reads
+        // both as "".
+        $proxy = $this->proxy("printf 'Content-Type: text/plain\\r\\n\\r\\n%s' \"[\$HTTP_RELAYER_MATCHED_PATTERN]\"", null);
+
+        self::assertSame('[]', $this->invoke($proxy, new Request('GET', '/nope'), static function (): void {}));
+    }
+
+    public function testClientSentMatchedPatternHeaderIsReplaced(): void
+    {
+        $proxy = $this->proxy("printf 'Content-Type: text/plain\\r\\n\\r\\n%s' \"[\$HTTP_RELAYER_MATCHED_PATTERN]\"", null);
+
+        $request = new Request('GET', '/nope', headers: ['relayer-matched-pattern' => '/admin']);
+
+        self::assertSame('[]', $this->invoke($proxy, $request, static function (): void {}));
+    }
+
+    public function testMatchedPatternHeaderDoesNotReachTheRoute(): void
+    {
+        $proxy = $this->proxy("printf 'Relayer-Next: 1\\r\\n\\r\\n'", '/about');
+
+        $seen = null;
+        $this->invoke($proxy, new Request('GET', '/about'), static function (Request $request) use (&$seen): void {
+            $seen = $request;
+        });
+
+        self::assertInstanceOf(Request::class, $seen);
+        self::assertNull($seen->header(NativeProxy::HEADER_MATCHED_PATTERN));
+    }
+
+    public function testRunsThroughTheGivenRunner(): void
+    {
+        $runner = new class implements NativeRunner {
+            public ?string $binary = null;
+
+            public ?Request $request = null;
+
+            /** @var array<string, string> */
+            public array $extra = [];
+
+            public function run(string $binary, Request $request, array $extra = []): NativeRun
+            {
+                $this->binary = $binary;
+                $this->request = $request;
+                $this->extra = $extra;
+
+                return new NativeRun(new CgiResponse(200, [['Relayer-Next', '1']], ''), '');
+            }
+        };
+
+        $binary = $this->script('exit 1');
+        $proxy = new NativeProxy(
+            $binary,
+            $this->workDir . '/middleware.go',
+            $runner,
+            static fn (): string => '/api/users/[id]',
+            false,
+            $this->logger,
+        );
+
+        $out = $this->invoke($proxy, new Request('GET', '/api/users/1'), static function (): void {
+            echo 'continued';
+        });
+
+        self::assertSame('continued', $out);
+        self::assertSame($binary, $runner->binary);
+        self::assertSame('/api/users/[id]', $runner->request?->header(NativeProxy::HEADER_MATCHED_PATTERN));
+        self::assertSame([NativeProxy::ENV_MATCHED_PATTERN => '/api/users/[id]'], $runner->extra);
     }
 
     public function testRouteVariablesAreNotPassedToTheProxy(): void

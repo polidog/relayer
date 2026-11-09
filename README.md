@@ -983,9 +983,15 @@ func Proxy(w http.ResponseWriter, r *http.Request) {
   `route.php`, not a `route.go`.
 - `Relayer-*` headers never reach the client in either case.
 - The proxy gets the same CGI environment as a `route.go`, minus the route
-  variables (it runs before matching) plus **`RELAYER_MATCHED_PATTERN`**:
-  the pattern the path would match (`/api/users/[id]`), empty for a 404.
-  There is no `matcher` config; branch on `r.URL.Path` yourself.
+  variables (it runs before matching), plus the pattern the path would
+  match (`/api/users/[id]`, empty for a 404) in the request header
+  **`Relayer-Matched-Pattern`**: read it with
+  `r.Header.Get("Relayer-Matched-Pattern")`. A client-sent header of that
+  name is replaced, and the route behind the proxy does not see it. The
+  same value is still in the environment variable `RELAYER_MATCHED_PATTERN`,
+  which is deprecated: the environment belongs to the process, so a
+  handler that serves more than one request cannot get a per-request value
+  from it. There is no `matcher` config; branch on `r.URL.Path` yourself.
 - One middleware per app: `middleware.php` **and** `middleware.go` both
   present is a `RuntimeException` naming both files, on every request.
   `relayer routes` ends with a `middleware  src/Pages/middleware.go

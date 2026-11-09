@@ -15,8 +15,9 @@ use Psr\Log\LoggerInterface;
 
 /**
  * Serves a matched native route (`route.go`): finds the binary
- * `relayer native:build` produced for it, runs it through {@see CgiRunner}
- * and writes the result — or a JSON `500` saying exactly why that did
+ * `relayer native:build` produced for it, runs it through a
+ * {@see NativeRunner} ({@see CgiRunner} unless told otherwise) and writes
+ * the result — or a JSON `500` saying exactly why that did
  * not happen.
  *
  * Deliberately never builds anything: a request must not run `go build`.
@@ -53,7 +54,7 @@ final class NativeDispatcher
      */
     public function __construct(
         private readonly string $binDir,
-        private readonly CgiRunner $runner,
+        private readonly NativeRunner $runner,
         private readonly bool $devHints = false,
         private readonly ?LoggerInterface $logger = null,
     ) {}

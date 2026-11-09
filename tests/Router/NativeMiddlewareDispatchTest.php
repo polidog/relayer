@@ -42,6 +42,7 @@ final class NativeMiddlewareDispatchTest extends TestCase
         	w.Header().Set("Relayer-Request-Header-X-User", "42")
         	w.Header().Set("X-Proxied-By", "go")
         	w.Header().Set("X-Matched", os.Getenv("RELAYER_MATCHED_PATTERN"))
+        	w.Header().Set("X-Matched-Header", r.Header.Get("Relayer-Matched-Pattern"))
         }
         GO;
 
@@ -114,6 +115,7 @@ final class NativeMiddlewareDispatchTest extends TestCase
             $headers = self::sentHeaders();
             self::assertContains('X-Proxied-By: go', $headers);
             self::assertContains('X-Matched: /api/whoami', $headers);
+            self::assertContains('X-Matched-Header: /api/whoami', $headers);
             foreach ($headers as $header) {
                 self::assertStringNotContainsStringIgnoringCase('relayer-', $header);
             }
