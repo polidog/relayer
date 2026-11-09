@@ -26,7 +26,7 @@ use RuntimeException;
  * {@see NativeProcessException} with the process's stderr attached; the
  * dispatcher turns that into a JSON 500 and a log line.
  */
-final class CgiRunner
+final class CgiRunner implements NativeRunner
 {
     /** Default wall-clock budget for one handler process, in seconds. */
     public const DEFAULT_TIMEOUT = 30;

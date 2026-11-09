@@ -989,10 +989,15 @@ func Proxy(w http.ResponseWriter, r *http.Request) {
   `route.go` も。
 - `Relayer-*` ヘッダはどちらの場合もクライアントには届きません。
 - プロキシに渡る CGI 環境は `route.go` と同じですが、ルート変数は
-  渡しません（マッチ前に走るため）。代わりに **`RELAYER_MATCHED_PATTERN`**
-  に、そのパスがマッチするであろうパターン（`/api/users/[id]`）、404 なら
-  空が入ります。`matcher` 相当の設定はなく、`r.URL.Path` を見て自分で
-  分岐します。
+  渡しません（マッチ前に走るため）。代わりにリクエストヘッダ
+  **`Relayer-Matched-Pattern`** に、そのパスがマッチするであろうパターン
+  （`/api/users/[id]`）、404 なら空が入ります。
+  `r.Header.Get("Relayer-Matched-Pattern")` で読みます。クライアントが同じ名前の
+  ヘッダを送っても置き換えられ、プロキシの後ろのルートにはこのヘッダは
+  渡りません。同じ値は環境変数 `RELAYER_MATCHED_PATTERN` にも入りますが、
+  こちらは非推奨です。環境変数はプロセス単位なので、複数のリクエストを
+  処理するハンドラはリクエストごとの値をそこから受け取れません。
+  `matcher` 相当の設定はなく、`r.URL.Path` を見て自分で分岐します。
 - ミドルウェアはアプリに 1 つ: `middleware.php` **と** `middleware.go`
   が両方あると、毎リクエスト両方のパスを含む `RuntimeException` に
   なります。`relayer routes` の末尾に `middleware  src/Pages/middleware.go

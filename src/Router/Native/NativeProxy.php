@@ -40,11 +40,18 @@ use Psr\Log\LoggerInterface;
  * could not be handed ({@see CgiRequestUri}), even when a guard has already
  * routed the request on another path.
  *
- * Besides the route variables' absence, the environment is the same as a
- * `route.go` gets, plus `RELAYER_MATCHED_PATTERN`: the pattern the
- * request path would match (`/api/users/[id]`), or empty for a 404 — the
- * proxy runs *before* dispatch, so this is the one piece of routing it
- * can see without re-implementing the router.
+ * Besides the route variables' absence, the proxy sees what a `route.go`
+ * sees, plus the pattern the request path would match (`/api/users/[id]`,
+ * empty for a 404) — the proxy runs *before* dispatch, so this is the one
+ * piece of routing it can see without re-implementing the router. It
+ * arrives twice: as the request header `Relayer-Matched-Pattern`
+ * ({@see HEADER_MATCHED_PATTERN}), which is what a handler should read,
+ * and as the environment variable `RELAYER_MATCHED_PATTERN`, kept for
+ * proxies written against it. Only the header works for a handler that
+ * is not a process of its own per request, where the environment is
+ * shared by every request. A client-sent `Relayer-Matched-Pattern` is
+ * replaced, never passed through, and the header is added only to what
+ * the proxy sees: the route behind it gets the request without it.
  */
 final class NativeProxy
 {
@@ -57,7 +64,16 @@ final class NativeProxy
     /** Response header prefix: `Relayer-Request-Header-X-User: 42` sets request header `X-User`. */
     public const HEADER_REQUEST_HEADER_PREFIX = 'Relayer-Request-Header-';
 
-    /** Environment variable: the pattern the request would match, or empty. */
+    /** Request header the proxy reads: the pattern the request would match, or empty. */
+    public const HEADER_MATCHED_PATTERN = 'Relayer-Matched-Pattern';
+
+    /**
+     * Environment variable carrying the same value as {@see HEADER_MATCHED_PATTERN}.
+     *
+     * @deprecated read the `Relayer-Matched-Pattern` request header instead; the
+     *             environment is per process, so a resident handler cannot see a
+     *             per-request value here
+     */
     public const ENV_MATCHED_PATTERN = 'RELAYER_MATCHED_PATTERN';
 
     /**
@@ -78,7 +94,7 @@ final class NativeProxy
     public function __construct(
         private readonly string $binary,
         private readonly string $source,
-        private readonly CgiRunner $runner,
+        private readonly NativeRunner $runner,
         private readonly Closure $matchedPattern,
         private readonly bool $devHints = false,
         private readonly ?LoggerInterface $logger = null,
@@ -134,10 +150,14 @@ final class NativeProxy
             return;
         }
 
+        $pattern = ($this->matchedPattern)($request) ?? '';
+
         try {
-            $run = $this->runner->run($this->binary, $request, [
-                self::ENV_MATCHED_PATTERN => ($this->matchedPattern)($request) ?? '',
-            ]);
+            $run = $this->runner->run(
+                $this->binary,
+                $request->withHeader(self::HEADER_MATCHED_PATTERN, $pattern),
+                [self::ENV_MATCHED_PATTERN => $pattern],
+            );
         } catch (NativeProcessException $e) {
             $this->logger?->error('Native middleware failed: ' . $e->getMessage(), [
                 'binary' => $this->binary,
